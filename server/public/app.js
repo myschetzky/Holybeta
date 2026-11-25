@@ -1382,7 +1382,7 @@
         : h('div', { class: 'sec' }, h('div', { class: 'proof-head', text: d.submitted ? 'Afleveret uden bevis' : 'Ikke afleveret endnu – sådan ser det ud lige nu:' }),
           d.reasons.length ? h('ul', { class: 'small' }, ...d.reasons.map(x => h('li', { class: 'violation grey', text: x }))) : h('p', { class: 'small muted', text: 'Indtil videre er der intet, der forhindrer et bevis.' }),
           d.submitted ? h('p', { class: 'muted small', text: 'Manglende flueben er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt.' }) : null);
-      const facts = d.facts ? h('p', { class: 'muted small', text: `${d.facts.words} ord · ${d.facts.writingMinutes} min. skrivetid · ${d.facts.typed} tegn tastet, ${d.facts.deleted} slettet · ${d.facts.monitoredShare} % med fuld overvågning` }) : null;
+      const facts = d.facts ? h('p', { class: 'muted small', text: `${d.facts.words} ord · ${d.facts.writingMinutes} min. skrivetid · ${d.source === 'word' ? 'skrevet i Word (ingen tastestatistik)' : `${d.facts.typed} tegn tastet, ${d.facts.deleted} slettet`} ·${d.facts.monitoredShare} % med fuld overvågning` }) : null;
       const notes = d.notes && d.notes.length ? h('ul', { class: 'muted small' }, ...d.notes.map(x => h('li', { text: x }))) : null;
       const replay = h('div', { class: 'sec' });
       const similar = h('div', { class: 'sec' });

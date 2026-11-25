@@ -23,7 +23,9 @@ const { Freezer } = require('./freeze');
 const { Writer } = require('./writer');
 const verified = require('./verified');
 const { homeEvent, homeStatus } = require('./homepolicy');
+const { createWordMode } = require('./word/app');
 let writer = null; // "Skriv i HolyMoly"
+let word = null;   // "Skriv i Word" og "Min HolyMoly" (agent/src/word)
 
 // Startet med fejlfinding (fx --remote-debugging-port)? Så kunne et andet program taste i skrivevinduet. Luk.
 // Gælder den installerede app. Under udvikling starter ende-til-ende-testen (Playwright) appen med disse flag.
@@ -216,6 +218,8 @@ function uiState() {
     links: live ? linksOf(state.lesson).map(l => ({ title: l.title, host: hostOf(l.url) })) : [],
     // Afleveringer fra læreren, som eleven mangler at aflevere
     assignmentsOpen: writer ? writer.openCount() : 0,
+    // "Skriv i Word": kun når broen siger supported og Word findes
+    word: !!state.wordAvailable,
   };
 }
 function linksOf(lesson) {
@@ -314,6 +318,7 @@ function updateTrayMenu() {
     { label: 'Vis HolyMoly', click: showWindow },
     { label: 'Skriv dokument…', click: () => writer && writer.open() },
     { label: 'Afleveringer…', click: showAssignmentsPage },
+    { label: 'Min HolyMoly…', click: () => word && word.mine.open() },
     { label: state.hand ? 'Tag hånden ned' : '✋ Ræk hånden op', enabled: lessonActive(), click: () => setHand(!state.hand) },
     { label: 'Tilføj klasse…', click: () => { showWindow(); win.webContents.send('add-class'); } },
     ...(GUARD_MANAGED ? [] : [{ type: 'separator' }, { label: 'Afslut HolyMoly', click: () => confirmQuit() }]),
@@ -358,6 +363,11 @@ async function startVerifiedWriting(aid) {
   if (!writer) return { ok: false, error: 'HolyMoly er ikke klar endnu. Prøv igen om lidt.' };
   if (typeof writer.startVerified === 'function') return (await writer.startVerified(aid)) || { ok: true };
   aid = Number(aid) || 0;
+  // Word findes på computeren: åbn Word med HolyMoly-rammen og muldvarpen (agent/src/word). Ellers HolyMolys skrivevindue.
+  if (word) {
+    const inf = await word.manager.info().catch(() => ({ available: false }));
+    if (inf.available) return (await word.manager.start({ assignmentId: aid })) || { ok: true };
+  }
   if (!aid) { writer.open(); return { ok: true }; }
   const a = writer.assignments.find(x => x.id === aid);
   if (!a) return { ok: false, error: 'Afleveringen findes ikke' };
@@ -390,6 +400,7 @@ function applyLesson(lesson) {
   if (writer) writer.lessonChanged(live);
   // Skrivetime: læreren har valgt en opgave – skrivevinduet åbner den (uden at stjæle fokus)
   if (writer) writer.writeLesson(live && state.lesson.write ? state.lesson.write : null);
+  if (word) word.manager.lessonChanged();
   if (live !== wasLive) updateTrayMenu();
   if (live) {
     policy.setRules(ACRules.compile(state.rules, state.lesson.config), state.lesson.config);
@@ -631,6 +642,7 @@ function startConnection() {
         store.save(state.data);
         // Skrivevinduet: lampen venter på serveren, og en afbrudt skriveøkt fortsættes af sig selv
         if (writer) writer.onMessage(msg);
+        if (word) word.manager.onMessage(msg);
         pushUi();
         break;
       case 'lesson':
@@ -660,6 +672,7 @@ function startConnection() {
       case 'my-lamp': // elevens egen lampe (kun til denne app)
       case 'server-restart': // serveren genstarter: "Skriv bare videre"
         if (writer) writer.onMessage(msg);
+        if (word) word.manager.onMessage(msg); // "Skriv i Word" bruger de samme beskeder
         break;
       case 'freeze':
         if (!lessonActive()) break;
@@ -871,6 +884,8 @@ async function enrollWith(code, extra) {
 ipcMain.handle('action', (_e, id) => {
   if (id === 'write') { if (writer) writer.open(); return; }
   if (id === 'assignments') { showAssignmentsPage(); return; }
+  if (id === 'word') return word ? word.manager.start({}) : { ok: false, error: 'Skriv i Word er ikke klar' };
+  if (id === 'mine') { if (word) word.mine.open(); return; }
   if (id === 'hand') { setHand(!state.hand); return; }
   // Lektionens links: kun de links læreren har lagt ind for den igangværende lektion
   const lm = /^link:(\d+)$/.exec(String(id));
@@ -954,6 +969,7 @@ app.on('before-quit', (e) => {
   freezer.unfreeze();
   monitor.stop();
   bridge.stop();
+  if (word) word.manager.stop(); // Word og elevens dokument forbliver åbne
   if (conn) conn.stop();
 });
 
@@ -985,6 +1001,20 @@ app.whenReady().then(async () => {
       pushUi();
     },
   });
+  // "Skriv i Word" (Windows): samme forbindelse og lektion som skrivevinduet
+  word = createWordMode({
+    send: (m) => !!(conn && conn.send(m)), lessonActive, online: () => !!(conn && conn.online),
+    serverUrl: () => SERVER_URL, writer: () => writer,
+  });
+  // Afleveringssiden (verified.js): Word-dokumenter står også under "Verificerede afleveringer" og kan vedhæftes med "Aflever"
+  if (writer) {
+    writer.verifiedDocs = () => word.manager.list().map(d => ({
+      id: d.id, title: d.title, words: d.words, certId: d.certId, label: d.label, submitted: d.submitted,
+      path: d.sealedPath || d.path || '', source: 'word', updated: d.updated, created: d.created, assignmentId: d.assignmentId,
+    }));
+    writer.attachVerified = (aid, docId) => (word.manager.get(String(docId)) ? word.manager.attach(docId, aid) : writer.attach(aid, docId));
+  }
+  word.manager.info().then((i) => { state.wordAvailable = i.available; pushUi(); }).catch(() => {});
   createTray();
   state.serverSetup = needsServerSetup();
   if (state.serverSetup) { /* venter på skolens adresse (første opsætning i vinduet) */ }

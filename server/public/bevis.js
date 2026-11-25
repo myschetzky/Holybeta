@@ -103,9 +103,10 @@
       const obs = (Array.isArray(p.observed) ? p.observed : []).map(String);
       $('observed').textContent = obs.join(' og ') || '–';
       $('observed-text').hidden = false;
+      const where = obs.includes('word') ? 'Word-dokumentet (skrevet i Word gennem HolyMoly)' : 'HolyMolys skrivevindue';
       $('observed-text').textContent = obs.includes('vagt')
-        ? 'HolyMolys skrivevindue og HolyMoly-vagten på computeren blev fulgt.'
-        : 'Kun HolyMolys skrivevindue blev fulgt. Resten af computeren blev ikke overvåget af HolyMoly-vagten.';
+        ? `${where} og HolyMoly-vagten på computeren blev fulgt.`
+        : `Kun ${where} blev fulgt. Resten af computeren blev ikke overvåget af HolyMoly-vagten.`;
       const d = fmtDate(p.assignmentCreated);
       if (d) { $('asg-created').hidden = false; $('asg-created').textContent = `Skrevet til en aflevering oprettet ${d}.`; }
       $('limits').hidden = true;
@@ -201,7 +202,7 @@
     if (!raw.trim()) { $('match').hidden = true; $('file-facts').hidden = true; verdict('', 'Beviset findes – tjek at teksten passer'); return; }
     const lines = HMDoc.normalizeText(raw).split('\n');
     // Sidefoden fra Word-filen er ikke en del af teksten
-    while (lines.length && /^(✓ Tastet i HolyMoly|Dækker skriveforløbet|Mærket viser, hvad HolyMoly målte|Testserver – må ikke bruges|HolyMoly skrive-bevis|Tjek beviset)/.test(lines[lines.length - 1])) lines.pop();
+    while (lines.length && /^(✓ Tastet i HolyMoly|✓ Tastet i Word via HolyMoly|HolyMoly HM-|Dækker skriveforløbet|Mærket viser, hvad HolyMoly målte|Testserver – må ikke bruges|HolyMoly skrive-bevis|Tjek beviset)/.test(lines[lines.length - 1])) lines.pop();
     // Med og uden titlen øverst, og med og uden "•" / "1." fra Word-lister
     const unmark = (v) => v.map(l => l.replace(/^(•|\d+\.)(\s+|$)/, '')).filter(Boolean);
     const variants = [];

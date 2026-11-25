@@ -17,6 +17,11 @@
  * Ældre beviser (v1) vises offentligt kun som gyldig/ugyldig og dato.
  *
  * Hvad beviset IKKE kan: se om eleven har skrevet en tekst af efter en anden skærm/telefon. Det står på beviset.
+ *
+ * "Skriv i Word" (source: 'word'): elev-appen sender Word-dokumentets tekst som almindelige gemninger. Vækstbudgettet,
+ * lampen (rød/grå) og AI-fraserne gælder som i skrivevinduet. Der findes ingen tastestatistik fra Word, så de tjek, der
+ * bygger på tastetryk, springes over; appen melder selv tekst indsat fra et andet program (pasteInserted).
+ * Beviset siger observed: ['word'] (+ 'vagt').
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -171,6 +176,8 @@ class DocStore {
       focusLostMs: num(s.focusLostMs), activeMs: num(s.activeMs),
       // Hjælpemidler (kun når læreren har slået dem til): tegn fra ordforslag og diktering
       predicted: num(s.predicted, 1e7), dictated: num(s.dictated, 1e7),
+      // Word: Copilot-status, som elev-appen kunne se den i registret ('on' | 'off' | 'unknown')
+      copilot: ['on', 'off', 'unknown'].includes(s.copilot) ? s.copilot : '',
     };
   }
 
@@ -276,6 +283,7 @@ class DocStore {
   /** sinceMs (hvor længe eleven har været i lektionen) bruges ikke længere: et nyt dokument har et fast budget. */
   save(student, input, view, lessonId, now = Date.now(), sinceMs = 0) {
     if (!DocStore.validId(input.id)) return { ok: false, error: 'Ugyldigt dokument-id' };
+    const source = input.source === 'word' ? 'word' : '';
     let blocks;
     try { blocks = D.validateBlocks(input.blocks); } catch (e) { return { ok: false, error: e.message } }
     const title = String(input.title || '').replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, D.LIMITS.title);
@@ -284,7 +292,9 @@ class DocStore {
     let row = this.q.get.get(input.id);
     if (row && row.student_id !== student.id) return { ok: false, error: 'Ugyldigt dokument-id' };
     if (row && row.submitted) return { ok: false, error: 'Dokumentet er afleveret og kan ikke ændres' };
-    const m = row ? JSON.parse(row.monitor) : { greenMs: 0, redMs: 0, greyMs: 0, red: [], grey: [], flags: [], lessons: [], lastTs: 0, lastLen: 0, lastColor: '', lastObs: 0, first: now };
+    const m = row ? JSON.parse(row.monitor) : Object.assign({ greenMs: 0, redMs: 0, greyMs: 0, red: [], grey: [], flags: [], lessons: [], lastTs: 0, lastLen: 0, lastColor: '', lastObs: 0, first: now }, source ? { source } : {});
+    // Et dokument skrives enten i skrivevinduet eller i Word – aldrig skiftevis
+    if ((m.source || '') !== source) return { ok: false, error: source ? 'Dokumentet er skrevet i HolyMoly og kan ikke fortsættes i Word' : 'Dokumentet er skrevet i Word og kan kun fortsættes i Word' };
     // Diskkvote: før der skrives noget
     const blocksJson = JSON.stringify(blocks);
     if (text.length - (m.lastLen || 0) > MAX_GROWTH) return { ok: false, error: 'For meget ny tekst på én gang. HolyMoly gemmer højst 3.000 nye tegn ad gangen. Teksten er kun gemt på computeren.' };
@@ -392,6 +402,7 @@ class DocStore {
     const s = JSON.parse(row.stats);
     const text = row.text;
     aids = Array.isArray(aids) ? D.cleanAids(aids) : this.aidsOf(row.student_id);
+    const word = m.source === 'word'; // Word: ingen tastestatistik
     const reasons = [];
     const notes = [];
     const cats = new Set();
@@ -400,7 +411,7 @@ class DocStore {
     const totalMs = m.greenMs + m.redMs + m.greyMs;
     const greyCounted = m.greyCounted == null ? m.greyMs : m.greyCounted; // grå tid uden gemning bagefter: teksten voksede ikke
     // Elevens egne tal og teksten (samme vurdering som øvedokumentet i skrivevinduet – shared/doc.js)
-    const own = D.evaluateStats(text, s, { minWords: this.minWords, aids });
+    const own = D.evaluateStats(text, s, { minWords: this.minWords, aids, word });
     const ownNo = (cat) => { for (const f of own.found) if (f.cat === cat) no(cat, f.why); };
     ownNo('kort');
     const redHard = m.redHard == null ? m.redMs : m.redHard;
@@ -424,7 +435,7 @@ class DocStore {
     // Anden rød end AI, fjernstyring og virtuelle maskiner: kun en note
     if ((m.redSoft || 0) > 0 || (m.redNote || []).length) notes.push(`Rød lampe i ${Math.max(1, Math.round((m.redSoft || 0) / 1000))} sek. (${(m.redNote || []).join('; ') || 'anden aktivitet'}) – kun en oplysning, ikke et afslag`);
     // Hjemme er tid uden for skrivevinduet elevens egen sag: ingen fokus-note (place='hjemme')
-    if (s.focusLostMs > 60_000 && !(({ home, lesson }) => home && !lesson)(this.placeOf(row.id))) notes.push(`Skrivevinduet var ikke i fokus i ${Math.round(s.focusLostMs / 60000)} min.`);
+    if (s.focusLostMs > 60_000 && !(({ home, lesson }) => home && !lesson)(this.placeOf(row.id))) notes.push(`${word ? 'Word' : 'Skrivevinduet'} var ikke i fokus i ${Math.round(s.focusLostMs / 60000)} min.`);
     if (m.greyMs > 0 && !cats.has('forbindelse')) {
       const quiet = Math.max(0, m.greyMs - greyCounted);
       notes.push(`Kort tid uden fuld overvågning (${Math.max(1, Math.round(m.greyMs / 1000))} sek.` + (quiet >= 1000 ? `, heraf ${Math.round(quiet / 1000)} sek. hvor teksten ikke voksede` : '') + ')');
@@ -458,11 +469,11 @@ class DocStore {
   }
 
   /**
-   * Hvad HolyMoly målte (v3): altid skrivevinduet, og vagten kun hvis klassen kræver den (hub.policyFor)
+   * Hvad HolyMoly målte (v3): altid skrivevinduet (eller 'word' for et dokument skrevet i Word), og vagten kun hvis klassen kræver den (hub.policyFor)
    * og vagten fulgte hele forløbet (ingen grå tid, fordi vagten manglede, ikke svarede eller havde en fejl).
    */
   _observed(row, observed) {
-    const out = ['skrivevindue'];
+    const out = [JSON.parse(row.monitor).source === 'word' ? 'word' : 'skrivevindue'];
     if (Array.isArray(observed) && observed.includes('vagt')) {
       const m = JSON.parse(row.monitor);
       const gone = (m.grey || []).some(g => /vagten (er ikke tilknyttet|findes ikke|svarer ikke|har en fejl)/i.test(g));
@@ -505,9 +516,10 @@ class DocStore {
     if (ev.ok) {
       const certId = crypto.randomBytes(12).toString('base64url');
       const issuer = this.testServer ? (meta.issuer ? `${meta.issuer} (${TEST_ISSUER})` : TEST_ISSUER) : String(meta.issuer || '');
-      const checks = ['Tastet i HolyMolys skrivevindue – indsæt blokeret'];
+      const word = observed.includes('word');
+      const checks = [word ? 'Skrevet i Word gennem HolyMoly – ingen tekst indsat fra andre programmer' : 'Tastet i HolyMolys skrivevindue – indsæt blokeret'];
       if (observed.includes('vagt')) checks.push('HolyMoly-vagten blokerede AI på computeren');
-      checks.push('Ingen rød lampe undervejs', aids.length ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten');
+      checks.push('Ingen rød lampe undervejs', word ? 'Teksten voksede i et menneskeligt tempo' : aids.length ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten');
       const created = Number(meta.assignmentCreated) > 0 ? new Date(Number(meta.assignmentCreated)).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }) : null;
       // Fast rækkefølge af felter – det er præcis denne tekst der signeres (v3).
       // Ingen navne, klasse, lærer eller pseudonym: intet felt kobler to beviser fra samme elev sammen.
@@ -569,6 +581,7 @@ class DocStore {
       // Mærket (v3): hvad der blev målt, og om beviset er fra en testserver. Ældre afleveringer har ikke observed.
       kind: res ? res.kind : undefined, observed: res && Array.isArray(res.observed) ? res.observed : undefined,
       test: res && typeof res.test === 'boolean' ? res.test : this.testServer,
+      source: JSON.parse(r.monitor).source === 'word' ? 'word' : 'holymoly',
     };
   }
 

@@ -615,6 +615,7 @@
     if (!assignments.length) { ul.replaceChildren(el('li', 'empty', 'Din lærer har ikke lagt nogen afleveringer ud.')); return; }
     ul.replaceChildren(...assignments.map((a) => {
       const li = el('li');
+      li.dataset.asg = String(a.id); // word-writer.js sætter "Skriv i Word" ind her
       const late = a.due && Date.now() > a.due && !a.submission;
       li.append(el('div', 'head', null));
       li.firstChild.append(el('span', 't', a.title), el('span', 'meta' + (late ? ' late' : ''), (a.className ? a.className + ' · ' : '') + (a.due ? 'Frist ' + fmtDue(a.due) : 'Ingen frist')));

@@ -8,6 +8,7 @@
  *  - aiTraces(): ordrette chatbot-fraser i teksten (lokalt, ingen API). Kun hårde spor – aldrig gæt.
  *    aiHints(): svagere spor (fx at teksten nævner ChatGPT). Kun til læreren – aldrig et afslag.
  *  - label(place, { observed, test }): mærket på et dokument med bevis. Samme tekst overalt.
+ *  - footerLines(mark, words): sidefodens linjer med mærket (toDocx og forseglede Word-dokumenter).
  *  - toDocx(): Word-fil (.docx) uden eksterne biblioteker.
  *  - readZipEntry() / docxText(): læs teksten i en .docx (bruges på tjek-siden i browseren).
  */
@@ -139,25 +140,28 @@
     const t = String(text || '');
     const minWords = Number(o.minWords) > 0 ? Number(o.minWords) : PROOF.MIN_WORDS;
     const aids = cleanAids(o.aids).length > 0;
+    const word = !!o.word; // Word via HolyMoly: der findes ingen tastestatistik – kun hvordan teksten voksede
     const reasons = [], notes = [], cats = [], found = [];
     const no = (cat, why) => { reasons.push(why); found.push({ cat, why }); if (!cats.includes(cat)) cats.push(cat); };
     // Med hjælpemidler er tempo-fund kun en oplysning (ordforslag og diktering giver ujævne byger)
     const tempo = (why) => { if (aids) notes.push(why + ' – eleven har hjælpemidler, så skrivetempoet vurderes ikke'); else no('tempo', why); };
     if (wordCount(t) < minWords) no('kort', `Teksten er for kort til et bevis (mindst ${minWords} ord)`);
-    if (n(s.pasteInserted) > 0) no('indsat', 'Der er indsat tekst, som ikke er tastet');
-    // Tastet minus slettet (plus fortrudt) skal kunne forklare teksten
-    if (n(s.typed) - n(s.deleted) + n(s.restored) + 20 < t.length) no('indsat', 'Der er mere tekst, end der er tastet');
-    if (n(s.maxCps) > PROOF.MAX_HUMAN_CPS) no('tempo', `Skrevet hurtigere end et menneske kan (${Math.round(n(s.maxCps))} tegn/sek.)`);
-    if (n(s.burst) > PROOF.MAX_BURST) tempo(`${Math.round(n(s.burst))} tegn kom på under ét sekund (et program, ikke et menneske)`);
-    if (n(s.keystrokes) >= 200 && n(s.fastShare) > PROOF.MAX_FAST_SHARE) tempo('Mange tastetryk kom hurtigere, end en finger kan trykke');
-    if (s.regularity != null && n(s.keystrokes) >= 300 && n(s.regularity) < PROOF.MIN_REGULARITY) tempo('Tastetrykkene kom i et maskinelt jævnt tempo');
+    if (n(s.pasteInserted) > 0) no('indsat', word ? 'Der er indsat tekst fra et andet program i Word' : 'Der er indsat tekst, som ikke er tastet');
+    // Tastet minus slettet (plus fortrudt) skal kunne forklare teksten (ikke i Word)
+    if (!word && n(s.typed) - n(s.deleted) + n(s.restored) + 20 < t.length) no('indsat', 'Der er mere tekst, end der er tastet');
+    if (!word && n(s.maxCps) > PROOF.MAX_HUMAN_CPS) no('tempo', `Skrevet hurtigere end et menneske kan (${Math.round(n(s.maxCps))} tegn/sek.)`);
+    if (!word && n(s.burst) > PROOF.MAX_BURST) tempo(`${Math.round(n(s.burst))} tegn kom på under ét sekund (et program, ikke et menneske)`);
+    if (!word && n(s.keystrokes) >= 200 && n(s.fastShare) > PROOF.MAX_FAST_SHARE) tempo('Mange tastetryk kom hurtigere, end en finger kan trykke');
+    if (!word && s.regularity != null && n(s.keystrokes) >= 300 && n(s.regularity) < PROOF.MIN_REGULARITY) tempo('Tastetrykkene kom i et maskinelt jævnt tempo');
     // Diktering kan ikke bevises som tastet: over 10 % dikteret tekst giver den neutrale kategori 'hjaelpemiddel'
     if (t.length > 0 && n(s.dictated) / t.length > PROOF.MAX_DICTATED_SHARE) no('hjaelpemiddel', `Over ${Math.round(PROOF.MAX_DICTATED_SHARE * 100)} % af teksten er dikteret (hjælpemiddel)`);
     else if (n(s.dictated) > 0) notes.push(`${Math.round(n(s.dictated))} tegn er dikteret (hjælpemiddel)`);
     if (n(s.predicted) > 0) notes.push(`${Math.round(n(s.predicted))} tegn kom fra ordforslag (hjælpemiddel)`);
     for (const x of aiTraces(t)) no('ai', x);
+    if (word && s.copilot === 'on') no('ai', "Word's AI (Copilot) var slået til, mens teksten blev skrevet");
+    if (word && s.copilot === 'unknown') notes.push("HolyMoly kunne ikke se, om Word's AI (Copilot) var slået fra – kun en oplysning, ikke et afslag");
     for (const x of aiHints(t)) notes.push(x + ' – kun en oplysning, ikke et afslag');
-    if (n(s.pasteBlocked) + n(s.dropBlocked) > 0) notes.push(`${n(s.pasteBlocked) + n(s.dropBlocked)} forsøg på at indsætte tekst blev blokeret`);
+    if (n(s.pasteBlocked) + n(s.dropBlocked) > 0) notes.push(word ? `Udklipsholderen blev tømt ${n(s.pasteBlocked) + n(s.dropBlocked)} gange (tekst fra et andet program)` : `${n(s.pasteBlocked) + n(s.dropBlocked)} forsøg på at indsætte tekst blev blokeret`);
     return { reasons, notes, cats, found };
   }
 
@@ -166,18 +170,21 @@
    * at teksten er tastet i HolyMoly uden indsat tekst, om det skete i timen eller hjemme,
    * om kun skrivevinduet blev fulgt (ingen HolyMoly-vagt på computeren) – og om beviset kommer fra en testserver.
    * place: 'lektion' | 'klasse' | 'ekstra' | 'hjemme' | 'lektion og hjemme' (v2: place, v3: kind). Ukendt sted: intet sted i mærket.
-   * opts: { observed: ['skrivevindue', 'vagt'?], test } fra et v3-bevis. Uden observed (v2 og ældre) er teksten som før.
+   * opts: { observed: ['skrivevindue' | 'word', 'vagt'?], test } fra et v3-bevis ('word' = skrevet i Word via HolyMoly). Uden observed (v2 og ældre) er teksten som før.
    */
   const MARK = '\u2713 Tastet i HolyMoly \u2013 intet indsat';
+  // Skrevet i Word gennem HolyMoly ("Skriv i Word", observed indeholder 'word')
+  const WORD_MARK = '\u2713 Tastet i Word via HolyMoly \u2013 intet indsat';
   const LIMIT_TEXT = 'M\u00e6rket viser, hvad HolyMoly m\u00e5lte p\u00e5 elevens computer. Det d\u00e6kker ikke afskrift fra telefon eller papir, og en computer, eleven selv har \u00e6ndret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler m\u00e6rket, er det ikke et tegn p\u00e5 snyd.';
   const TEST_TEXT = 'Testserver \u2013 m\u00e5 ikke bruges til bed\u00f8mmelse. Tjek altid teksten p\u00e5 linket.';
   function label(place, opts) {
     const o = opts && typeof opts === 'object' ? opts : {};
     const p = String(place || '');
     const v3 = Array.isArray(o.observed);
-    let s = MARK;
+    const word = v3 && o.observed.includes('word');
+    let s = word ? WORD_MARK : MARK;
     if (p) s += ' \u00b7 ' + (/hjemme/.test(p) ? (v3 ? 'hjemme' : 'hjemme uden opsyn') : 'i timen');
-    if (v3 && !o.observed.includes('vagt')) s += ' \u00b7 kun skrivevinduet';
+    if (v3 && !o.observed.includes('vagt')) s += word ? ' \u00b7 kun Word' : ' \u00b7 kun skrivevinduet';
     if (o.test) s += ' \u00b7 TESTSERVER';
     return s;
   }
@@ -185,6 +192,22 @@
   function markGreen(mark) {
     if (!mark || mark.test) return false;
     return !Array.isArray(mark.observed) || mark.observed.includes('vagt');
+  }
+
+  /**
+   * Sidefodens linjer i en Word-fil med mærket – de samme i HolyMolys egen Word-fil (toDocx) og i et dokument,
+   * der er skrevet og forseglet i Word ("Skriv i Word"). mark: { code, url, place, observed, test }, words: antal ord.
+   * [0] mærket, [1] koden og tjek-linket, [2] forbeholdet og antal ord, [3] kun fra en testserver.
+   */
+  function footerLines(mark, words) {
+    if (!mark || !mark.code) return [];
+    const out = [
+      label(mark.place, { observed: mark.observed, test: mark.test }),
+      `HolyMoly ${mark.code}${mark.url ? '  \u00b7  Tjek: ' + mark.url : ''}`,
+      `${LIMIT_TEXT} ${Number(words) || 0} ord.`,
+    ];
+    if (mark.test) out.push(TEST_TEXT);
+    return out;
   }
 
   /* ---------------------------------------------------------------- .docx ---------------------------------------------------------------- */
@@ -267,15 +290,16 @@
     const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${paras.join('')}<w:sectPr>${footerRef}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`;
     // Sidefod på hver side: mærket · HolyMoly HM-XXXX · Tjek: <link>, og på næste linje forbeholdet og antal ord
     const words = wordCount(normalizeText(textOf(blocks)));
-    const markText = mark ? label(mark.place, { observed: mark.observed, test: mark.test }) : '';
+    const lines = footerLines(mark, words);
+    const markText = mark ? lines[0] : '';
     const markColor = markGreen(mark) ? '15803D' : '6B7280';
     const footer = mark ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ${W}><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="D1D5DB"/></w:pBdr><w:spacing w:after="0"/></w:pPr>`
       + runXml({ x: markText, b: 1 }, `<w:color w:val="${markColor}"/><w:sz w:val="18"/>`)
-      + runXml({ x: `  \u00b7  HolyMoly ${mark.code}${mark.url ? '  \u00b7  Tjek: ' + mark.url : ''}` }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
+      + runXml({ x: '  \u00b7  ' + lines[1] }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
       + '</w:p><w:p>'
-      + runXml({ x: `${LIMIT_TEXT} ${words} ord.` }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
+      + runXml({ x: lines[2] }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
       + '</w:p>'
-      + (mark.test ? '<w:p>' + runXml({ x: TEST_TEXT, b: 1 }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>') + '</w:p>' : '')
+      + (lines[3] ? '<w:p>' + runXml({ x: lines[3], b: 1 }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>') + '</w:p>' : '')
       + '</w:ftr>' : '';
     const settings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ${W}>${meta.readOnly ? '<w:documentProtection w:edit="readOnly" w:enforcement="1"/>' : ''}<w:defaultTabStop w:val="708"/></w:settings>`;
     const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}>
@@ -384,5 +408,5 @@
     return { title: titleP ? titleP.line : '', text: variants[0], variants };
   }
 
-  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, label, markGreen, MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
+  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, label, markGreen, footerLines, MARK, WORD_MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
 });

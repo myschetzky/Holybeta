@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+  <title>Min HolyMoly</title>
+  <link rel="stylesheet" href="word-mine.css">
+</head>
+<body>
+  <header class="bar">
+    <img src="../assets/icon.svg" alt="" width="22" height="22">
+    <h1>Min HolyMoly</h1>
+    <span class="spacer"></span>
+    <button class="btn" id="new-holymoly" type="button">Skriv i HolyMoly</button>
+    <button class="btn primary" id="new-word" type="button" hidden>Skriv i Word</button>
+  </header>
+  <main>
+    <p class="muted" id="intro">Dine dokumenter fra HolyMoly og Word. Et dokument med mærket kan vedhæftes en aflevering.</p>
+    <p class="notice" id="word-note" hidden></p>
+    <ul class="docs" id="list" aria-label="Mine dokumenter"></ul>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script src="word-mine.js"></script>
+</body>
+</html>

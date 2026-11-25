@@ -148,6 +148,9 @@
     }));
     // "Skriv i HolyMoly" – under lektionen (så kan HolyMoly bevise, at teksten er elevens egen)
     $('lesson-btns').hidden = !(s.conn === 'online' && s.lesson);
+    // "Skriv i Word" kun når broen siger supported og Word findes. "Min HolyMoly" altid.
+    $('write-word').hidden = !s.word;
+    $('mine-btns').hidden = !s.enrollments.length;
     // Lektionens links: ét klik åbner siden i browseren
     const links = s.links || [];
     $('links').hidden = !links.length;
@@ -176,6 +179,14 @@
 
   $('write').addEventListener('click', () => window.hm.action('write'));
   // 'Se afleveringer' og 'Afleveringer' åbner afleveringssiden (afleveringer.js)
+  $('write-word').addEventListener('click', async () => {
+    $('write-word').disabled = true;
+    const r = await window.hm.action('word');
+    $('write-word').disabled = false;
+    $('word-error').hidden = !(r && r.ok === false);
+    $('word-error').textContent = (r && r.error) || '';
+  });
+  $('mine').addEventListener('click', () => window.hm.action('mine'));
   $('hand').addEventListener('click', () => window.hm.action('hand'));
   window.hm.onState(render);
   window.hm.getState().then(render);

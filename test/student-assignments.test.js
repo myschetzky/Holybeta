@@ -251,11 +251,11 @@ test('verified:open, verified:docx, verified:write og verified:page', async () =
 /* ---------- main.js: "Skriv verificeret aflevering" ---------- */
 
 const MAIN = fs.readFileSync(path.join(__dirname, '..', 'agent', 'src', 'main.js'), 'utf8');
-function startVerifiedWriting(writer, lesson) {
+function startVerifiedWriting(writer, lesson, word = null) {
   const m = /async function startVerifiedWriting\(aid\) \{[\s\S]*?\n\}\n/.exec(MAIN);
   assert.ok(m, 'main.js har startVerifiedWriting');
   // eslint-disable-next-line no-new-func
-  return new Function('writer', 'lessonActive', `${m[0]}; return startVerifiedWriting;`)(writer, () => lesson);
+  return new Function('writer', 'lessonActive', 'word', `${m[0]}; return startVerifiedWriting;`)(writer, () => lesson, word);
 }
 function fakeWriter() {
   const calls = [];
@@ -312,4 +312,16 @@ test('hovedvinduet: afleveringssiden er indlæst, og tabellerne og dialogerne er
   assert.match(MAIN, /verified\.register\(/);
   const js = fs.readFileSync(path.join(__dirname, '..', 'agent', 'renderer', 'afleveringer.js'), 'utf8');
   assert.ok(js.includes("$('assign-btn').addEventListener('click', openPage)"), "'Du har N afleveringer' åbner siden");
+});
+
+test('main.js: "Skriv verificeret aflevering" åbner Word, når Word findes – ellers skrivevinduet', async () => {
+  const calls = [];
+  const word = (available) => ({ manager: { info: async () => ({ available }), start: async (i) => { calls.push(['word', i.assignmentId]); return { ok: true }; } } });
+  const w = fakeWriter();
+  assert.deepStrictEqual(await startVerifiedWriting(w, true, word(true))(8), { ok: true });
+  assert.deepStrictEqual(calls, [['word', 8]]);
+  assert.deepStrictEqual(w.calls, [], 'skrivevinduet åbnes ikke, når Word bruges');
+  const w2 = fakeWriter();
+  assert.deepStrictEqual(await startVerifiedWriting(w2, true, word(false))(8), { ok: true });
+  assert.deepStrictEqual(w2.calls, [['openForAssignment', 8, 'Digtanalyse']], 'uden Word: skrivevinduet');
 });

@@ -29,4 +29,9 @@ contextBridge.exposeInMainWorld('hmw', {
   onAids: (cb) => ipcRenderer.on('write:aids', (_e, list) => cb(Array.isArray(list) ? list.map(String) : [])),
   setPrefs: (p) => ipcRenderer.invoke('write:prefs', p && typeof p === 'object' ? { size: Number(p.size) || 0, lh: String(p.lh || '') } : {}),
   onPrefs: (cb) => ipcRenderer.on('write:prefs', (_e, p) => cb(p && typeof p === 'object' ? p : {})),
+  // "Skriv i Word" og "Min HolyMoly" (agent/src/word/app.js, agent/renderer/word-writer.js)
+  wordInfo: () => ipcRenderer.invoke('word:info'),
+  word: (assignmentId) => ipcRenderer.invoke('word:start', { assignmentId: Number(assignmentId) || 0 }),
+  wordWriteLesson: () => ipcRenderer.invoke('word:write-lesson'),
+  mine: () => ipcRenderer.invoke('word:mine'),
 });
