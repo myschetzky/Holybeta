@@ -419,7 +419,8 @@ function evaluate() {
     windows: monitor.windows, macTabs: monitor.macTabs,
     netAi: macFilter ? macFilter.recentAi().map(f => ({ pid: f.pid, host: f.host, bundle: f.app }))
       : (net ? aiConnections(net, policy.rules) : []),
-    extensionIds: CONFIG.extensionIds || [],
+    // Under udvikling (e2e) kan man opføre sig, som om udvidelsen er udgivet: browsere uden den lukkes så
+    extensionIds: (process.env.HM_REQUIRE_EXTENSION === '1' && !app.isPackaged) ? ['dev'] : (CONFIG.extensionIds || []),
     selfPids: [process.pid], minExtensionVersion: state.minExtensionVersion, bridgeSquatter: state.bridgeSquatter,
     macFilterRequired: !!CONFIG.requireMacFilter, macFilterState: macFilter ? macFilter.state : 'ok',
     guardRequired: GUARD_MANAGED || guard.installed(), guardStatus: guard.readStatus(), lessonStartedAt: state.lessonStartedAt || 0,

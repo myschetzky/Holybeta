@@ -73,7 +73,7 @@ async function until(fn, ms = 10_000, every = 200) {
     executablePath: path.join(ROOT, 'agent/node_modules/electron/dist/electron'),
     args: [path.join(ROOT, 'agent'), '--no-sandbox'],
     // Den indbyggede adresse peger ingen steder hen – eleven skal skrive skolens adresse (som i den installerede app)
-    env: Object.assign({}, process.env, { HM_SERVER_URL: 'http://127.0.0.1:9', HM_TEST_SERVER_SETUP: '1', HOME: agentHome, XDG_CONFIG_HOME: path.join(agentHome, '.config') }),
+    env: Object.assign({}, process.env, { HM_SERVER_URL: 'http://127.0.0.1:9', HM_TEST_SERVER_SETUP: '1', HM_REQUIRE_EXTENSION: '1', HOME: agentHome, XDG_CONFIG_HOME: path.join(agentHome, '.config') }),
   });
   const agentWin = await electronApp.firstWindow();
   await agentWin.waitForSelector('#server', { state: 'visible' });
@@ -95,7 +95,7 @@ async function until(fn, ms = 10_000, every = 200) {
   check(!(await agentWin.isVisible('#server')), 'adressen er gemt, og skærmen med klassekoden vises');
   await agentWin.screenshot({ path: path.join(OUT, '01-elev-app-kode.png') });
   await agentWin.fill('#code', anna.inviteCode.replace('-', '').toLowerCase());
-  await agentWin.click('#enroll-form button');
+  await agentWin.click('#enroll-submit');
   await agentWin.waitForSelector('#status', { state: 'visible' });
   const connected = await until(() => agentWin.evaluate(() => document.getElementById('state-text').textContent === 'Forbundet'));
   await agentWin.screenshot({ path: path.join(OUT, '01b-elev-app-forbundet.png') });
