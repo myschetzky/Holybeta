@@ -1042,9 +1042,17 @@
           ? h('p', { class: 'small' }, `Koden er nulstillet. Engangskoden virker indtil kl. ${fmtTime(s.pinResetUntil)}. Har ${s.name} ikke nået det, så nulstil igen.`)
           : s.pinReset ? h('p', { class: 'small' }, 'Engangskoden er udløbet. Nulstil igen for at få en ny.')
             : s.pin ? h('p', { class: 'muted small', text: 'Eleven har sin egen kode. Har eleven glemt den, så nulstil den. Du får en engangskode, som eleven skriver i appen.' }) : null;
+      // Hjælpemidler (ordblinde m.fl.): skrivevinduet tillader dem, og skrivetempoet vurderes ikke.
+      // Vises kun her og i lærer-logbogen – aldrig i mærket, beviset eller Word-filen.
+      const aidsNow = Array.isArray(s.aids) ? s.aids : [];
+      const aidBox = (key, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'aid', value: key, checked: aidsNow.includes(key) }), label);
+      const aids = h('fieldset', { class: 'aids' },
+        h('legend', { text: 'Hjælpemidler' }),
+        aidBox('ordforslag', 'Ordforslag'), aidBox('diktering', 'Diktering'),
+        h('p', { class: 'muted small', text: 'Til elever med fx ordblindhed. Skrivetempoet bliver ikke vurderet. Over 10 % dikteret tekst giver ikke mærket, men eleven får ingen ulempe. Valget står i logbogen.' }));
       const r = await dialog({
         title: s.name,
-        body: [h('label', {}, 'Navn', name), info, pinInfo],
+        body: [h('label', {}, 'Navn', name), info, pinInfo, aids],
         actions: [
           s.pin || s.pinReset ? { label: 'Nulstil kode', run: async () => {
             const r = await api(`/api/students/${id}/reset-pin`, { method: 'POST', body: {} });
@@ -1056,7 +1064,12 @@
             return 'deleted';
           } },
           { label: 'Ny computer', run: async () => api(`/api/students/${id}/invite`, { method: 'POST', body: {} }).then(r => ({ code: r.inviteCode })) },
-          { label: 'Gem', kind: 'primary', submit: true, run: async () => { await api('/api/students/' + id, { method: 'PATCH', body: { name: name.value } }); return 'saved'; } },
+          { label: 'Gem', kind: 'primary', submit: true, run: async () => {
+            await api('/api/students/' + id, { method: 'PATCH', body: { name: name.value } });
+            const picked = [...aids.querySelectorAll('input[name=aid]:checked')].map(x => x.value);
+            if (picked.join() !== aidsNow.join()) await api(`/api/students/${id}/aids`, { method: 'PUT', body: { aids: picked } });
+            return 'saved';
+          } },
         ],
       });
       if (r) {

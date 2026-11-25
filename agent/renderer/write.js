@@ -6,7 +6,10 @@
  *  - Dokumentet gemmes hos serveren hvert 5. sekund. Serveren noterer selv elevens lampe undervejs
  *    og afgør ved aflevering, om der kan udstedes et skrive-bevis.
  *  - Ved hver gemning svarer serveren med en prøve-vurdering: hvorfor beviset vil mangle (uden tal).
- *    "Afslut dokument" viser årsagerne først: "Skriv videre" eller "Aflever alligevel".
+ *    "Afslut dokument" viser årsagerne først: "Annuller" eller "Aflever uden mærke".
+ *  - Til alle: stavekontrol (højreklik), tekststørrelse og linjeafstand (Visning), zoom (Ctrl +/-/0), genveje og skærmlæser.
+ *  - Hjælpemidler, læreren har slået til: ordforslag (ét ord ad gangen) og diktering tælles for sig (stats.predicted/dictated).
+ *  - Øvedokument ("Øv dig"): kun i dette vindues hukommelse. Det sendes aldrig og vurderes lokalt (HMDoc.evaluateStats).
  */
 (function () {
   const $ = (id) => document.getElementById(id);
@@ -28,7 +31,12 @@
   // Mærket (D.label fra hovedprocessen – samme tekst som i Word-filen og på tjek-siden)
   let labels = { base: '', lektion: '', hjemme: '' };
   const labelFor = (place) => (/hjemme/.test(place || '') ? labels.hjemme : place ? labels.lektion : labels.base);
-  const newStats = () => ({ typed: 0, deleted: 0, restored: 0, keystrokes: 0, pasteBlocked: 0, pasteInserted: 0, dropBlocked: 0, maxCps: 0, burst: 0, fastShare: 0, regularity: null, focusLostMs: 0, activeMs: 0 });
+  const newStats = () => ({ typed: 0, deleted: 0, restored: 0, keystrokes: 0, pasteBlocked: 0, pasteInserted: 0, dropBlocked: 0, maxCps: 0, burst: 0, fastShare: 0, regularity: null, focusLostMs: 0, activeMs: 0, predicted: 0, dictated: 0 });
+  // Hjælpemidler, læreren har slået til for eleven ('ordforslag', 'diktering')
+  let aids = [];
+  const hasAid = (a) => aids.includes(a);
+  // Afvist tekst: sig det venligt – og peg på læreren, hvis eleven bruger et hjælpemiddel
+  const AID_TOAST = 'Det kunne ikke sættes ind her. Bruger du et ordblinde-program eller diktering, så sig det til din lærer.';
 
   /* ---------- måling af skriveforløbet ---------- */
   const times = [];   // tidspunkter for tastede tegn (seneste 5 sek. til tempo)
@@ -65,6 +73,13 @@
     }
   }
 
+  /* Tekst fra et hjælpemiddel: tæller som skrevet (så teksten kan forklares), men ikke i skrivetempoet */
+  function countAid(kind, n) {
+    stats.typed += n;
+    if (kind) stats[kind] = (stats[kind] || 0) + n;
+    allowance += n;
+  }
+
   let toastT;
   function toast(msg) {
     const t = $('toast');
@@ -81,7 +96,37 @@
    */
   let snap = [], snapLen = 0, allowance = 0, composing = false, undoing = false;
   const textLen = () => (ed.textContent || '').length;
-  function takeSnap() { snap = toBlocks(); snapLen = textLen(); allowance = 0; }
+  let snapCaret = -1;
+  function takeSnap() { snap = toBlocks(); snapLen = textLen(); snapCaret = caretOffset(); allowance = 0; }
+  /* Markørens plads som antal tegn fra dokumentets start (så den kan sættes igen, når en ændring rulles tilbage) */
+  function caretOffset() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount || !ed.contains(sel.focusNode)) return -1;
+    try {
+      const r = document.createRange();
+      r.selectNodeContents(ed);
+      r.setEnd(sel.focusNode, sel.focusOffset);
+      return r.toString().length;
+    } catch (e) { return -1; }
+  }
+  function setCaret(off) {
+    if (off < 0) { caretToEnd(); return; }
+    const w = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+    let n, left = off;
+    while ((n = w.nextNode())) {
+      if (left <= n.nodeValue.length) {
+        const r = document.createRange();
+        r.setStart(n, left);
+        r.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        return;
+      }
+      left -= n.nodeValue.length;
+    }
+    caretToEnd();
+  }
   function caretToEnd() {
     const r = document.createRange();
     r.selectNodeContents(ed);
@@ -96,8 +141,8 @@
     if (growth > allowance + 2) {
       stats.pasteBlocked++;
       fromBlocks(snap);
-      caretToEnd();
-      toast('Tekst der ikke er tastet, kan ikke indsættes her.');
+      setCaret(snapCaret);
+      toast(AID_TOAST);
       snapLen = textLen();
       allowance = 0;
       return;
@@ -120,8 +165,14 @@
       const data = t === 'insertReplacementText' ? (e.dataTransfer && e.dataTransfer.getData('text/plain')) || '' : (e.data || '');
       // Et tastetryk giver ét tegn (enkelte taster lidt flere; stavekontrollen et ord). Store klumper er ikke tastet.
       const max = t === 'insertReplacementText' ? 40 : 4;
-      if (data.length > max) { e.preventDefault(); stats.pasteBlocked++; toast('Tekst der ikke er tastet, kan ikke indsættes.'); return; }
-      countTyped(Math.max(1, data.length));
+      if (data.length > max) {
+        // Ordforslag (hjælpemiddel): ét ord, der fuldender det, eleven er begyndt at skrive
+        if (t === 'insertText' && hasAid('ordforslag') && isPrediction(data)) { lastPrediction = performance.now(); countAid('predicted', data.length); dirty = true; return; }
+        e.preventDefault(); stats.pasteBlocked++; toast(AID_TOAST); return;
+      }
+      // Stavekontrollens forslag (højreklik) erstatter et ord: tæller som tastet, men ikke i tempoet
+      if (t === 'insertReplacementText') countAid('', Math.max(1, data.length));
+      else countTyped(Math.max(1, data.length));
     } else if (t === 'insertParagraph' || t === 'insertLineBreak') {
       countTyped(1);
     } else if (t === 'historyUndo' || t === 'historyRedo') {
@@ -131,16 +182,52 @@
     } else if (t.startsWith('delete')) {
       const sel = window.getSelection();
       stats.deleted += Math.max(1, sel && !sel.isCollapsed ? sel.toString().length : 1);
+      noteDeleted(t, sel);
     }
     dirty = true;
   });
+  /*
+   * Ordforslag: højst 30 tegn, ét ord (evt. med mellemrum efter), højst én gang pr. 700 ms – og kun når det fuldender
+   * et ord, eleven selv er begyndt på: bogstaver lige før markøren, et markeret ordstykke eller et ordstykke,
+   * programmet lige har slettet med tilbage-tasten.
+   */
+  let lastPrediction = 0, delFrag = '', delAt = 0;
+  const WORD_RE = /^[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)* ?$/u;
+  function fragBefore(sel) {
+    if (!sel || !sel.rangeCount || !sel.isCollapsed) return '';
+    const n = sel.anchorNode;
+    if (!n || n.nodeType !== 3 || !ed.contains(n)) return '';
+    const m = n.nodeValue.slice(0, sel.anchorOffset).match(/[\p{L}\p{N}'’-]*$/u);
+    return m ? m[0] : '';
+  }
+  function noteDeleted(t, sel) {
+    if (t !== 'deleteContentBackward' || !sel || !sel.isCollapsed) { delFrag = ''; return; }
+    const n = sel.anchorNode;
+    const ch = n && n.nodeType === 3 && sel.anchorOffset > 0 ? n.nodeValue.charAt(sel.anchorOffset - 1) : '';
+    const now = performance.now();
+    delFrag = /[\p{L}\p{N}]/u.test(ch) ? (now - delAt < 1500 ? ch + delFrag : ch) : '';
+    delAt = now;
+  }
+  function isPrediction(data) {
+    if (data.length > 30 || !WORD_RE.test(data)) return false;
+    if (performance.now() - lastPrediction < 700) return false;
+    const word = data.trim().toLocaleLowerCase('da');
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) { const picked = sel.toString().toLocaleLowerCase('da'); return !!picked && word.startsWith(picked); }
+    if (fragBefore(sel)) return true;
+    const recent = delFrag && performance.now() - delAt < 1500 ? delFrag.toLocaleLowerCase('da') : '';
+    return !!recent && word.startsWith(recent);
+  }
+
   page.addEventListener('compositionstart', (e) => { if (e.target === ed) composing = true; });
   page.addEventListener('compositionend', (e) => {
     if (e.target !== ed) return;
     composing = false;
     if (!editable()) return;
-    // Døde taster (fx ´ + e) og korte IME-ord er tastet – lange "kompositioner" er ikke
-    if (e.data) countTyped(Math.min(12, e.data.length));
+    // Døde taster (fx ´ + e) og korte IME-ord er tastet – lange "kompositioner" er ikke.
+    // Diktering (hjælpemiddel): højst 300 tegn ad gangen tælles som dikteret (over 10 % giver ikke mærket).
+    if (e.data && hasAid('diktering') && e.data.length > 12 && e.data.length <= 300) countAid('dictated', e.data.length);
+    else if (e.data) countTyped(Math.min(12, e.data.length));
     checkGrowth();
   });
   page.addEventListener('input', (e) => {
@@ -148,6 +235,7 @@
     dirty = true;
     if (!composing) checkGrowth();
     updateWords();
+    if (doc && doc.practice) practicePreviewSoon();
   });
   // Indsæt (Ctrl+V, genvejsmenu) og træk-og-slip stoppes allerede her – og tælles
   page.addEventListener('paste', (e) => {
@@ -174,22 +262,27 @@
   window.addEventListener('focus', () => { if (blurAt && stats) stats.focusLostMs += Date.now() - blurAt; blurAt = 0; });
 
   /* ---------- formatering ---------- */
-  document.querySelectorAll('.tools [data-cmd]').forEach(b => b.addEventListener('mousedown', (e) => {
-    e.preventDefault();
+  // Knapperne virker med mus og tastatur (click). mousedown forhindrer kun, at markeringen i teksten forsvinder.
+  function format(cmd, value) {
     if (!editable()) return;
-    document.execCommand(b.dataset.cmd, false, null);
+    if (document.activeElement !== ed) ed.focus();
+    document.execCommand(cmd, false, value || null);
     dirty = true; syncTools();
-  }));
-  document.querySelectorAll('.tools [data-block]').forEach(b => b.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    if (!editable()) return;
-    document.execCommand('formatBlock', false, b.dataset.block);
-    dirty = true; syncTools();
-  }));
+  }
+  document.querySelectorAll('.tools [data-cmd], .tools [data-block]').forEach((b) => {
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => (b.dataset.block ? format('formatBlock', b.dataset.block) : format(b.dataset.cmd)));
+  });
+  // Genveje: Ctrl+Alt+1/2 = overskrift/underoverskrift, Ctrl+Shift+8 = punktopstilling (AltGr-tegn som @ røres ikke)
+  page.addEventListener('keydown', (e) => {
+    if (e.target !== ed || !e.ctrlKey || e.metaKey || e.getModifierState('AltGraph')) return;
+    if (e.altKey && !e.shiftKey && (e.key === '1' || e.key === '2')) { e.preventDefault(); format('formatBlock', e.key === '1' ? 'h1' : 'h2'); }
+    else if (e.shiftKey && !e.altKey && e.code === 'Digit8') { e.preventDefault(); format('insertUnorderedList'); }
+  });
   function syncTools() {
     for (const c of ['bold', 'italic', 'underline']) {
       const b = document.querySelector(`.tools [data-cmd="${c}"]`);
-      try { b.classList.toggle('on', document.queryCommandState(c)); } catch (e) { /* */ }
+      try { const on = document.queryCommandState(c); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); } catch (e) { /* */ }
     }
   }
   document.addEventListener('selectionchange', syncTools);
@@ -261,40 +354,103 @@
   }
 
   /* ---------- tilstand ---------- */
-  const editable = () => !!(doc && !doc.submitted && lessonLive);
+  // Øvedokumentet kan altid skrives i (det forlader aldrig computeren)
+  const editable = () => !!(doc && !doc.submitted && (lessonLive || doc.practice));
+  const PRACTICE_TEXT = 'Øvedokument – forlader aldrig denne computer og slettes, når du lukker vinduet.';
   function applyMode() {
     const can = editable();
+    const practice = !!(doc && doc.practice);
     ed.contentEditable = can ? 'true' : 'false';
     $('title').disabled = !can;
-    $('submit').disabled = !can;
-    $('del').hidden = !(doc && !doc.submitted);
+    $('submit').disabled = !can || practice;
+    $('docx').disabled = practice;
+    $('del').hidden = !(doc && !doc.submitted && !practice);
     const n = $('notice');
-    if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${(doc.result.label || labelFor(doc.result.place))}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres.'; n.hidden = false; }
+    n.classList.toggle('practice', practice);
+    if (practice) { n.textContent = PRACTICE_TEXT; n.hidden = false; }
+    else if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${(doc.result.label || labelFor(doc.result.place))}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres.'; n.hidden = false; }
     else if (!lessonLive) { n.textContent = 'Du kan skrive her, når din lærer har startet en lektion eller du har startet en skriveøkt.'; n.hidden = false; }
     else n.hidden = true;
     showPreview();
   }
-  /* Prøve-vurdering: hvad mangler, hvis eleven afleverer nu (kun kategorier – aldrig tempotal) */
-  const SHORT = { kort: 'for kort', rod: 'rød lampe', forbindelse: 'forbindelse', indsat: 'indsat tekst', tempo: 'skrivetempo', ai: 'AI-spor' };
+  /*
+   * Prøve-vurdering: hvad mangler, hvis eleven afleverer nu (kun kategorier – aldrig tempotal).
+   * 'kort' kan rettes og vises neutralt ("Bevis: 34 af 100 ord"). Andre kategorier er permanente for dokumentet.
+   */
+  const SHORT = { kort: 'for kort', rod: 'rød lampe', forbindelse: 'forbindelse', indsat: 'indsat tekst', tempo: 'skrivetempo', ai: 'AI-spor', hjaelpemiddel: 'diktering' };
+  const fixable = (c) => (typeof c.fixable === 'boolean' ? c.fixable : c.key === 'kort');
+  const hhmm = (ts) => new Date(ts).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' });
+  const wordsNow = () => { const m = (ed.innerText || '').match(/[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu); return m ? m.length : 0; };
+  const shortText = (c) => `Bevis: ${Math.min(wordsNow(), c.need || 100)} af ${c.need || 100} ord`;
+  const lostText = (c) => `Dette dokument kan ikke længere få mærket (${c.at ? 'kl. ' + hhmm(c.at) + ': ' : ''}${c.label || SHORT[c.key] || c.key}). Start et nyt dokument, hvis du vil have mærket.`;
+  /** Den vigtigste besked: permanent kategori > hjælpemiddel > for kort */
+  function previewLine(cats) {
+    const lost = cats.find(c => !fixable(c) && c.key !== 'hjaelpemiddel');
+    if (lost) return lostText(lost);
+    const aid = cats.find(c => c.key === 'hjaelpemiddel');
+    if (aid) return aid.text;
+    const kort = cats.find(c => c.key === 'kort');
+    return kort ? shortText(kort) : '';
+  }
   function showPreview() {
     const el = $('preview');
-    const pv = doc && !doc.submitted && lessonLive ? doc.preview : null;
+    const pv = doc && !doc.submitted && (lessonLive || doc.practice) ? doc.preview : null;
     if (!pv) { el.hidden = true; return; }
     const cats = Array.isArray(pv.categories) ? pv.categories : [];
     el.hidden = false;
-    if (!cats.length) { el.textContent = 'Beviset er i orden indtil videre'; el.title = ''; return; }
-    el.textContent = 'Beviset vil mangle: ' + cats.map(c => SHORT[c.key] || c.key).join(', ');
-    el.title = cats.map(c => c.text).join('\n');
+    if (!cats.length) { el.textContent = doc.practice ? 'Øvedokument: skriveforløbet ser fint ud' : 'Beviset er i orden indtil videre'; el.title = ''; return; }
+    el.textContent = previewLine(cats);
+    el.title = cats.map(c => (c.key === 'kort' ? shortText(c) : c.text)).join('\n');
   }
   function fillDocs(list) {
     const sel = $('docs');
     sel.replaceChildren(...list.map(d => { const o = document.createElement('option'); o.value = d.id; o.textContent = (d.title || 'Uden titel') + (d.submitted ? (d.certId ? ' ✓' : ' (afsluttet)') : ''); return o; }));
+    if (practiceDoc) { const o = document.createElement('option'); o.value = PRACTICE_ID; o.textContent = 'Øvedokument'; sel.prepend(o); }
     if (doc) sel.value = doc.id;
   }
+  /* ---------- øvedokument: kun i dette vindues hukommelse – sendes aldrig og gemmes aldrig ---------- */
+  const PRACTICE_ID = 'oevedokument';
+  let practiceDoc = null;
+  function leavePractice() {
+    if (!doc || !doc.practice) return;
+    doc.blocks = toBlocks(); doc.title = $('title').value; doc.stats = stats;
+    dirty = false; // øvedokumentet gemmes aldrig – og må ikke få det næste dokument til at blive gemt
+  }
+  async function openPractice() {
+    await saveNow();
+    leavePractice();
+    if (!practiceDoc) practiceDoc = { id: PRACTICE_ID, practice: true, title: 'Øvedokument', blocks: [], stats: {}, submitted: 0, preview: null };
+    doc = practiceDoc;
+    stats = Object.assign(newStats(), doc.stats || {});
+    newEditor();
+    $('title').value = doc.title;
+    fromBlocks(doc.blocks);
+    takeSnap();
+    $('saved').textContent = '';
+    applyMode();
+    fillDocs((await window.hmw.state()).docs);
+    practicePreview();
+    ed.focus();
+  }
+  /** Lokal prøve-vurdering af øvedokumentet: samme regler som serveren for tekst og tempo (lampen måles ikke her). */
+  let practiceT = 0;
+  function practicePreviewSoon() { clearTimeout(practiceT); practiceT = setTimeout(practicePreview, 800); }
+  function practicePreview() {
+    if (!doc || !doc.practice || !window.HMDoc) return;
+    const D = window.HMDoc;
+    const text = D.normalizeText(D.textOf(toBlocks()));
+    const r = D.evaluateStats(text, stats, { aids });
+    const order = Object.keys(D.CATEGORY_TEXT);
+    const cats = r.cats.slice().sort((a, b) => order.indexOf(a) - order.indexOf(b)).map(key => ({ key, text: D.CATEGORY_TEXT[key], fixable: key === 'kort', need: key === 'kort' ? D.PROOF.MIN_WORDS : undefined }));
+    doc.preview = { ok: !cats.length, categories: cats };
+    showPreview();
+  }
   async function open(id) {
+    if (id === PRACTICE_ID) { await openPractice(); return; }
     await saveNow();
     const d = await window.hmw.load(id);
     if (!d) return;
+    leavePractice();
     doc = d;
     stats = Object.assign(newStats(), d.stats || {});
     newEditor();
@@ -307,6 +463,7 @@
   }
   async function newDoc(opts) {
     await saveNow();
+    leavePractice();
     const d = await window.hmw.create(opts);
     await open(d.id);
     ed.focus();
@@ -331,11 +488,12 @@
   window.hmw.onOpenDoc((id) => { if (id && (!doc || doc.id !== id)) open(id); });
   $('docs').addEventListener('change', (e) => open(e.target.value));
   $('new').addEventListener('click', () => newDoc());
+  $('practice').addEventListener('click', () => openPractice());
 
   /* ---------- gem ---------- */
   let saving = false;
   async function saveNow() {
-    if (!doc || doc.submitted || !dirty || saving) return;
+    if (!doc || doc.practice || doc.submitted || !dirty || saving) return;
     saving = true;
     dirty = false;
     try {
@@ -352,7 +510,7 @@
   });
 
   /* ---------- aflever ---------- */
-  // Mangler beviset, vises årsagerne først: "Skriv videre" (intet låses) eller "Aflever alligevel" (låses uden bevis)
+  // Mangler beviset, vises årsagerne først: "Annuller" (intet låses) eller "Aflever uden mærke" (låses uden bevis)
   let confirmForce = false;
   function openConfirm(cats) {
     const a = doc && doc.assignmentId && assignments.find(x => x.id === doc.assignmentId);
@@ -361,16 +519,24 @@
     $('confirm-mark').textContent = labels.base;
     const missing = Array.isArray(cats) && cats.length > 0;
     confirmForce = missing;
-    $('confirm-title').textContent = missing ? 'Beviset vil mangle' : 'Afslut dokumentet?';
+    $('confirm-title').textContent = missing ? 'Dokumentet får ikke mærket' : 'Afslut dokumentet?';
     $('confirm-text').hidden = missing;
     $('confirm-why').hidden = !missing;
-    $('confirm-list').replaceChildren(...(missing ? cats.map(c => li(c.text)) : []));
-    $('confirm-no').textContent = missing ? 'Skriv videre' : 'Annuller';
-    $('confirm-yes').textContent = missing ? 'Aflever alligevel' : 'Afslut';
+    $('confirm-list').replaceChildren(...(missing ? cats.map(c => li(c.key === 'kort' ? shortText(c) : c.text)) : []));
+    if (missing) {
+      // Kan alt rettes (kun "for kort"), kan eleven skrive videre. Ellers: start et nyt dokument for at få mærket.
+      const lost = cats.find(c => !fixable(c) && c.key !== 'hjaelpemiddel');
+      const note = lost ? lostText(lost)
+        : cats.every(fixable) ? 'Skriver du videre, kan du stadig få mærket. Afleverer du nu, kan teksten ikke længere ændres, og den får ikke mærket.'
+          : 'Afleverer du, kan teksten ikke længere ændres.';
+      $('confirm-note').textContent = note;
+    }
+    $('confirm-no').textContent = 'Annuller';
+    $('confirm-yes').textContent = missing ? 'Aflever uden mærke' : 'Afslut';
     $('confirm').showModal();
   }
   $('submit').addEventListener('click', () => {
-    if (!editable()) return;
+    if (!editable() || doc.practice) return;
     const pv = doc.preview;
     openConfirm(pv && !pv.ok ? pv.categories : null);
   });
@@ -523,12 +689,65 @@
     if (s.docs.length) await open(s.docs[0].id); else await newDoc();
   });
 
+  /* ---------- min lampe (footer) ---------- */
+  // Symbol + tekst fra hovedprocessen (writer.lampView). Editoren låses aldrig af lampen eller af en afbrydelse.
+  function setLamp(v) {
+    const el = $('lamp');
+    if (!v) { el.hidden = true; $('lost').hidden = true; return; }
+    const text = v.text + (v.homeNote ? ' ' + v.homeNote : '');
+    el.className = 'lamp ' + v.color;
+    el.querySelector('.lamp-dot').textContent = v.symbol;
+    el.querySelector('.lamp-text').textContent = text;
+    el.title = text;
+    el.hidden = false;
+    $('lost').hidden = !v.banner;
+  }
+  window.hmw.onLamp(setLamp);
+  // En afbrudt skriveøkt kunne ikke fortsættes (fx fristen er overskredet): teksten er gemt på computeren
+  window.hmw.onSessionEnded((msg) => toast((msg ? msg.replace(/[.\s]+$/, '') + '. ' : '') + 'Teksten er gemt på computeren.'));
+
   /* ---------- start ---------- */
+  /* ---------- visning: tekststørrelse og linjeafstand (kun på skærmen – Word-filen ændres ikke) ---------- */
+  let prefs = { size: 16, lh: 'normal' };
+  function applyPrefs(p) {
+    if (p && typeof p === 'object') prefs = Object.assign({}, prefs, p);
+    const size = Math.min(24, Math.max(14, Number(prefs.size) || 16));
+    page.style.setProperty('--ed-size', size + 'px');
+    page.style.setProperty('--ed-lh', prefs.lh === 'luftig' ? '2.1' : '1.6');
+    $('size-val').textContent = size + ' px';
+    $('size-down').disabled = size <= 14;
+    $('size-up').disabled = size >= 24;
+    document.querySelectorAll('#view-panel [data-lh]').forEach(b => b.setAttribute('aria-pressed', b.dataset.lh === (prefs.lh === 'luftig' ? 'luftig' : 'normal') ? 'true' : 'false'));
+  }
+  async function setPrefs(p) {
+    applyPrefs(p);
+    if (window.hmw.setPrefs) applyPrefs(await window.hmw.setPrefs(p));
+  }
+  function toggleView(open) {
+    const panel = $('view-panel');
+    const show = open == null ? panel.hidden : !!open;
+    panel.hidden = !show;
+    $('view-btn').setAttribute('aria-expanded', show ? 'true' : 'false');
+    if (show) ($('size-up').disabled ? $('size-down') : $('size-up')).focus();
+  }
+  $('view-btn').addEventListener('click', () => toggleView());
+  $('view-panel').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); toggleView(false); $('view-btn').focus(); } });
+  document.addEventListener('mousedown', (e) => { if (!$('view-panel').hidden && !e.target.closest('.view-wrap')) toggleView(false); });
+  $('size-down').addEventListener('click', () => setPrefs({ size: (Number(prefs.size) || 16) - 2 }));
+  $('size-up').addEventListener('click', () => setPrefs({ size: (Number(prefs.size) || 16) + 2 }));
+  document.querySelectorAll('#view-panel [data-lh]').forEach(b => b.addEventListener('click', () => setPrefs({ lh: b.dataset.lh })));
+  if (window.hmw.onPrefs) window.hmw.onPrefs(applyPrefs);
+  // Skærmlæsere får gemt-status og prøve-vurdering at vide (uden at flytte fokus)
+  for (const id of ['saved', 'preview']) { $(id).setAttribute('role', 'status'); $(id).setAttribute('aria-live', 'polite'); }
+  if (window.hmw.onAids) window.hmw.onAids((list) => { aids = Array.isArray(list) ? list : []; if (doc && doc.practice) practicePreview(); });
+
   window.hmw.onLesson((live) => { lessonLive = !!live; applyMode(); });
   (async () => {
     const s = await window.hmw.state();
     lessonLive = s.lesson;
     if (s.labels) labels = s.labels;
+    if (Array.isArray(s.aids)) aids = s.aids;
+    applyPrefs(s.prefs);
     setWriteLesson(s.writeLesson);
     const first = (s.openId && s.docs.find(d => d.id === s.openId)) || s.docs[0];
     if (first) await open(first.id); else await newDoc();

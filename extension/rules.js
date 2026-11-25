@@ -738,12 +738,31 @@
     };
   }
 
+  /**
+   * Elevens egen kode (4-6 cifre): de mest almindelige koder (som en klassekammerat ville prøve først) afvises:
+   * ens cifre (1111), rækker op eller ned (1234, 9876, 7890), gentagne par (1212, 1122, 123123) og årstal 1950-2030.
+   * Bruges af serveren og af elev-appen (så eleven får besked, før koden sendes).
+   */
+  function weakPin(pin) {
+    const p = String(pin);
+    if (!/^\d{4,6}$/.test(p)) return false;
+    const d = [...p].map(Number);
+    if (/^(\d)\1+$/.test(p)) return true;
+    const steps = d.slice(1).map((x, i) => (x - d[i] + 10) % 10);
+    if (steps.every(x => x === 1) || steps.every(x => x === 9)) return true;
+    if (/^(\d\d)\1+$/.test(p) || /^(\d\d\d)\1$/.test(p)) return true;
+    if (/^(\d)\1(\d)\2((\d)\4)?$/.test(p)) return true;
+    if (p.length === 4 && Number(p) >= 1950 && Number(p) <= 2030) return true;
+    return false;
+  }
+  const WEAK_PIN_TEXT = 'Koden er for nem at gætte (fx 1234, 1111 eller et årstal). Vælg en anden.';
+
   /** Regex-mønstre til translate.goog-varianter af blokerede domæner (til DNR). */
   function googEncodedHosts(domains) {
     return domains.map(d => d.replace(/-/g, '--').replace(/\./g, '-'));
   }
 
-  const api = { RULES_VERSION, CATEGORIES, RULE_DATA, compile, normHost, hostMatches, decodeGoogHost, googEncodedHosts, tryBase64 };
+  const api = { RULES_VERSION, CATEGORIES, RULE_DATA, compile, normHost, hostMatches, decodeGoogHost, googEncodedHosts, tryBase64, weakPin, WEAK_PIN_TEXT };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   root.ACRules = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

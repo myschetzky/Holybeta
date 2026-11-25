@@ -441,7 +441,7 @@ test('sikkerhed: skriveøkter efter genstart, mod en klasselektion, kvote, genbr
     anna.send(JSON.stringify({ type: 'write-session', assignmentId: home.id, on: true }));
     assert.match((await anna.wait(m => m.type === 'write-session-result')).error, /Vent/);
 
-    // 1. Genstart under en skriveøkt: bliver IKKE til en lektion for hele klassen
+    // 1. Genstart under en skriveøkt: bliver IKKE til en lektion for hele klassen – men økten overlever (afbrudt, venter på eleven)
     srv.hub.soloQuota.clear();
     anna.send(JSON.stringify({ type: 'write-session', assignmentId: home.id, on: true }));
     assert.strictEqual((await anna.wait(m => m.type === 'write-session-result')).ok, true);
@@ -451,13 +451,15 @@ test('sikkerhed: skriveøkter efter genstart, mod en klasselektion, kvote, genbr
     const boWs = await agent([bo.token]);
     await new Promise(r => setTimeout(r, 150));
     assert.ok(!boWs.msgs.some(m => m.type === 'lesson' && m.live), 'klassekammeraten kommer ikke i lektion');
-    assert.strictEqual(srv.db.prepare('SELECT COUNT(*) AS n FROM lessons WHERE ended IS NULL').get().n, 0, 'skriveøkten er lukket ved genstart');
+    assert.deepStrictEqual(srv.db.prepare('SELECT kind, student_id FROM lessons WHERE ended IS NULL').all().map(r => ({ ...r })), [{ kind: 'hjemme', student_id: annaA.studentId }], 'kun elevens skriveøkt er åben');
+    assert.ok(srv.hub.solo.get(annaA.studentId).pausedAt > 0, 'skriveøkten venter på eleven');
 
     // 6 + 5. Skrevet hjemme: står på beviset; samme dokument kan ikke afleveres to gange
+    // Eleven forbinder igen fra samme computer: skriveøkten fortsætter af sig selv
     anna = await agent([annaA.token, annaB.token]);
+    await anna.wait(m => m.type === 'lesson' && m.live && m.solo);
     anna.send(JSON.stringify({ type: 'write-session', assignmentId: home.id, on: true }));
-    assert.strictEqual((await anna.wait(m => m.type === 'write-session-result')).ok, true);
-    await anna.wait(m => m.type === 'lesson' && m.live);
+    assert.match((await anna.wait(m => m.type === 'write-session-result')).error, /allerede i en lektion/);
     anna.send(JSON.stringify({ type: 'status', activity: 'HolyMoly – Skriv', violations: [], degraded: [] }));
     await new Promise(r => setTimeout(r, 100));
     const id = crypto.randomUUID();
@@ -514,4 +516,144 @@ test('nyt dokument: fast budget på 150 tegn første gang serveren ser det – o
   assert.match(create, /this\._send\(d\)/, 'write:create sender dokumentet til serveren med det samme');
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/* ---------- Hjælpemidler, rød lampe og prøve-vurdering med 'fixable' (designplan build_now 4) ---------- */
+
+test('hjælpemidler: med aids=[ordforslag] bliver hurtige tastetryk, byger og jævnhed til noter – ikke grunde', () => {
+  const { dir, db, docs, anna, bo } = setup();
+  try {
+    const text = SENT.repeat(9).trim();
+    const machine = { fastShare: 0.6, burst: 45, regularity: 0.1, keystrokes: 900 };
+    // Uden hjælpemidler: tempo er en grund
+    const plain = docs.submit(bo, write(docs, bo, text, { stats: machine }), meta, 2_000_000);
+    assert.strictEqual(plain.ok, false);
+    assert.deepStrictEqual(plain.categories.map(c => c.key), ['tempo']);
+    // Med ordforslag (sat af læreren i students.aids): kun noter, og beviset udstedes
+    db.prepare('UPDATE students SET aids = ? WHERE id = 1').run(JSON.stringify(['ordforslag']));
+    assert.deepStrictEqual(docs.aidsOf(1), ['ordforslag']);
+    const id = write(docs, anna, text, { stats: machine });
+    const r = docs.submit(anna, id, meta, 2_000_000);
+    assert.ok(r.ok && r.certId, JSON.stringify(r.reasons));
+    assert.deepStrictEqual(r.reasons, []);
+    assert.ok(r.notes.some(n => /hurtigere, end en finger/.test(n) && /hjælpemidler/.test(n)), r.notes.join('|'));
+    assert.ok(r.notes.some(n => /maskinelt jævnt/.test(n)));
+    // Beviset siger "Skrivetempo ikke vurderet" – og nævner intet hjælpemiddel
+    const c = docs.certificate(r.certId);
+    assert.ok(c.payload.checks.includes('Skrivetempo ikke vurderet'));
+    assert.ok(!/ordforslag|diktering|hjælpemiddel/i.test(c.signed), c.signed);
+    // Serverens eget vækst-tjek gælder stadig med hjælpemidler
+    const fast = crypto.randomUUID();
+    docs.save(anna, { id: fast, title: 'R', blocks: blocksOf('Start.'), stats: { typed: 10 } }, green, 1, 5_000_000);
+    const big = docs.save(anna, { id: fast, title: 'R', blocks: blocksOf('Start. ' + SENT.repeat(3)), stats: { typed: 400 } }, green, 1, 5_005_000);
+    assert.deepStrictEqual(big.preview.categories.map(c => c.key), ['kort', 'indsat']);
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('hjælpemidler: over 10 % dikteret tekst giver den neutrale kategori "hjaelpemiddel"', () => {
+  const { dir, db, docs, anna } = setup();
+  try {
+    db.prepare('UPDATE students SET aids = ? WHERE id = 1').run(JSON.stringify(['diktering']));
+    const text = SENT.repeat(9).trim();
+    const little = docs.submit(anna, write(docs, anna, text, { stats: { dictated: 30 } }), meta, 2_000_000);
+    assert.ok(little.certId, 'lidt diktering er i orden');
+    assert.ok(little.notes.some(n => /dikteret/.test(n)));
+    const id = write(docs, anna, text, { stats: { dictated: 200 } });
+    const r = docs.submit(anna, id, meta, 2_000_000);
+    assert.strictEqual(r.confirm, true);
+    const cat = r.categories.find(c => c.key === 'hjaelpemiddel');
+    assert.strictEqual(cat.text, 'Diktering kan ikke bevises som tastet. Aflever alligevel – du får ingen ulempe.');
+    assert.strictEqual(cat.fixable, false);
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('rød lampe: 2 sekunders video-rød er en note – AI-rød er "rod" med tidspunkt, og kun "kort" kan rettes', () => {
+  const { dir, db, docs, anna } = setup();
+  try {
+    const text = SENT.repeat(9).trim();
+    const video = { color: 'red', violations: [{ kind: 'site', text: 'Video og streaming: youtube.com', category: 'video' }] };
+    const id = crypto.randomUUID();
+    // Rød i 2 sek. (video) midt i skrivningen
+    write(docs, anna, text.slice(0, 200), { id });
+    docs.observe(id, video, 1_022_000);
+    docs.observe(id, green, 1_024_000);
+    write(docs, anna, text, { id, start: 1_027_000 });
+    const ev = docs.evaluate(docs.q.get.get(id));
+    assert.deepStrictEqual(ev.reasons, []);
+    assert.ok(ev.notes.some(n => /Rød lampe i 2 sek\. \(Video og streaming: youtube\.com\)/.test(n)), ev.notes.join('|'));
+    assert.ok(docs.submit(anna, id, meta, 2_000_000).certId);
+
+    // AI-rød: permanent ("kan ikke længere få mærket"), med tidspunkt og kort navn
+    const ai = { color: 'red', violations: [{ kind: 'site', text: 'AI / chatbots: chatgpt.com', category: 'ai' }] };
+    const id2 = write(docs, anna, text, { view: (t) => (t === 1_010_000 ? ai : green) });
+    const r = docs.submit(anna, id2, meta, 2_000_000);
+    const rod = r.categories.find(c => c.key === 'rod');
+    assert.deepStrictEqual(rod, { key: 'rod', text: 'Lampen var rød, mens du skrev.', fixable: false, label: 'AI-side', at: 1_010_000 });
+
+    // For kort: kan rettes, og eleven ser "Bevis: x af 100 ord" (need)
+    const short = docs.save(anna, { id: crypto.randomUUID(), title: 'R', blocks: blocksOf('Kort tekst.'), stats: { typed: 30 } }, green, 1, 3_000_000);
+    assert.deepStrictEqual(short.preview.categories, [{ key: 'kort', text: 'Teksten er for kort. Et bevis kræver mindst 100 ord.', fixable: true, need: 100 }]);
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('evaluateStats i shared/doc.js: samme vurdering lokalt (øvedokument) som hos serveren', () => {
+  const text = SENT.repeat(9).trim();
+  const ok = D.evaluateStats(text, { typed: text.length + 20, keystrokes: text.length, maxCps: 6, regularity: 0.7 });
+  assert.deepStrictEqual(ok.cats, []);
+  assert.deepStrictEqual(D.evaluateStats('Fem ord står i teksten.', { typed: 30 }).cats, ['kort']);
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 10 }).cats, ['indsat']);
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }).cats, ['tempo']);
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }, { aids: ['ordforslag'] }).cats, []);
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }, { aids: ['ukendt'] }).cats, ['tempo'], 'kun kendte hjælpemidler');
+  assert.deepStrictEqual(D.cleanAids(['diktering', 'x', 'ordforslag']), ['ordforslag', 'diktering']);
+  assert.strictEqual(D.CATEGORY_TEXT.hjaelpemiddel, 'Diktering kan ikke bevises som tastet. Aflever alligevel – du får ingen ulempe.');
+});
+
+test('hjælpemidler: læreren sætter dem i elevdialogen (PUT /api/students/:id/aids), det logges, og appen får dem i lesson', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-docs-aids-'));
+  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, signupCode: 'k', quiet: true, requireGuard: false, publicUrl: 'https://holymoly.test' });
+  const base = 'http://127.0.0.1:' + await srv.listen();
+  let ck = '';
+  const call = async (method, p, body) => {
+    const r = await fetch(base + p, { method, headers: Object.assign({ 'Content-Type': 'application/json' }, ck ? { Cookie: ck } : {}), body: body ? JSON.stringify(body) : undefined });
+    const sc = r.headers.get('set-cookie'); if (sc) ck = sc.split(';')[0];
+    return Object.assign(await r.json().catch(() => ({})), { _status: r.status });
+  };
+  try {
+    await call('POST', '/api/register', { email: 'l@x.dk', name: 'Mette', password: 'tavle-kridt-1234', signupCode: 'k' });
+    const cls = await call('POST', '/api/classes', { name: '2.g Dansk' });
+    const en = await (await fetch(base + '/api/enroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: cls.joinCode, name: 'Anna Jensen' }) })).json();
+    const ag = new WebSocket(base.replace('http', 'ws') + '/ws/agent');
+    const msgs = [];
+    ag.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString())); });
+    await new Promise(r => ag.on('open', r));
+    const wait = async (f) => { for (let i = 0; i < 200; i++) { const m = msgs.find(f); if (m) { msgs.splice(msgs.indexOf(m), 1); return m; } await new Promise(r => setTimeout(r, 20)); } throw new Error('ingen besked'); };
+    ag.send(JSON.stringify({ type: 'hello', tokens: [en.token], device: { os: 'Linux', host: 'PC', version: '1.3.0' } }));
+    await wait(m => m.type === 'welcome');
+    await call('POST', `/api/classes/${cls.id}/lesson`, { action: 'start', minutes: 45 });
+    assert.deepStrictEqual((await wait(m => m.type === 'lesson' && m.live)).aids, []);
+
+    // Ukendte hjælpemidler ignoreres; valget gemmes, logges og sendes straks til elevens app
+    const s = await call('PUT', `/api/students/${en.studentId}/aids`, { aids: ['diktering', 'ordforslag', 'skjult'] });
+    assert.deepStrictEqual(s.aids, ['ordforslag', 'diktering']);
+    assert.deepStrictEqual((await wait(m => m.type === 'lesson' && m.live)).aids, ['ordforslag', 'diktering']);
+    assert.strictEqual((await call('PUT', `/api/students/${en.studentId}/aids`, { aids: [] })).aids.length, 0);
+    const log = await call('GET', `/api/students/${en.studentId}/events?kind=alerts&limit=10&before=${Date.now() + 1000}`);
+    const titles = log.events.map(e => e.title);
+    assert.ok(titles.includes('Mette satte hjælpemidler: ordforslag og diktering'), titles.join('|'));
+    assert.ok(titles.includes('Mette fjernede hjælpemidlerne'));
+    assert.strictEqual((await call('PUT', `/api/students/${en.studentId}/aids`, { aids: 'x' }))._status, 400);
+    // En anden lærer kan ikke ændre dem
+    ck = '';
+    await call('POST', '/api/register', { email: 'b@x.dk', name: 'B', password: 'tavle-kridt-1234', signupCode: 'k' });
+    assert.strictEqual((await call('PUT', `/api/students/${en.studentId}/aids`, { aids: ['diktering'] }))._status, 404);
+    ag.close();
+    // Elevdialogen i dashboardet: "Hjælpemidler: [ ] Ordforslag [ ] Diktering"
+    const app = fs.readFileSync(path.join(__dirname, '..', 'server', 'public', 'app.js'), 'utf8');
+    assert.match(app, /h\('legend', \{ text: 'Hjælpemidler' \}\),\s*aidBox\('ordforslag', 'Ordforslag'\), aidBox\('diktering', 'Diktering'\)/);
+    assert.ok(app.includes("api(`/api/students/${id}/aids`, { method: 'PUT', body: { aids: picked } })"));
+  } finally {
+    await srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

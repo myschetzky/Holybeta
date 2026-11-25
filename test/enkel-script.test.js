@@ -70,3 +70,47 @@ test('npm run enkel -- overdrag: registrerer, at skolens IT har overtaget drifte
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('npm run enkel -- aktive: exit 1, når lektioner, skriveøkter eller ekstra tid er i gang (til scripts/opdater.sh)', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-enkel-'));
+  const run = () => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'scripts', 'enkel.js'), 'aktive'], { env: Object.assign({}, process.env, { DATA_DIR: dir }), encoding: 'utf8' });
+  let r = run();
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Ingen database/);
+  const db = require('../server/src/db.js').open(dir);
+  db.prepare('INSERT INTO teachers (id, email, name, pass_hash, created) VALUES (1, ?, ?, ?, ?)').run('jens', 'Jens', 'x', Date.now());
+  db.prepare("INSERT INTO classes (id, teacher_id, name, created) VALUES (1, 1, '2.g', ?)").run(Date.now());
+  db.prepare("INSERT INTO students (id, class_id, name, created) VALUES (1, 1, 'Anna', ?)").run(Date.now());
+  // Slut eller udløbet tæller ikke
+  db.prepare('INSERT INTO lessons (class_id, started, ends_at, ended) VALUES (1, 0, ?, ?)').run(Date.now() + 3600_000, Date.now());
+  db.prepare('INSERT INTO lessons (class_id, started, ends_at) VALUES (1, 0, ?)').run(Date.now() - 1000);
+  r = run();
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Ingen lektioner eller skriveøkter i gang/);
+  const l = db.prepare('INSERT INTO lessons (class_id, started, ends_at) VALUES (1, 0, ?)').run(Date.now() + 3600_000);
+  db.prepare("INSERT INTO lessons (class_id, started, ends_at, student_id, kind) VALUES (1, 0, ?, 1, 'hjemme')").run(Date.now() + 3600_000);
+  r = run();
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stdout, /I gang: 1 lektion, 1 skriveøkt\./);
+  db.prepare('UPDATE lessons SET ended = ? WHERE ended IS NULL').run(Date.now());
+  db.prepare('INSERT INTO lesson_extensions (lesson_id, student_id, ends_at) VALUES (?, 1, ?)').run(Number(l.lastInsertRowid), Date.now() + 600_000);
+  r = run();
+  assert.strictEqual(r.status, 1);
+  assert.match(r.stdout, /I gang: 1 elev med ekstra tid\./);
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('scripts/opdater.sh: bygger først, tjekker "aktive" (medmindre --force) og genstarter til sidst', () => {
+  const { spawnSync } = require('node:child_process');
+  const file = path.join(__dirname, '..', 'scripts', 'opdater.sh');
+  const src = fs.readFileSync(file, 'utf8');
+  assert.strictEqual(spawnSync('sh', ['-n', file]).status, 0, 'gyldig sh');
+  assert.ok(fs.statSync(file).mode & 0o100, 'kan køres');
+  const at = (s) => { const i = src.indexOf(s); assert.ok(i >= 0, s); return i; };
+  assert.ok(at('git pull --ff-only') < at('build holymoly'));
+  assert.ok(at('build holymoly') < at('enkel.js aktive'));
+  assert.ok(at('enkel.js aktive') < at('up -d holymoly'));
+  assert.match(src, /--force/);
+});

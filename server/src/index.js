@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const ACRules = require('../../shared/rules.js');
+// Elevens egen kode: de mest almindelige koder afvises (shared/rules.js – samme tjek i elev-appen)
+const { weakPin, WEAK_PIN_TEXT } = ACRules;
+const D = require('../../shared/doc.js');
 const dbm = require('./db');
 const { Hub } = require('./hub');
 const U = require('./util');
@@ -25,22 +28,6 @@ function schoolApprovalFrom(o) {
 }
 const PIN_MAX_FAILS = 10; // forkerte elevkoder i alt, før koden låses til læreren nulstiller den
 
-/**
- * De mest almindelige koder (som en klassekammerat ville prøve først): ens cifre (1111), rækker op eller ned (1234, 9876,
- * 7890), gentagne par (1212, 1122, 123123) og årstal 1950-2030.
- */
-function weakPin(pin) {
-  const p = String(pin);
-  if (!/^\d{4,6}$/.test(p)) return false;
-  const d = [...p].map(Number);
-  if (/^(\d)\1+$/.test(p)) return true;
-  const steps = d.slice(1).map((x, i) => (x - d[i] + 10) % 10);
-  if (steps.every(x => x === 1) || steps.every(x => x === 9)) return true;
-  if (/^(\d\d)\1+$/.test(p) || /^(\d\d\d)\1$/.test(p)) return true;
-  if (/^(\d)\1(\d)\2((\d)\4)?$/.test(p)) return true;
-  if (p.length === 4 && Number(p) >= 1950 && Number(p) <= 2030) return true;
-  return false;
-}
 const APPROVAL_MISSING = 'Beta: skolens ja mangler. Udfyld DATAANSVARLIG, DPO_KONTAKT, DPIA_DATO og LEDELSE_JA_DATO på serveren (se docs/ENKEL.md).';
 // Beta: en server, der behandler elevdata, skal drives af skolen – eller have en databehandleraftale med en voksen/juridisk person
 const OPERATOR_MISSING = 'Serveren drives ikke af skolen, og der er ingen databehandleraftale. Bed skolens IT om at overtage driften.';
@@ -224,7 +211,8 @@ function createServer(opts = {}) {
   const docs = new DocStore(db, cfg.dataDir, { testServer: cfg.simple && !schoolOperated, minWords: opts.minProofWords });
   const hub = new Hub({ db, dataDir: cfg.dataDir, docs, publicUrl: cfg.publicUrl, getRules: () => rules, classConfig, log, staleMs: opts.staleMs,
     minAgentVersion: cfg.minAgentVersion, minExtensionVersion: cfg.minExtensionVersion, downloadUrl: cfg.downloadUrl,
-    requireGuard: cfg.requireGuard, compileFor: (classId, config) => ACRules.compile(rules, config || classConfig(classId)), lessonBlocked: () => lessonBlocked(), features });
+    requireGuard: cfg.requireGuard, compileFor: (classId, config) => ACRules.compile(rules, config || classConfig(classId)), lessonBlocked: () => lessonBlocked(), features,
+    soloGraceMs: opts.soloGraceMs });
 
   /* ---------------------------- auth ---------------------------- */
   const SESSION_MS = 12 * 3600_000; // uden aktivitet
@@ -519,6 +507,9 @@ function createServer(opts = {}) {
   function ownStudent(teacher, studentId) {
     return db.prepare('SELECT s.* FROM students s JOIN classes c ON c.id = s.class_id WHERE s.id = ? AND c.teacher_id = ?').get(Number(studentId), teacher.id);
   }
+  function aidsOf(s) {
+    try { return D.cleanAids(s.aids ? JSON.parse(s.aids) : []); } catch (e) { return []; }
+  }
   function studentOut(s) {
     let device = null;
     try { device = s.device_info ? JSON.parse(s.device_info) : null; } catch (e) { /* */ }
@@ -530,6 +521,7 @@ function createServer(opts = {}) {
       pin: !!s.pin_hash, pinResetUntil: !s.pin_hash && s.pin_reset_hash && s.pin_reset_until > Date.now() ? s.pin_reset_until : null,
       pinReset: !s.pin_hash && !!s.pin_reset_hash, // nulstillet (engangskoden kan være udløbet)
       pinLocked: (s.pin_fails || 0) >= PIN_MAX_FAILS,
+      aids: aidsOf(s), // hjælpemidler (kun til elevens egen lærer)
     };
   }
   function newInvite(studentId) {
@@ -837,7 +829,8 @@ function createServer(opts = {}) {
         if (!cls.join_open) return fail(res, 403, 'Klassen er lukket for tilmelding – spørg din lærer');
         // Navnet kommer fra UNI-Login (billet fra /api/auth/unilogin/app-result) eller – hvis tilladt – fra eleven selv
         const uniRequired = uni.enabled && !cfg.uniLoginOptional;
-        const ask = (error, status = 400) => send(res, status, { error, needName: true, needPin: cfg.simple, needAccept: cfg.simple, termsPath: '/vilkaar-elev', uniLogin: uni.enabled, uniLoginRequired: uniRequired, className: cls.name, teacherName: cls.teacher_name });
+        const askRaw = (error, status = 400, extra) => send(res, status, Object.assign({ error, needName: true, needPin: cfg.simple, needAccept: cfg.simple, termsPath: '/vilkaar-elev', uniLogin: uni.enabled, uniLoginRequired: uniRequired, className: cls.name, teacherName: cls.teacher_name }, extra));
+        const ask = (error, status = 400) => askRaw(error, status);
         let uniId = null, name = '', pin = '';
         if (b.ticket) {
           const t = uniTickets.get(String(b.ticket));
@@ -859,6 +852,8 @@ function createServer(opts = {}) {
           // Har læreren nulstillet koden, skriver eleven engangskoden fra læreren (inden for 30 minutter); den bliver elevens nye kode.
           const owner = db.prepare('SELECT id, name, pin_hash, pin_reset_hash, pin_reset_until, pin_fails FROM students WHERE class_id = ? AND enrolled IS NOT NULL AND (pin_hash IS NOT NULL OR pin_reset_hash IS NOT NULL)').all(cls.id).find(r => normName(r.name) === normName(name));
           if (owner) {
+            // Eleven findes med en kode: appen skal ikke bede om at skrive koden igen (pinKnown)
+            const ask = (error, status = 400) => askRaw(error, status, { pinKnown: true });
             const resetting = !owner.pin_hash;
             if (!pin) return ask(resetting ? 'Din lærer har nulstillet din kode. Skriv koden, du har fået af din lærer.' : 'Navnet er allerede tilmeldt med en kode. Skriv din kode – eller dit efternavn, hvis du er en anden elev.');
             // For mange forkerte koder i alt (gemt i databasen, så en genstart ikke nulstiller tællingen): kun læreren kan låse op
@@ -884,7 +879,7 @@ function createServer(opts = {}) {
             return send(res, 200, { token, studentId: owner.id, studentName: owner.name, className: cls.name, teacherName: cls.teacher_name });
           }
           // En ny elev vælger sin kode: de mest almindelige koder afvises
-          if (pin && weakPin(pin)) return ask('Vælg en kode, der er sværere at gætte');
+          if (pin && weakPin(pin)) return ask(WEAK_PIN_TEXT);
         }
         // Samme UNI-Login i samme klasse = samme elev (fx ny computer): den gamle computer logges ud
         const same = uniId ? db.prepare('SELECT id FROM students WHERE class_id = ? AND uni_id = ?').get(cls.id, uniId) : null;
@@ -1188,6 +1183,23 @@ function createServer(opts = {}) {
         return send(res, 200, { ok: true });
       }
     }
+    // Hjælpemidler (ordforslag, diktering): læreren slår dem til for eleven. Skrivevinduet tillader dem, og skrivetempoet
+    // vurderes ikke. Valget logges i lærer-logbogen og står aldrig i beviset.
+    if ((mm = p.match(/^\/api\/students\/(\d+)\/aids$/)) && m === 'PUT') {
+      const s = ownStudent(teacher, mm[1]);
+      if (!s) return fail(res, 404, 'Eleven findes ikke');
+      const b = await readJson(req);
+      if (!Array.isArray(b.aids)) return fail(res, 400, 'Vælg hjælpemidler');
+      const aids = D.cleanAids(b.aids);
+      const before = aidsOf(s);
+      db.prepare('UPDATE students SET aids = ? WHERE id = ?').run(aids.length ? JSON.stringify(aids) : null, s.id);
+      if (aids.join() !== before.join()) {
+        const NAME = { ordforslag: 'ordforslag', diktering: 'diktering' };
+        hub._audit(s.id, aids.length ? `${teacher.name} satte hjælpemidler: ${aids.map(a => NAME[a]).join(' og ')}` : `${teacher.name} fjernede hjælpemidlerne`);
+        hub.aidsChanged(s.id);
+      }
+      return send(res, 200, studentOut(db.prepare('SELECT * FROM students WHERE id = ?').get(s.id)));
+    }
     // Eleven har glemt sin kode (eller den er låst): den gamle kode slettes, og læreren får en engangskode på 6 cifre,
     // som eleven skriver i appen inden for 30 minutter. Engangskoden bliver derefter elevens kode.
     if ((mm = p.match(/^\/api\/students\/(\d+)\/reset-pin$/)) && m === 'POST') {
@@ -1490,14 +1502,23 @@ function createServer(opts = {}) {
       }));
     },
     close() {
+      // Genstart/opdatering: elevernes apps får besked ('server-restart'), så skrivevinduet kan sige "skriv bare videre".
+      // Skriveøkterne afsluttes ikke (shuttingDown) – de genskabes ved næste start.
+      hub.serverRestarting();
       hub.shuttingDown = true;
       timers.forEach(clearInterval);
       proxyTrust.stop();
       alive(1);
       clearInterval(hub.timer);
-      for (const c of wssAgent.clients) c.terminate();
-      for (const c of wssTeacher.clients) c.terminate();
-      return new Promise((r) => server.close(() => { db.close(); r(); }));
+      const agents = [...wssAgent.clients];
+      for (const c of agents) { try { c.close(1012, 'server restart'); } catch (e) { /* */ } }
+      const closed = agents.map(c => (c.readyState === 3 ? null : new Promise(r => c.once('close', r))));
+      const wait = new Promise(r => setTimeout(r, 500).unref());
+      return Promise.race([Promise.all(closed), wait]).then(() => {
+        for (const c of wssAgent.clients) c.terminate();
+        for (const c of wssTeacher.clients) c.terminate();
+        return new Promise((r) => server.close(() => { db.close(); r(); }));
+      });
     },
   };
 }

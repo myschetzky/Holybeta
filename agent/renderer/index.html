@@ -28,7 +28,9 @@
       <form id="enroll-form">
         <input id="code" autocomplete="off" spellcheck="false" maxlength="9" placeholder="ABCD-2345" aria-label="Klassekode">
         <input id="student-name" autocomplete="name" maxlength="80" placeholder="Fornavn Efternavn" aria-label="Dit fulde navn" hidden>
-        <input id="student-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="Din kode (4 cifre)" aria-label="Din kode, 4-6 cifre" hidden>
+        <input id="student-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="Vælg en kode (4-6 cifre)" aria-label="Din kode, 4-6 cifre" hidden>
+        <input id="student-pin2" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="Skriv koden igen" aria-label="Skriv koden igen" hidden>
+        <button class="btn small" id="pin-show" type="button" aria-pressed="false" hidden>Vis kode</button>
         <div id="enroll-terms" hidden>
           <p class="muted small">HolyMoly ser kun med, når din lærer har startet en lektion, og når du skriver i HolyMoly. Aldrig dine filer, kamera, mikrofon eller hvad du taster i andre programmer.</p>
           <label class="check"><input type="checkbox" id="enroll-accept"> <span>Jeg har læst, hvad HolyMoly ser og ikke ser (<button class="link" type="button" id="enroll-terms-link">vilkår for elever</button>)</span></label>
@@ -69,6 +71,8 @@
     </section>
     <p class="error" id="global-error" hidden></p>
   </main>
+  <!-- Fælles regler (shared/rules.js via npm run sync): weakPin, så eleven får besked, før koden sendes -->
+  <script src="../src/rules.js"></script>
   <script src="ui.js"></script>
 </body>
 </html>

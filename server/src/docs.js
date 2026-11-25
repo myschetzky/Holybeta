@@ -25,13 +25,11 @@ const D = require('../../shared/doc.js');
 const RET = require('./retention.js');
 
 const ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
-const MAX_HUMAN_CPS = 15;          // vedvarende tegn/sek (5 sek. vindue) – hurtigere er ikke et menneske
-const MAX_BURST = 30;              // tegn inden for ét sekund (en hel sætning på én gang = et program)
-const MAX_FAST_SHARE = 0.25;       // andel tastetryk hurtigere end en finger kan (< 12 ms)
+// Grænserne for elevens egne tal (tempo, ord, diktering) står i shared/doc.js (PROOF), så øvedokumentet bruger de samme
+const MAX_HUMAN_CPS = D.PROOF.MAX_HUMAN_CPS;
 const SERVER_GROWTH_CPS = 15;      // serverens eget tjek mellem to gemninger
 const MAX_AVG_CPS = 10;            // gennemsnit over hele skrivetiden (inkl. pauser) – ingen mennesker holder det tempo
 const OBSERVE_GAP_MS = 30_000;     // længere tid uden serverens egen måling tæller som "ikke fulgt"
-const MIN_REGULARITY = 0.25;       // variationskoefficient for tastetryk – lavere = maskinelt jævnt
 const GREY_MAX_SHARE = 0.10;       // højst 10 % af skrivetiden uden fuld overvågning
 const GREY_MAX_MS = 3 * 60_000;    // … og højst 3 minutter
 const FIRST_SAVE_BUDGET = 150;     // så meget tekst må et nyt dokument have, første gang serveren ser det (appen sender det tomme dokument straks)
@@ -39,7 +37,7 @@ const MAX_OPEN_DOCS = 30;           // diskkvote: højst 30 uafleverede dokument
 const QUOTA_BYTES = 10 * 1024 * 1024; // … højst 10 MB tekst (dokumenter + afspilning) pr. elev …
 const MAX_GROWTH = 3000;           // … og højst 3.000 nye tegn pr. gemning (ellers gemmes intet)
 const GAP_MS = 2 * 60_000;         // længere pause mellem to gemninger tæller ikke som skrivetid
-const MIN_WORDS = 100;             // kortere tekster får ikke et bevis
+const MIN_WORDS = D.PROOF.MIN_WORDS;
 const GUARD_GRACE_MS = 30_000;     // de første 30 sek. med "Venter på HolyMoly-vagten" tæller ikke som grå
 const IDLE_MAX_MS = 10 * 60_000;   // grå tid UDEN vækst: højst 10 minutter …
 const IDLE_MAX_SHARE = 0.15;       // … og højst 15 % af tiden
@@ -47,15 +45,17 @@ const DOWN_CPS = 2;                // mens serveren selv var nede, godtages væk
 const DOWN_MAX = 400;              // … dog højst 400 tegn pr. hul
 const TEST_ISSUER = 'Testserver – må ikke bruges til bedømmelse';
 
-/* Hvorfor beviset mangler – i elevens sprog og uden tal (eleven skal ikke kunne justere sig ind under grænserne) */
-const CATEGORY_TEXT = {
-  kort: `Teksten er for kort. Et bevis kræver mindst ${MIN_WORDS} ord.`,
-  rod: 'Lampen var rød, mens du skrev.',
-  forbindelse: 'HolyMoly kunne ikke følge hele skriveforløbet (grå lampe eller ingen forbindelse).',
-  indsat: 'Der er tekst, som ikke er tastet i HolyMoly.',
-  tempo: 'Skrivetempoet ligner ikke et menneskes.',
-  ai: 'Teksten indeholder en ordret sætning fra en AI-chat.',
-};
+/* Hvorfor beviset mangler – i elevens sprog og uden tal (shared/doc.js: samme tekster i øvedokumentet) */
+const CATEGORY_TEXT = D.CATEGORY_TEXT;
+/* Kort navn til "Dette dokument kan ikke længere få mærket (kl. 10.14: AI-side)" */
+const CATEGORY_LABEL = { forbindelse: 'forbindelse', indsat: 'indsat tekst', tempo: 'skrivetempo', ai: 'AI-spor', hjaelpemiddel: 'diktering' };
+/*
+ * Rød lampe koster kun beviset, når den kan have skrevet teksten: AI, fjernstyring, virtuel maskine og proxy/VPN
+ * (omgåelse af blokeringen) – og rød uden kategori (fx en vagt-advarsel). Anden rød (video, spil, sociale medier …)
+ * er en note til læreren. '' = ingen kategori.
+ */
+const HARD_RED = new Set(['ai', 'remote', 'vm', 'proxy', '']);
+const RED_LABEL = { ai: 'AI-side', remote: 'fjernstyring', vm: 'virtuel maskine', proxy: 'proxy eller VPN', '': 'rød lampe' };
 
 const num = (v, max = 1e12) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.min(n, max) : 0; };
 
@@ -169,6 +169,8 @@ class DocStore {
       maxCps: num(s.maxCps, 1e4), regularity: s.regularity == null ? null : num(s.regularity, 100),
       restored: num(s.restored, 1e7), burst: num(s.burst, 1e6), fastShare: Math.min(1, num(s.fastShare, 1)),
       focusLostMs: num(s.focusLostMs), activeMs: num(s.activeMs),
+      // Hjælpemidler (kun når læreren har slået dem til): tegn fra ordforslag og diktering
+      predicted: num(s.predicted, 1e7), dictated: num(s.dictated, 1e7),
     };
   }
 
@@ -220,6 +222,9 @@ class DocStore {
   _observe(m, view, now) {
     if (m.greyCounted == null) { m.greyCounted = m.greyMs || 0; m.greyPending = 0; } // dokument fra før reglen: som før
     if (m.greyIdle == null) m.greyIdle = 0;
+    // Rød tid deles i "hård" (AI, fjernstyring …) og "blød" (video, spil …). Dokumenter fra før reglen: al rød er hård, som før.
+    if (m.redHard == null) { m.redHard = m.redMs || 0; m.redSoft = 0; }
+    if (!Array.isArray(m.redNote)) m.redNote = [];
     if (m.lastObs) {
       const dt = Math.max(0, now - m.lastObs);
       if (dt > OBSERVE_GAP_MS) {
@@ -237,7 +242,10 @@ class DocStore {
           if (m.grey.length < 20 && !m.grey.includes('HolyMoly-serveren kunne ikke følge med')) m.grey.push('HolyMoly-serveren kunne ikke følge med');
         }
       } else if (m.lastColor === 'green') m.greenMs += dt;
-      else if (m.lastColor === 'red') m.redMs += dt;
+      else if (m.lastColor === 'red') {
+        m.redMs += dt;
+        if (m.lastRedHard === false) m.redSoft += dt; else m.redHard += dt;
+      }
       else {
         m.greyMs += dt;
         const graceEnd = /venter på (holymoly-)?vagten/i.test(m.greyWhy || '') ? (m.greyStart || m.lastObs) + GUARD_GRACE_MS : 0;
@@ -249,8 +257,13 @@ class DocStore {
       const why = String((view && view.greyReason) || '');
       if (m.lastColor === 'green' || m.lastColor === 'red' || !m.lastColor || m.greyWhy !== why) { m.greyStart = now; m.greyWhy = why; }
     } else { m.greyStart = 0; m.greyWhy = ''; }
-    if (color === 'red' && view.violations && m.red.length < 20) {
-      for (const v of view.violations.slice(0, 3)) if (!m.red.includes(v.text)) m.red.push(String(v.text).slice(0, 160));
+    if (color === 'red') {
+      const vs = Array.isArray(view.violations) ? view.violations : [];
+      const hard = vs.filter(v => HARD_RED.has(String((v && v.category) || '')));
+      m.lastRedHard = hard.length > 0 || !vs.length; // rød uden fund: som før
+      if (m.lastRedHard && !m.redHardAt) { m.redHardAt = now; m.redHardCat = hard.length ? String(hard[0].category || '') : ''; }
+      for (const v of hard.slice(0, 3)) if (m.red.length < 20 && !m.red.includes(v.text)) m.red.push(String(v.text).slice(0, 160));
+      for (const v of vs.filter(x => !hard.includes(x)).slice(0, 3)) if (m.redNote.length < 20 && !m.redNote.includes(v.text)) m.redNote.push(String(v.text).slice(0, 160));
     }
     if (color !== 'green' && color !== 'red' && m.grey.length < 20) {
       const why = (view && view.greyReason) || 'Overvågningen var ikke komplet';
@@ -299,6 +312,7 @@ class DocStore {
       else if (dt - downDt > GAP_MS && eff > 80) m.flags.push(`${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (${Math.round(dt / 60000)} min. uden forbindelse)`);
       else if (dt > 0 && eff / (dt / 1000) > SERVER_GROWTH_CPS) m.flags.push(`Tekst indsat for hurtigt: teksten voksede med ${growth} tegn på ${Math.max(1, Math.round(dt / 1000))} sek.`);
     }
+    if (m.flags.length && !m.flagAt) m.flagAt = now; // hvornår (til "kan ikke længere få mærket (kl. …)")
     // Grå tid siden sidste gemning tæller mod beviset, hvis teksten voksede imens – ellers som grå tid uden vækst
     if (growth > 0) m.greyCounted += m.greyPending;
     else m.greyIdle = (m.greyIdle || 0) + m.greyPending;
@@ -373,10 +387,11 @@ class DocStore {
    * Vurdér skriveforløbet. Returnerer { ok, reasons: [], notes: [], facts, categories: [{ key, text }] }
    * reasons/notes er til læreren. categories er til eleven: hvorfor beviset mangler, uden tal.
    */
-  evaluate(row) {
+  evaluate(row, aids) {
     const m = JSON.parse(row.monitor);
     const s = JSON.parse(row.stats);
     const text = row.text;
+    aids = Array.isArray(aids) ? D.cleanAids(aids) : this.aidsOf(row.student_id);
     const reasons = [];
     const notes = [];
     const cats = new Set();
@@ -384,8 +399,12 @@ class DocStore {
     const words = D.wordCount(text);
     const totalMs = m.greenMs + m.redMs + m.greyMs;
     const greyCounted = m.greyCounted == null ? m.greyMs : m.greyCounted; // grå tid uden gemning bagefter: teksten voksede ikke
-    if (words < this.minWords) no('kort', `Teksten er for kort til et bevis (mindst ${this.minWords} ord)`);
-    if (m.redMs > 0 || m.red.length) no('rod', 'Rød lampe mens teksten blev skrevet: ' + (m.red.join('; ') || 'forbudt aktivitet'));
+    // Elevens egne tal og teksten (samme vurdering som øvedokumentet i skrivevinduet – shared/doc.js)
+    const own = D.evaluateStats(text, s, { minWords: this.minWords, aids });
+    const ownNo = (cat) => { for (const f of own.found) if (f.cat === cat) no(cat, f.why); };
+    ownNo('kort');
+    const redHard = m.redHard == null ? m.redMs : m.redHard;
+    if (redHard > 0 || m.red.length) no('rod', 'Rød lampe mens teksten blev skrevet: ' + (m.red.join('; ') || 'forbudt aktivitet'));
     if (greyCounted > GREY_MAX_MS || (totalMs > 0 && greyCounted / totalMs > GREY_MAX_SHARE)) {
       no('forbindelse', `Overvågningen var ikke komplet i ${Math.max(1, Math.round(greyCounted / 60000))} min., mens teksten voksede` + (m.grey.length ? ' (' + m.grey.join('; ') + ')' : ''));
     }
@@ -394,18 +413,16 @@ class DocStore {
     if (!cats.has('forbindelse') && (idle > IDLE_MAX_MS || (totalMs > 0 && idle / totalMs > IDLE_MAX_SHARE))) {
       no('forbindelse', `Overvågningen var ikke komplet i ${Math.max(1, Math.round(idle / 60000))} min., mens dokumentet var åbent` + (m.grey.length ? ' (' + m.grey.join('; ') + ')' : ''));
     }
-    if (s.pasteInserted > 0) no('indsat', 'Der er indsat tekst, som ikke er tastet');
-    // Tastet minus slettet (plus fortrudt) skal kunne forklare teksten
-    if (s.typed - s.deleted + s.restored + 20 < text.length) no('indsat', 'Der er mere tekst, end der er tastet');
+    ownNo('indsat');
     for (const f of m.flags) no(/ikke kunne følge med/.test(f) ? 'forbindelse' : 'indsat', f);
-    if (s.maxCps > MAX_HUMAN_CPS) no('tempo', `Skrevet hurtigere end et menneske kan (${Math.round(s.maxCps)} tegn/sek.)`);
-    if (s.burst > MAX_BURST) no('tempo', `${Math.round(s.burst)} tegn kom på under ét sekund (et program, ikke et menneske)`);
-    if (s.keystrokes >= 200 && s.fastShare > MAX_FAST_SHARE) no('tempo', 'Mange tastetryk kom hurtigere, end en finger kan trykke');
+    ownNo('tempo');
+    // Serverens eget gennemsnit over hele skrivetiden gælder også med hjælpemidler (det kan ingen hjælpemidler forklare)
     if (text.length > 600 && totalMs > 0 && text.length / (totalMs / 1000) > MAX_AVG_CPS) no('tempo', `Teksten er længere, end det er muligt at skrive på ${Math.max(1, Math.round(totalMs / 60000))} min.`);
-    if (s.regularity != null && s.keystrokes >= 300 && s.regularity < MIN_REGULARITY) no('tempo', 'Tastetrykkene kom i et maskinelt jævnt tempo');
-    for (const t of D.aiTraces(text)) no('ai', t);
-    for (const t of D.aiHints(text)) notes.push(t + ' – kun en oplysning, ikke et afslag');
-    if (s.pasteBlocked + s.dropBlocked > 0) notes.push(`${s.pasteBlocked + s.dropBlocked} forsøg på at indsætte tekst blev blokeret`);
+    ownNo('ai');
+    ownNo('hjaelpemiddel');
+    notes.push(...own.notes);
+    // Anden rød end AI, fjernstyring og virtuelle maskiner: kun en note
+    if ((m.redSoft || 0) > 0 || (m.redNote || []).length) notes.push(`Rød lampe i ${Math.max(1, Math.round((m.redSoft || 0) / 1000))} sek. (${(m.redNote || []).join('; ') || 'anden aktivitet'}) – kun en oplysning, ikke et afslag`);
     // Hjemme er tid uden for skrivevinduet elevens egen sag: ingen fokus-note (place='hjemme')
     if (s.focusLostMs > 60_000 && !(({ home, lesson }) => home && !lesson)(this.placeOf(row.id))) notes.push(`Skrivevinduet var ikke i fokus i ${Math.round(s.focusLostMs / 60000)} min.`);
     if (m.greyMs > 0 && !cats.has('forbindelse')) {
@@ -418,8 +435,26 @@ class DocStore {
       monitoredShare: totalMs ? Math.round((m.greenMs / totalMs) * 100) : 0,
       started: m.first, lessons: m.lessons.length,
     };
-    const categories = Object.keys(CATEGORY_TEXT).filter(k => cats.has(k)).map(key => ({ key, text: key === 'kort' ? `Teksten er for kort. Et bevis kræver mindst ${this.minWords} ord.` : CATEGORY_TEXT[key] }));
+    /*
+     * Til eleven: kategorier uden tal. Kun 'kort' kan rettes (skriv videre). De andre er permanente for dokumentet:
+     * så står der hvornår (at) og et kort navn (label), og eleven får at vide, at et nyt dokument kan få mærket.
+     */
+    const categories = Object.keys(CATEGORY_TEXT).filter(k => cats.has(k)).map((key) => {
+      if (key === 'kort') return { key, text: `Teksten er for kort. Et bevis kræver mindst ${this.minWords} ord.`, fixable: true, need: this.minWords };
+      const c = { key, text: CATEGORY_TEXT[key], fixable: false, label: key === 'rod' ? RED_LABEL[m.redHardCat || ''] || RED_LABEL[''] : CATEGORY_LABEL[key] };
+      const at = key === 'rod' ? m.redHardAt : key === 'indsat' && m.flags.some(f => !/ikke kunne følge med/.test(f)) ? m.flagAt : 0;
+      if (at) c.at = at;
+      return c;
+    });
     return { ok: reasons.length === 0, reasons, notes, facts, categories };
+  }
+
+  /** Elevens hjælpemidler (students.aids, sat af læreren). Kun til vurderingen – aldrig i beviset. */
+  aidsOf(studentId) {
+    try {
+      const r = this.db.prepare('SELECT aids FROM students WHERE id = ?').get(Number(studentId));
+      return D.cleanAids(r && r.aids ? JSON.parse(r.aids) : []);
+    } catch (e) { return []; }
   }
 
   /**
@@ -451,7 +486,9 @@ class DocStore {
     if (!row || row.student_id !== student.id) return { ok: false, error: 'Dokumentet findes ikke' };
     if (row.submitted) return Object.assign({ ok: true, already: true }, JSON.parse(row.result || '{}'));
     if (meta.view !== undefined) { this.observe(row.id, meta.view, now); }
-    const ev = this.evaluate(this.q.get.get(row.id));
+    // Hjælpemidler: fra hubben (meta.aids) – ellers fra elevens række. De står aldrig i beviset.
+    const aids = Array.isArray(meta.aids) ? D.cleanAids(meta.aids) : this.aidsOf(row.student_id);
+    const ev = this.evaluate(this.q.get.get(row.id), aids);
     const where = this.placeOf(row.id);
     const place = where.home ? (where.lesson ? 'lektion og hjemme' : 'hjemme') : 'lektion';
     ev.facts.place = place;
@@ -468,10 +505,9 @@ class DocStore {
     if (ev.ok) {
       const certId = crypto.randomBytes(12).toString('base64url');
       const issuer = this.testServer ? (meta.issuer ? `${meta.issuer} (${TEST_ISSUER})` : TEST_ISSUER) : String(meta.issuer || '');
-      const aids = Array.isArray(meta.aids) && meta.aids.length > 0;
       const checks = ['Tastet i HolyMolys skrivevindue – indsæt blokeret'];
       if (observed.includes('vagt')) checks.push('HolyMoly-vagten blokerede AI på computeren');
-      checks.push('Ingen rød lampe undervejs', aids ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten');
+      checks.push('Ingen rød lampe undervejs', aids.length ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten');
       const created = Number(meta.assignmentCreated) > 0 ? new Date(Number(meta.assignmentCreated)).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }) : null;
       // Fast rækkefølge af felter – det er præcis denne tekst der signeres (v3).
       // Ingen navne, klasse, lærer eller pseudonym: intet felt kobler to beviser fra samme elev sammen.
@@ -508,7 +544,7 @@ class DocStore {
     const row = this.q.get.get(String(id || ''));
     const ids = row ? (JSON.parse(row.monitor).lessons || []).map(Number).filter(Number.isInteger) : [];
     if (!ids.length) return { home: false, lesson: true };
-    const solo = this.db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE student_id IS NOT NULL AND id IN (${ids.map(() => '?').join(',')})`).get(...ids).n;
+    const solo = this.db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE (kind = 'hjemme' OR student_id IS NOT NULL) AND id IN (${ids.map(() => '?').join(',')})`).get(...ids).n;
     return { home: solo > 0, lesson: solo < ids.length };
   }
 

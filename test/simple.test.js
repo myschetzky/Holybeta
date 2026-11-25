@@ -148,7 +148,7 @@ test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
     for (const weak of ['1234', '1111', '2008', '1212']) {
       r = await enroll({ code: cls.joinCode, name: 'Bo Nielsen', pin: weak });
       assert.strictEqual(r._status, 400, weak);
-      assert.strictEqual(r.error, 'Vælg en kode, der er sværere at gætte');
+      assert.strictEqual(r.error, 'Koden er for nem at gætte (fx 1234, 1111 eller et årstal). Vælg en anden.');
     }
     r = await enroll({ code: cls.joinCode, name: 'Bo Nielsen', pin: '7391' });
     assert.ok(r.token);
@@ -231,6 +231,10 @@ test('elevkoder: de mest almindelige koder afvises', () => {
   for (const p of ['0000', '1111', '999999', '1234', '2345', '0123', '7890', '123456', '4321', '9876', '3210', '654321',
     '1212', '121212', '1122', '112233', '123123', '1950', '1999', '2008', '2030']) assert.strictEqual(weakPin(p), true, p);
   for (const p of ['4821', '7391', '5827', '1949', '2031', '1357', '8264', '102938', '1221']) assert.strictEqual(weakPin(p), false, p);
+  // Samme tjek i elev-appen: weakPin ligger i shared/rules.js (og kopien i agent/src er synkroniseret)
+  const R = require('../shared/rules.js');
+  assert.strictEqual(R.weakPin, weakPin);
+  assert.strictEqual(require('../agent/src/rules.js').weakPin('1234'), true, 'npm run sync');
 });
 
 test('enkel tilstand: elevens kode låses efter 10 forkerte forsøg – også efter genstart – til læreren nulstiller den', async () => {

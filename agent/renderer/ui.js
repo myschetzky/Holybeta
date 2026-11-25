@@ -9,7 +9,31 @@
     $('code').value = v.length > 4 ? v.slice(0, 4) + '-' + v.slice(4) : v;
   });
   // Trin 1: klassekoden. Trin 2 (kun ved klassekode): elevens navn.
-  let askName = false, askPin = false, askAccept = false;
+  let askName = false, askPin = false, askAccept = false, pinKnown = false;
+  // Ny kode: skriv den to gange. Kender serveren allerede elevens kode (ny computer), skrives den kun én gang.
+  function setPinMode(known) {
+    pinKnown = !!known;
+    $('student-pin2').hidden = !askPin || pinKnown;
+    $('pin-show').hidden = !askPin;
+    $('student-pin').placeholder = pinKnown ? 'Din kode' : 'Vælg en kode (4-6 cifre)';
+  }
+  /*
+   * Samme tjek som serveren (shared/rules.js), mens eleven skriver – så eleven ikke skal vente på svaret.
+   * Det stopper ikke tilmeldingen: en elev, der logger ind igen med en gammel kode, afgøres af serveren.
+   */
+  $('student-pin').addEventListener('input', () => {
+    const R = window.ACRules;
+    const v = $('student-pin').value.trim();
+    const weak = !pinKnown && !!(R && R.weakPin && R.weakPin(v));
+    if (weak) { $('enroll-error').textContent = R.WEAK_PIN_TEXT; $('enroll-error').hidden = false; }
+    else if (R && $('enroll-error').textContent === R.WEAK_PIN_TEXT) $('enroll-error').hidden = true;
+  });
+  $('pin-show').addEventListener('click', () => {
+    const show = $('student-pin').type === 'password';
+    for (const id of ['student-pin', 'student-pin2']) $(id).type = show ? 'text' : 'password';
+    $('pin-show').textContent = show ? 'Skjul kode' : 'Vis kode';
+    $('pin-show').setAttribute('aria-pressed', show ? 'true' : 'false');
+  });
   function setStep(nameStep, className, teacherName, uni = {}) {
     askName = nameStep;
     const typed = nameStep && !uni.uniLoginRequired;  // må eleven skrive sit navn selv?
@@ -17,6 +41,7 @@
     $('code').hidden = nameStep;
     $('student-name').hidden = !typed;
     $('student-pin').hidden = !askPin;
+    setPinMode(uni.pinKnown);
     askAccept = typed && !!uni.needAccept;              // enkel tilstand: vilkårene for elever
     $('enroll-terms').hidden = !askAccept;
     $('enroll-submit').hidden = nameStep && !typed;
@@ -27,7 +52,7 @@
     if (nameStep) $('enroll-cancel').hidden = false;
     $('enroll-title').textContent = nameStep ? 'Hvad hedder du?' : 'Skriv klassekoden';
     $('enroll-help').textContent = nameStep
-      ? `Du tilmelder dig ${className}${teacherName ? ' hos ' + teacherName : ''}. ` + (askPin ? 'Skriv dit fulde navn og vælg en kode på 4 cifre. Med koden kan du logge ind igen på en anden computer.' : typed ? 'Skriv dit fulde navn, så din lærer kan se, det er dig.' : 'Log ind med UNI-Login, så din lærer kan se, det er dig.')
+      ? `Du tilmelder dig ${className}${teacherName ? ' hos ' + teacherName : ''}. ` + (askPin ? 'Skriv dit fulde navn og vælg en kode på 4-6 cifre. Med koden kan du logge ind igen på en anden computer.' : typed ? 'Skriv dit fulde navn, så din lærer kan se, det er dig.' : 'Log ind med UNI-Login, så din lærer kan se, det er dig.')
       : 'Koden får du af din lærer. Du skal kun gøre det én gang.';
     $('enroll-submit').textContent = nameStep ? 'Tilmeld' : 'Næste';
     setTimeout(() => $(typed ? 'student-name' : nameStep ? 'enroll-uni' : 'code').focus(), 0);
@@ -49,6 +74,7 @@
     if (askName && name.length < 2) { $('enroll-error').textContent = 'Skriv dit fulde navn'; $('enroll-error').hidden = false; return; }
     const pin = askPin ? $('student-pin').value.trim() : '';
     if (askPin && !/^\d{4,6}$/.test(pin)) { $('enroll-error').textContent = 'Koden skal være 4-6 cifre'; $('enroll-error').hidden = false; return; }
+    if (askPin && !pinKnown && $('student-pin2').value.trim() !== pin) { $('enroll-error').textContent = 'De to koder er ikke ens. Skriv koden igen.'; $('enroll-error').hidden = false; $('student-pin2').focus(); return; }
     if (askAccept && !$('enroll-accept').checked) { $('enroll-error').textContent = 'Sæt flueben ved vilkårene for at tilmelde dig'; $('enroll-error').hidden = false; return; }
     const r = await window.hm.enroll($('code').value, name, pin, askAccept ? $('enroll-accept').checked : undefined);
     if (r.needName) { setStep(true, r.className, r.teacherName, r); if (r.error) { $('enroll-error').textContent = r.error; $('enroll-error').hidden = false; } return; }
@@ -56,6 +82,7 @@
     $('code').value = '';
     $('student-name').value = '';
     $('student-pin').value = '';
+    $('student-pin2').value = '';
     $('enroll-accept').checked = false;
     setStep(false);
     addingClass = false;

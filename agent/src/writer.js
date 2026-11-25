@@ -8,9 +8,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const D = require('./doc.js');
+const store = require('./store.js');
 
 class Writer {
-  /** opts: { send(msg) -> bool, lessonActive() -> bool, serverUrl, studentName() -> string } */
+  /** opts: { send(msg) -> bool, lessonActive() -> bool, serverUrl, studentName() -> string, online() -> bool, lastRecv() -> ms } */
   constructor(opts) {
     this.o = opts;
     this.win = null;
@@ -18,6 +19,15 @@ class Writer {
     this.assignments = [];    // lærerens afleveringer (fra serveren)
     this.docs = this._load();
     this._saveTimer = null;
+    // Elevens egen lampe (my-lamp fra serveren) i skrivevinduets footer
+    this.lamp = { color: '', reason: '', home: false, restart: false };
+    this._lostSince = 0;
+    this._lampSent = '';
+    this._lampTimer = setInterval(() => this._pushLamp(), 2000);
+    if (this._lampTimer.unref) this._lampTimer.unref();
+    this.resuming = false; // en afbrudt skriveøkt er ved at blive genoptaget (skrivevinduet låses ikke imens)
+    this.aids = [];           // hjælpemidler fra læreren (lesson.aids): 'ordforslag', 'diktering'
+    this.prefs = store.loadWriterPrefs(); // zoom, tekststørrelse og linjeafstand (kun denne computer)
     this._ipc();
   }
 
@@ -113,26 +123,111 @@ class Writer {
     if (inactive) this.win.once('ready-to-show', () => { if (this.win && !this.win.isDestroyed()) this.win.showInactive(); });
     try { this.win.webContents.session.setSpellCheckerLanguages(['da', 'en-US']); } catch (e) { /* ikke på Mac */ }
     this.win.loadFile(path.join(__dirname, '..', 'renderer', 'write.html'));
+    this._assist(this.win.webContents);
     this.win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     this.win.webContents.on('will-navigate', (e) => e.preventDefault());
     this.win.on('closed', () => {
       this.win = null;
       // Skrivevinduet lukket: en skriveøkt uden for timen slutter (så overvåges computeren ikke længere)
       if (this.soloAssignment) { this.o.send({ type: 'write-session', assignmentId: this.soloAssignment, on: false }); this.soloAssignment = 0; }
+      this.resuming = false;
+      this._lampSent = '';
     });
   }
 
-  /** Lektion startet/slut: skrive-vinduet låses op/ned. */
+  /**
+   * Lektion startet/slut: skrive-vinduet låses op/ned. Mens en afbrudt skriveøkt genoptages (this.resuming),
+   * låses det ikke – en afbrydelse må aldrig låse elevens tekst.
+   */
   lessonChanged(live) {
-    live = !!live;
-    if (this.live === live) return;
-    this.live = live;
-    if (this.win && !this.win.isDestroyed()) this.win.webContents.send('write:lesson', live);
+    this._serverLive = !!live;
+    live = !!live || this.resuming;
+    if (this.live !== live) {
+      this.live = live;
+      if (this.win && !this.win.isDestroyed()) this.win.webContents.send('write:lesson', live);
+    }
+    this._pushLamp();
+  }
+
+  _winOpen() { return !!(this.win && !this.win.isDestroyed()); }
+
+  /**
+   * Appen har forbindelse igen ('welcome'): har eleven en skriveøkt og skrivevinduet åbent, fortsættes økten af sig selv
+   * (resume – samme økt, kun fra samme computer og kort efter afbrydelsen). Kan den ikke fortsættes, startes en ny.
+   */
+  _resumeSolo() {
+    const aid = this.soloAssignment;
+    if (!aid || !this._winOpen()) return;
+    this.resuming = true;
+    // Forsvinder forbindelsen igen før svaret, sendes resume igen ved næste 'welcome' (vinduet forbliver åbent for skrivning)
+    if (!this.o.send({ type: 'write-session', assignmentId: aid, on: true, resume: true })) this.resuming = false;
+  }
+  _resumeResult(msg) {
+    const aid = Number(msg.assignmentId) || 0;
+    if (!this.resuming || aid !== this.soloAssignment) return;
+    if (msg.ok) { this.resuming = false; this.lessonChanged(this._serverLive); return; }
+    if (msg.resume) {
+      // Økten kunne ikke fortsættes (fx for længe væk): prøv en ny skriveøkt til samme aflevering
+      if (this.o.send({ type: 'write-session', assignmentId: aid, on: true })) return;
+    }
+    this.resuming = false;
+    this.soloAssignment = 0;
+    if (this._winOpen()) this.win.webContents.send('write:session-ended', String(msg.error || 'Skriveøkten er slut'));
+    this.lessonChanged(this._serverLive);
+  }
+
+  /**
+   * Hvad lampen i skrivevinduets footer viser. s: { live, color, reason, home, restart, online, lastRecv, lostSince }.
+   * Returnerer null uden lektion/skriveøkt, ellers { color, symbol, text, homeNote, lost, banner }.
+   */
+  static lampView(s, now = Date.now()) {
+    if (!s || !s.live) return null;
+    const homeNote = s.home ? 'Hjemme ser din lærer kun farven.' : '';
+    const clean = (t) => String(t || '').trim().replace(/[.…\s]+$/u, '').slice(0, 160);
+    const lost = !!s.restart || !s.online || !(now - (Number(s.lastRecv) || 0) <= 15_000);
+    const out = (color, symbol, text) => ({ color, symbol, text, homeNote, lost, banner: lost && !!s.lostSince && now - s.lostSince >= 60_000 });
+    const later = 'Skriv videre – teksten gemmes på computeren.';
+    if (s.restart) return out('grey', '?', 'HolyMoly-serveren genstarter. Skriv bare videre – teksten gemmes på computeren.');
+    if (lost) return out('grey', '?', `Grå: Ingen forbindelse til HolyMoly. ${later}`);
+    if (s.color === 'green') return out('green', '✓', 'Grøn – skriveforløbet følges.');
+    if (s.color === 'red') return out('red', '!', `Rød: ${clean(s.reason) || 'Et forbudt program'} åben. Luk det. Dette dokument kan ikke få mærket for tiden med rødt.`);
+    return out('grey', '?', `Grå: ${clean(s.reason) || 'Venter på HolyMoly'}. ${later}`);
+  }
+  _lampState(now = Date.now()) {
+    const online = this.o.online ? !!this.o.online() : true;
+    const lastRecv = this.o.lastRecv ? Number(this.o.lastRecv()) || 0 : now;
+    const s = Object.assign({}, this.lamp, { live: !!this.live, online, lastRecv, home: this.lamp.color ? this.lamp.home : !!this.soloAssignment });
+    const lost = s.restart || !online || !(now - lastRecv <= 15_000);
+    if (!lost || !s.live) this._lostSince = 0;
+    else if (!this._lostSince) this._lostSince = now;
+    s.lostSince = this._lostSince;
+    return s;
+  }
+  /** Sender lampen til skrivevinduet, når den har ændret sig (kaldes også hvert 2. sek., så den bliver grå uden forbindelse). */
+  _pushLamp(now = Date.now()) {
+    const v = Writer.lampView(this._lampState(now), now);
+    const key = JSON.stringify(v);
+    if (key === this._lampSent || !this._winOpen()) return v;
+    this._lampSent = key;
+    this.win.webContents.send('write:lamp', v);
+    return v;
   }
 
   /** Beskeder fra serveren */
   onMessage(msg) {
-    if (msg.type === 'doc-saved') {
+    if (msg.type === 'my-lamp') {
+      const color = msg.color === 'green' || msg.color === 'red' ? msg.color : 'grey';
+      this.lamp = { color, reason: String(msg.reason || '').slice(0, 160), home: !!msg.home, restart: false };
+      this._pushLamp();
+    } else if (msg.type === 'server-restart') {
+      this.lamp = Object.assign({}, this.lamp, { restart: true });
+      this._pushLamp();
+    } else if (msg.type === 'welcome') {
+      // Forbundet (igen): lampen venter på serverens næste my-lamp, og en afbrudt skriveøkt fortsættes
+      this.lamp = { color: '', reason: '', home: this.lamp.home, restart: false };
+      this._resumeSolo();
+      this._pushLamp();
+    } else if (msg.type === 'doc-saved') {
       // Prøve-vurdering fra serveren: hvorfor beviset vil mangle, hvis eleven afleverer nu (kategorier – aldrig tal)
       const preview = Writer.cleanPreview(msg.preview);
       if (this.win && !this.win.isDestroyed()) this.win.webContents.send('write:saved', { id: String(msg.id || ''), ok: !!msg.ok, error: String(msg.error || ''), preview });
@@ -148,6 +243,8 @@ class Writer {
       })).filter(a => a.id);
       if (this.win && !this.win.isDestroyed()) this.win.webContents.send('write:assignments', this.assignments);
       if (this.o.onAssignments) this.o.onAssignments(this.assignments);
+    } else if (msg.type === 'write-session-result' && this.resuming && !this.pending.has('s:' + (Number(msg.assignmentId) || 0))) {
+      this._resumeResult(msg);
     } else if (msg.type === 'write-session-result') {
       const key = 's:' + (Number(msg.assignmentId) || 0);
       const resolve = this.pending.get(key);
@@ -163,12 +260,76 @@ class Writer {
     }
   }
 
-  /** { ok, categories: [{ key, text }] } fra serveren – kun tekst, højst 10 punkter. */
+  /**
+   * { ok, categories: [{ key, text, fixable, need?, label?, at? }] } fra serveren – højst 10 punkter.
+   * fixable: kan rettes ved at skrive videre (kun 'kort'). need: ord der kræves. label/at: hvad og hvornår (permanente kategorier).
+   */
   static cleanPreview(p) {
     if (!p || typeof p !== 'object') return null;
-    const cats = (Array.isArray(p.categories) ? p.categories : []).slice(0, 10)
-      .map(c => ({ key: String((c && c.key) || '').slice(0, 20), text: String((c && c.text) || '').slice(0, 200) })).filter(c => c.key && c.text);
+    const cats = (Array.isArray(p.categories) ? p.categories : []).slice(0, 10).map((c) => {
+      const out = { key: String((c && c.key) || '').slice(0, 20), text: String((c && c.text) || '').slice(0, 200) };
+      out.fixable = c && typeof c.fixable === 'boolean' ? c.fixable : out.key === 'kort'; // ældre server: kun 'kort'
+      if (c && Number(c.need) > 0) out.need = Math.min(10_000, Math.round(Number(c.need)));
+      if (c && c.label) out.label = String(c.label).slice(0, 40);
+      if (c && Number(c.at) > 0) out.at = Number(c.at);
+      return out;
+    }).filter(c => c.key && c.text);
     return { ok: !!p.ok && !cats.length, categories: cats };
+  }
+
+  /* ---------- hjælpemidler og visning (stavekontrol, zoom, tastatur) ---------- */
+
+  /** Hjælpemidler fra læreren (lesson-beskeden). Skrivevinduet tillader ordforslag og diktering. */
+  setAids(list) {
+    const aids = D.cleanAids(list);
+    if (aids.join() === this.aids.join()) return;
+    this.aids = aids;
+    if (this.win && !this.win.isDestroyed()) this.win.webContents.send('write:aids', aids);
+  }
+
+  /**
+   * Stavekontrol i højreklik-menuen (forslag, "Tilføj til ordbogen", Klip og Kopiér – aldrig Indsæt) og zoom med Ctrl +/-/0.
+   * Et valgt forslag erstatter ordet i Chromium (insertReplacementText) og tæller som tastet i skrivevinduet.
+   */
+  _assist(wc) {
+    wc.on('context-menu', (_e, params) => {
+      const { Menu } = require('electron');
+      if (!Menu || !params || (!params.isEditable && !params.selectionText)) return;
+      const tpl = [];
+      if (params.isEditable && params.misspelledWord) {
+        const sug = (params.dictionarySuggestions || []).slice(0, 6);
+        for (const w of sug) tpl.push({ label: w, click: () => wc.replaceMisspelling(w) });
+        if (!sug.length) tpl.push({ label: 'Ingen forslag', enabled: false });
+        tpl.push({ label: `Tilføj "${params.misspelledWord}" til ordbogen`, click: () => wc.session.addWordToSpellCheckerDictionary(params.misspelledWord) });
+        tpl.push({ type: 'separator' });
+      }
+      const f = params.editFlags || {};
+      if (params.isEditable) tpl.push({ label: 'Klip', role: 'cut', enabled: !!f.canCut });
+      tpl.push({ label: 'Kopiér', role: 'copy', enabled: !!f.canCopy });
+      Menu.buildFromTemplate(tpl).popup({ window: this.win || undefined });
+    });
+    wc.on('before-input-event', (e, input) => {
+      if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+      const k = input.key;
+      let zoom = this.prefs.zoom;
+      if (k === '+' || k === '=' || k === 'Add') zoom += 0.5;
+      else if (k === '-' || k === 'Subtract') zoom -= 0.5;
+      else if (k === '0') zoom = 0;
+      else return;
+      e.preventDefault();
+      this.setPrefs({ zoom });
+    });
+    wc.on('did-finish-load', () => { try { wc.setZoomLevel(this.prefs.zoom); } catch (err) { /* */ } });
+  }
+
+  /** Gem visningen (zoom -1..3, tekststørrelse 14-24 px, linjeafstand) og brug den med det samme. */
+  setPrefs(p) {
+    this.prefs = store.saveWriterPrefs(p);
+    if (this.win && !this.win.isDestroyed()) {
+      try { this.win.webContents.setZoomLevel(this.prefs.zoom); } catch (err) { /* */ }
+      this.win.webContents.send('write:prefs', this.prefs);
+    }
+    return this.prefs;
   }
 
   /** Hvad beviset siger om målingen (v3): { observed, test }. Ældre beviser har ingen observed. */
@@ -180,6 +341,8 @@ class Writer {
   }
 
   _send(d) {
+    // Øvedokumentet forlader aldrig computeren (det ligger kun i skrivevinduets hukommelse – dette er et ekstra værn)
+    if (!d || d.practice) return false;
     if (!this.o.lessonActive()) return false;
     return this.o.send({ type: 'doc', id: d.id, title: d.title, blocks: d.blocks, stats: d.stats });
   }
@@ -192,7 +355,9 @@ class Writer {
     ipcMain.handle('write:state', () => {
       const openId = this.pendingOpen || '';
       this.pendingOpen = '';
-      return { lesson: this.o.lessonActive(), docs: this._summary(), labels, writeLesson: this.writeAsg || null, openId };
+      this._lampSent = ''; // vinduet er (gen)indlæst: lampen sendes igen
+      setTimeout(() => this._pushLamp(), 0);
+      return { lesson: this.o.lessonActive() || this.resuming, docs: this._summary(), labels, writeLesson: this.writeAsg || null, openId, aids: this.aids, prefs: this.prefs };
     });
     // "Fortsæt kladde" / "Skriv besvarelse": kladden til afleveringen, ellers et nyt dokument
     ipcMain.handle('write:open-for', (_e, aid) => {
@@ -201,6 +366,13 @@ class Writer {
       return { ok: true, id: this._docForAssignment(aid).id };
     });
     ipcMain.handle('write:assignments', () => this.assignments);
+    // Visning: tekststørrelse og linjeafstand (zoom styres med Ctrl +/-/0 i _assist)
+    ipcMain.handle('write:prefs', (_e, p) => {
+      const out = {};
+      if (p && Number(p.size) > 0) out.size = Number(p.size);
+      if (p && (p.lh === 'normal' || p.lh === 'luftig')) out.lh = p.lh;
+      return this.setPrefs(out);
+    });
     // Skriveøkt: skriv en aflevering hjemme med HolyMoly aktiv (kun når læreren har tilladt det)
     ipcMain.handle('write:session', async (_e, input) => {
       const aid = Number(input && input.assignmentId) || 0;
@@ -274,7 +446,7 @@ class Writer {
       const sent = this._send(d);
       return { ok: true, local: !sent };
     });
-    // Aflever. force = eleven har valgt "Aflever alligevel" uden bevis. Uden force låser serveren kun, hvis der er et bevis –
+    // Aflever. force = eleven har valgt "Aflever uden mærke". Uden force låser serveren kun, hvis der er et bevis –
     // ellers svarer den { confirm: true, categories }, og eleven kan skrive videre.
     ipcMain.handle('write:submit', async (_e, input) => {
       const id = String(input && typeof input === 'object' ? input.id || '' : input || '');

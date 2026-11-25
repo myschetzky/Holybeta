@@ -558,6 +558,7 @@ function startConnection() {
   };
   conn.on('state', (s) => {
     if (s === 'online') state.error = '';
+    if (writer) writer.lessonChanged(lessonActive()); // skrivevinduets lampe: grå med det samme uden forbindelse
     pushUi();
   });
   conn.on('message', (msg) => {
@@ -575,11 +576,15 @@ function startConnection() {
           if (e) Object.assign(e, { studentName: en.studentName, className: en.className, teacherName: en.teacherName });
         }
         store.save(state.data);
+        // Skrivevinduet: lampen venter på serveren, og en afbrudt skriveøkt fortsættes af sig selv
+        if (writer) writer.onMessage(msg);
         pushUi();
         break;
       case 'lesson':
         if (msg.live && !lessonActive()) notifyStudent(`Lektionen ${msg.className || ''} er startet – HolyMoly er aktiv.`);
         if (msg.live) {
+          // Hjælpemidler fra læreren (ordforslag, diktering): skrivevinduet tillader dem (de gælder også i øvedokumentet bagefter)
+          if (writer) writer.setAids(msg.aids);
           applyLesson({ live: true, className: msg.className, studentName: msg.studentName, teacherName: msg.teacherName, endsAt: Number(msg.endsAt), config: msg.config || {}, solo: msg.solo || null, write: msg.write || null });
           conn.event({ kind: 'info', title: 'HolyMoly forbundet (' + osName() + ')' });
         } else applyLesson(null);
@@ -599,6 +604,8 @@ function startConnection() {
       case 'assignments':
       case 'assignment-result':
       case 'write-session-result':
+      case 'my-lamp': // elevens egen lampe (kun til denne app)
+      case 'server-restart': // serveren genstarter: "Skriv bare videre"
         if (writer) writer.onMessage(msg);
         break;
       case 'freeze':
@@ -792,7 +799,7 @@ async function enrollWith(code, extra) {
     const data = await res.json().catch(() => ({}));
     // Klassekode: serveren beder om elevens navn eller UNI-Login (trin 2)
     if (data.needName) {
-      return { ok: false, needName: true, error: (extra.name || extra.ticket) ? String(data.error || '') : '', className: String(data.className || ''), teacherName: String(data.teacherName || ''), uniLogin: !!data.uniLogin, uniLoginRequired: !!data.uniLoginRequired, needPin: !!data.needPin, needAccept: !!data.needAccept };
+      return { ok: false, needName: true, error: (extra.name || extra.ticket) ? String(data.error || '') : '', className: String(data.className || ''), teacherName: String(data.teacherName || ''), uniLogin: !!data.uniLogin, uniLoginRequired: !!data.uniLoginRequired, needPin: !!data.needPin, needAccept: !!data.needAccept, pinKnown: !!data.pinKnown };
     }
     if (!res.ok) return { ok: false, error: data.error || 'Serveren svarede med fejl ' + res.status };
     if (typeof data.token !== 'string') return { ok: false, error: 'Uventet svar fra serveren' };
@@ -913,6 +920,8 @@ app.whenReady().then(async () => {
   writer = new Writer({
     send: (m) => !!(conn && conn.send(m)),
     lessonActive,
+    online: () => !!(conn && conn.online),
+    lastRecv: () => (conn && conn.lastRecv) || 0,
     get serverUrl() { return SERVER_URL; },
     studentName: () => (state.data.enrollments[0] || {}).studentName || '',
     onAssignments: (list) => {

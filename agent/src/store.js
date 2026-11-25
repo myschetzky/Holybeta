@@ -31,6 +31,33 @@ function load() {
   }
 }
 
+function readRaw() {
+  try { return JSON.parse(fs.readFileSync(file(), 'utf8')) || {}; } catch (e) { return {}; }
+}
+function writeRaw(out) {
+  fs.mkdirSync(path.dirname(file()), { recursive: true });
+  const tmp = file() + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file());
+}
+
+/*
+ * Skrivevinduets visning (kun på denne computer): zoom (Ctrl +/-/0, -1..3), tekststørrelse (14-24 px) og linjeafstand.
+ * Det påvirker ikke dokumentet eller Word-filen.
+ */
+const clamp = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
+function cleanPrefs(p) {
+  const o = p && typeof p === 'object' ? p : {};
+  return { zoom: clamp(o.zoom, -1, 3, 0), size: Math.round(clamp(o.size, 14, 24, 16)), lh: o.lh === 'luftig' ? 'luftig' : 'normal' };
+}
+function loadWriterPrefs() { return cleanPrefs(readRaw().writerPrefs); }
+function saveWriterPrefs(p) {
+  const raw = readRaw();
+  raw.writerPrefs = cleanPrefs(Object.assign(cleanPrefs(raw.writerPrefs), p && typeof p === 'object' ? p : {}));
+  try { writeRaw(raw); } catch (e) { /* disken er fuld e.l. – visningen er ikke vigtig */ }
+  return raw.writerPrefs;
+}
+
 function save(state) {
   const enc = canEncrypt();
   if (!validDeviceId(state.deviceId)) state.deviceId = newDeviceId();
@@ -43,10 +70,9 @@ function save(state) {
       studentName: e.studentName, className: e.className, teacherName: e.teacherName,
     })),
   };
-  fs.mkdirSync(path.dirname(file()), { recursive: true });
-  const tmp = file() + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, file());
+  const prefs = readRaw().writerPrefs; // skrivevinduets visning bevares
+  if (prefs) out.writerPrefs = cleanPrefs(prefs);
+  writeRaw(out);
 }
 
-module.exports = { load, save };
+module.exports = { load, save, loadWriterPrefs, saveWriterPrefs, cleanPrefs };

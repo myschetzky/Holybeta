@@ -19,6 +19,8 @@ const STALE_MS = 20_000; // ingen status i 20 sek -> grå
 const HOME_NO_SCREEN = 'Skriveøkt hjemme: skærmen kan ikke ses';
 const FEATURE_OFF = { liveScreen: 'Live-skærm er slået fra på denne server', screenshot: 'Skærmbilleder er slået fra på denne server' };
 const MAX_EXTRA_MS = 2 * 3600_000; // ekstra tid: højst 2 timer efter klassens lektion
+const SOLO_GRACE_MS = 120_000; // en afbrudt skriveøkt venter 2 min. på eleven – og kan derefter fortsættes i 2 min. mere
+const MY_LAMP_MS = 10_000;     // elevens egen lampe (my-lamp) sendes højst hvert 10. sek.
 /*
  * Hjemme har én fast profil: kun AI, fjernstyring og virtuelle maskiner blokeres, intet lukkes,
  * og der tages aldrig skærmbilleder. Læreren ser kun "Skriver hjemme", lampen og kategorien.
@@ -27,6 +29,7 @@ const HOME_CATEGORIES = ['ai', 'remote', 'vm'];
 const HOME_ACTIVITY = 'Skriver hjemme';
 const HOME_EVENT_KINDS = new Set(['info', 'blocked', 'violation', 'tamper', 'killed']);
 const CATEGORY_TEXT = { ai: 'AI / chatbots', remote: 'Fjernstyring', vm: 'Virtuel maskine' };
+const CATEGORY_LABELS = (() => { try { return require('../../shared/rules.js').CATEGORIES; } catch (e) { return {}; } })();
 function homeConfig(config) {
   const c = Object.assign({}, config || {});
   return Object.assign(c, {
@@ -64,7 +67,7 @@ function preferLesson(l, cur) {
 }
 
 class Hub {
-  constructor({ db, dataDir, getRules, classConfig, log, staleMs, minAgentVersion, minExtensionVersion, downloadUrl, requireGuard, compileFor, docs, publicUrl, lessonBlocked, features }) {
+  constructor({ db, dataDir, getRules, classConfig, log, staleMs, minAgentVersion, minExtensionVersion, downloadUrl, requireGuard, compileFor, docs, publicUrl, lessonBlocked, features, soloGraceMs }) {
     // Funktioner, der er slået fra (beta): håndhæves her – ikke kun i dashboardet
     this.features = Object.assign({ liveScreen: true, screenshot: true, autoEvidence: true, hand: true, writeLesson: true }, features || {});
     // Enkel tilstand: skolens ja mangler -> ingen lektioner og ingen skriveøkter (returnerer en besked eller null)
@@ -77,7 +80,8 @@ class Hub {
     this.pairCodes = new Map(); // studentId -> { code, exp } (vagtens engangs-parringskode)
     this.guardAlerts = new Map(); // studentId -> [{ text, until }] (fx to vagter på samme computer)
     this.writing = new Map(); // studentId -> dokument-id der skrives på (lampen følges løbende)
-    this.solo = new Map();    // studentId -> skriveøkt uden for timen { id, started, endsAt, assignmentId, title }
+    this.solo = new Map();    // studentId -> skriveøkt uden for timen { id, started, endsAt, assignmentId, title, kind: 'hjemme', deviceHash, pausedAt }
+    this.soloGraceMs = Number(soloGraceMs) > 0 ? Number(soloGraceMs) : SOLO_GRACE_MS;
     this.soloQuota = new Map(); // studentId -> { day, n, last } – mod oversvømmelse af skriveøkter
     this.hands = new Map(); // studentId -> tidspunkt eleven rakte hånden op (kun under lektionen)
     this.lastColor = new Map(); // studentId -> { lessonId, color } (til lektionsrapporten)
@@ -105,13 +109,19 @@ class Hub {
     this.limits = new Map(); // studentId -> { rl, evidenceRl, events, evidence, lessonId } – overlever genforbindelser
 
     const now = Date.now();
-    // Skriveøkter (én elev) overlever ikke en genstart – ellers ville de blive til en lektion for hele klassen
-    db.prepare('UPDATE lessons SET ended = MIN(ends_at, ?) WHERE student_id IS NOT NULL AND ended IS NULL').run(now);
     const writeOf = (id) => {
       const r = id ? db.prepare('SELECT id, title FROM assignments WHERE id = ?').get(id) : null;
       return r ? { id: r.id, title: r.title } : null;
     };
-    for (const l of db.prepare('SELECT * FROM lessons WHERE ended IS NULL AND student_id IS NULL').all()) {
+    // Skriveøkter overlever en genstart: de genskabes som afbrudte (pausedAt), så eleven kan forbinde igen inden fristen.
+    // Kun rækker med kind 'hjemme' – aldrig som en lektion for hele klassen.
+    for (const l of db.prepare("SELECT * FROM lessons WHERE ended IS NULL AND (kind = 'hjemme' OR student_id IS NOT NULL)").all()) {
+      const asg = l.kind === 'hjemme' && l.student_id != null && l.ends_at > now ? writeOf(l.assignment_id) : null;
+      if (!asg) { db.prepare('UPDATE lessons SET ended = ?, end_reason = ? WHERE id = ?').run(Math.min(l.ends_at, now), l.ends_at > now ? 'genstart' : 'tid', l.id); continue; }
+      this.studentClass.set(l.student_id, l.class_id);
+      this.solo.set(l.student_id, { id: l.id, started: l.started, endsAt: l.ends_at, assignmentId: asg.id, title: asg.title, kind: 'hjemme', deviceHash: l.device_hash || null, pausedAt: now });
+    }
+    for (const l of db.prepare("SELECT * FROM lessons WHERE ended IS NULL AND student_id IS NULL AND kind != 'hjemme'").all()) {
       if (l.ends_at > now) this.lessons.set(l.class_id, { id: l.id, endsAt: l.ends_at, started: l.started, writeAssignment: writeOf(l.write_assignment_id) });
       else db.prepare('UPDATE lessons SET ended = ? WHERE id = ?').run(l.ends_at, l.id);
     }
@@ -173,7 +183,7 @@ class Hub {
    */
   isHome(sid) {
     const l = this.lessonFor(sid);
-    return !!(l && l.assignmentId);
+    return !!(l && l.kind === 'hjemme');
   }
 
   /**
@@ -210,6 +220,14 @@ class Hub {
     } catch (e) { return []; }
   }
 
+  /** Læreren har ændret elevens hjælpemidler: elevens app får dem med det samme (ny lesson-besked, hvis eleven er i en lektion). */
+  aidsChanged(sid) {
+    const conn = this.agentByStudent.get(sid);
+    if (!conn) return;
+    conn.lessonSent = false;
+    this._assignActive(conn);
+  }
+
   /**
    * Skriveøkt: eleven skriver en aflevering uden for timen. Kun elevens egen computer overvåges og blokeres
    * – præcis som i en lektion – og kun mens skrivevinduet er åbent (højst 3 timer, aldrig efter fristen).
@@ -231,18 +249,41 @@ class Hub {
     const endsAt = Math.min(now + 3 * 3600_000, asg.due ? asg.due + 5 * 60_000 : Infinity);
     if (endsAt <= now + 60_000) return { ok: false, error: 'Fristen for afleveringen er overskredet' };
     const classId = this.studentClass.get(sid);
-    const r = this.db.prepare('INSERT INTO lessons (class_id, started, ends_at, student_id) VALUES (?,?,?,?)').run(classId, now, endsAt, sid);
-    this.solo.set(sid, { id: Number(r.lastInsertRowid), started: now, endsAt, assignmentId: asg.id, title: asg.title });
+    const deviceHash = (conn && conn.deviceHash && conn.deviceHash.get(sid)) || null;
+    const r = this.db.prepare("INSERT INTO lessons (class_id, started, ends_at, student_id, kind, assignment_id, device_hash) VALUES (?,?,?,?,'hjemme',?,?)").run(classId, now, endsAt, sid, asg.id, deviceHash);
+    this.solo.set(sid, { id: Number(r.lastInsertRowid), started: now, endsAt, assignmentId: asg.id, title: asg.title, kind: 'hjemme', deviceHash, pausedAt: 0 });
     this.closed.delete(sid);
     this._q.insertEvent.run(sid, Number(r.lastInsertRowid), now, 'info', null, `Startede en skriveøkt til "${asg.title}"`.slice(0, 500), null, null, 0, null, null);
     this._soloChanged(sid);
     return { ok: true, endsAt };
   }
-  endSolo(sid) {
+  /**
+   * Fortsæt en skriveøkt, der blev afbrudt (end_reason 'drop'), med samme lessons.id. Kun inden for fristen (soloGraceMs
+   * efter afbrydelsen) og kun fra samme computer (device_hash). Tæller ikke i kvoten for nye skriveøkter.
+   */
+  resumeSolo(sid, asg, conn) {
+    const now = Date.now();
+    if (this.lessonFor(sid)) return { ok: false, error: 'Du er allerede i en lektion – skriv bare' };
+    const others = conn ? [...conn.students.values()] : [];
+    if (others.some(s => this.lessonOf(s.class_id) || this.soloOf(s.id))) return { ok: false, error: 'Du er i en lektion lige nu – skriv i timen i stedet' };
+    const row = this.db.prepare("SELECT * FROM lessons WHERE student_id = ? AND kind = 'hjemme' AND assignment_id = ? ORDER BY id DESC LIMIT 1").get(sid, asg.id);
+    if (!row || row.end_reason !== 'drop' || !row.ended || now - row.ended >= this.soloGraceMs) return { ok: false, error: 'Skriveøkten kan ikke fortsættes. Start den igen.' };
+    const deviceHash = (conn && conn.deviceHash && conn.deviceHash.get(sid)) || null;
+    if (!row.device_hash || row.device_hash !== deviceHash) return { ok: false, error: 'Skriveøkten kan kun fortsættes på den samme computer' };
+    if (row.ends_at <= now + 60_000) return { ok: false, error: 'Skriveøkten er slut' };
+    this.db.prepare('UPDATE lessons SET ended = NULL, end_reason = NULL WHERE id = ?').run(row.id);
+    this.solo.set(sid, { id: row.id, started: row.started, endsAt: row.ends_at, assignmentId: asg.id, title: asg.title, kind: 'hjemme', deviceHash, pausedAt: 0 });
+    this.closed.delete(sid);
+    this._q.insertEvent.run(sid, row.id, now, 'info', null, 'Skriveøkten fortsætter efter en afbrydelse', null, null, 0, null, null);
+    this._soloChanged(sid);
+    return { ok: true, endsAt: row.ends_at, resumed: true };
+  }
+  /** reason (lessons.end_reason): 'lukket', 'drop' (forbindelsen kom ikke igen), 'tid', 'lektion' eller 'computer'. */
+  endSolo(sid, reason = 'lukket') {
     const s = this.solo.get(sid);
     if (!s) return;
     this.solo.delete(sid);
-    this.db.prepare('UPDATE lessons SET ended = ? WHERE id = ?').run(Math.min(Date.now(), s.endsAt), s.id);
+    this.db.prepare('UPDATE lessons SET ended = ?, end_reason = ? WHERE id = ?').run(Math.min(Date.now(), s.endsAt), String(reason).slice(0, 20), s.id);
     this.status.delete(sid);
     this.detail.delete(sid);
     this.closed.delete(sid);
@@ -290,7 +331,7 @@ class Hub {
       // En klasselektion går forud for skriveøkter på de samme computere
       for (const conn of this.agentConns) {
         if (![...conn.students.values()].some(s => s.class_id === classId)) continue;
-        for (const sid of conn.students.keys()) if (this.solo.has(sid)) this.endSolo(sid);
+        for (const sid of conn.students.keys()) if (this.solo.has(sid)) this.endSolo(sid, 'lektion');
       }
     }
     this._lessonChanged(classId);
@@ -403,7 +444,16 @@ class Hub {
 
   _tick() {
     const now = Date.now();
-    for (const [sid, s] of this.solo) if (s.endsAt <= now) this.endSolo(sid);
+    for (const [sid, s] of this.solo) {
+      if (s.endsAt <= now) this.endSolo(sid, 'tid');
+      // Afbrudt skriveøkt: eleven kom ikke igen inden fristen
+      else if (s.pausedAt && now - s.pausedAt >= this.soloGraceMs) this.endSolo(sid, 'drop');
+    }
+    // Elevens egen lampe: et farveskift, der ventede på 10-sek.-grænsen, sendes nu
+    for (const conn of this.agentConns) {
+      const ml = conn.myLamp;
+      if (ml && ml.pending && conn.active && now - ml.at >= MY_LAMP_MS) this._myLamp(conn.active.studentId, null, now);
+    }
     // "Skriv i HolyMoly": serveren følger selv lampen, mens eleven skriver (ikke kun ved gemning)
     if (this.docs) {
       for (const [sid, docId] of this.writing) {
@@ -445,6 +495,8 @@ class Hub {
       ws, ip: req.socket.remoteAddress, students: new Map(), active: null,
       helloDone: false, streamMode: null, frameRl: new RateLimiter(20, 8),
       byeReason: null, alive: true, device: null, screenshotUntil: 0, violationUntil: 0,
+      deviceHash: new Map(), // studentId -> sha256(token).slice(0, 16) (hvilken computer en skriveøkt hører til)
+      myLamp: null,          // sidst sendte my-lamp { key, at, pending }
     };
     const helloTimer = setTimeout(() => { if (!conn.helloDone) ws.close(4400, 'hello timeout'); }, 15_000);
     ws.on('pong', () => { conn.alive = true; });
@@ -476,7 +528,7 @@ class Hub {
     for (const t of tokens) {
       if (typeof t !== 'string' || t.length < 20 || t.length > 200) continue;
       const row = this._q.studentByToken.get(sha256(t));
-      if (row) conn.students.set(row.id, row);
+      if (row) { conn.students.set(row.id, row); conn.deviceHash.set(row.id, sha256(t).slice(0, 16)); }
     }
     if (conn.students.size === 0) {
       this._send(conn, { type: 'error', code: 'unauthorized', message: 'Din kode er ikke længere gyldig. Bed din lærer om en ny.' });
@@ -530,6 +582,17 @@ class Hub {
       updateRequired: conn.outdated, minAgentVersion: this.minAgentVersion,
       minExtensionVersion: this.minExtensionVersion, downloadUrl: this.downloadUrl,
     });
+    // En afbrudt skriveøkt fortsætter (samme lessons.id), når eleven forbinder igen fra samme computer inden fristen
+    for (const sid of conn.students.keys()) {
+      const s = this.solo.get(sid);
+      if (!s) continue;
+      if (s.deviceHash && s.deviceHash !== conn.deviceHash.get(sid)) this.endSolo(sid, 'computer');
+      else if (this.classLessonFor(sid)) this.endSolo(sid, 'lektion');
+      else if (s.pausedAt) {
+        s.pausedAt = 0;
+        if (!this.shuttingDown) this._q.insertEvent.run(sid, s.id, Date.now(), 'info', null, 'Forbundet igen – skriveøkten fortsætter', null, null, 0, null, null);
+      }
+    }
     this._assignActive(conn);
     for (const s of conn.students.values()) this._pushStudent(s.id);
     this._sendAssignments(conn);
@@ -575,6 +638,7 @@ class Hub {
     const changed = !prev !== !conn.active || (prev && conn.active && (prev.lessonId !== conn.active.lessonId || prev.endsAt !== conn.active.endsAt || prev.studentId !== conn.active.studentId || prev.writeId !== conn.active.writeId));
     if (changed || !conn.lessonSent) {
       conn.lessonSent = true;
+      conn.myLamp = null; // ny lektion eller ny elev: lampen sendes forfra
       if (conn.active) {
         const s = best.student;
         const solo = best.lesson.assignmentId ? best.lesson : null;
@@ -584,6 +648,8 @@ class Hub {
           solo: solo ? { assignmentId: solo.assignmentId, title: solo.title } : null,
           // Skrivetime: appen åbner afleveringen i skrivevinduet (klassens lektion har writeAssignment – aldrig assignmentId)
           write: wa ? { assignmentId: wa.id, title: wa.title } : null,
+          // Hjælpemidler, læreren har slået til (kun til elevens egen app – skrivevinduet tillader ordforslag/diktering)
+          aids: this._aidsOf(s.id),
         });
       } else {
         this._send(conn, { type: 'lesson', live: false });
@@ -714,9 +780,10 @@ class Hub {
       case 'write-session': {
         // Eleven åbner/lukker en skriveøkt til en aflevering, der må skrives hjemme
         const aid = Number(msg.assignmentId) || 0;
-        const reply = (ok, error, endsAt) => this._send(conn, { type: 'write-session-result', assignmentId: aid, ok, error: error || '', endsAt: endsAt || 0 });
+        const resume = msg.resume === true;
+        const reply = (ok, error, endsAt) => this._send(conn, Object.assign({ type: 'write-session-result', assignmentId: aid, ok, error: error || '', endsAt: endsAt || 0 }, resume ? { resume: true } : {}));
         if (!msg.on) {
-          for (const sid of conn.students.keys()) if (this.solo.has(sid) && (!aid || this.solo.get(sid).assignmentId === aid)) this.endSolo(sid);
+          for (const sid of conn.students.keys()) if (this.solo.has(sid) && (!aid || this.solo.get(sid).assignmentId === aid)) this.endSolo(sid, 'lukket');
           return reply(true);
         }
         const asg = this.db.prepare('SELECT id, class_id, title, due, home FROM assignments WHERE id = ?').get(aid);
@@ -726,6 +793,13 @@ class Hub {
         if (conn.outdated) return reply(false, 'HolyMoly skal opdateres først');
         const blocked = this.lessonBlocked();
         if (blocked) return reply(false, blocked);
+        if (resume) {
+          // Appen forbinder igen med skrivevinduet åbent: økten kører allerede (genforbundet inden fristen) – eller fortsættes
+          const cur = this.soloOf(st.id);
+          if (cur && cur.assignmentId === asg.id) return reply(true, '', cur.endsAt);
+          const rr = this.resumeSolo(st.id, asg, conn);
+          return reply(rr.ok, rr.error, rr.endsAt);
+        }
         const r = this.startSolo(st.id, asg, conn);
         return reply(r.ok, r.error, r.endsAt);
       }
@@ -889,7 +963,15 @@ class Hub {
       if (this.agentByStudent.get(sid) !== conn) continue;
       this.agentByStudent.delete(sid);
       const classId = this.studentClass.get(sid);
-      if (this.solo.has(sid)) this.endSolo(sid); // appen lukket = skriveøkten slutter
+      // Appen lukket = skriveøkten slutter. Forbindelsen afbrudt = økten venter på eleven (soloGraceMs), før den slutter.
+      if (this.solo.has(sid)) {
+        if (conn.byeReason) this.endSolo(sid, 'lukket');
+        else {
+          const s = this.solo.get(sid);
+          s.pausedAt = Date.now();
+          this._q.insertEvent.run(sid, s.id, Date.now(), 'info', null, 'Forbindelsen blev afbrudt under skriveøkten', null, null, 0, null, null);
+        }
+      }
       if (conn.active && conn.active.studentId === sid && this.classLessonFor(sid, classId)) {
         const reason = conn.byeReason ? 'Eleven lukkede appen' : 'Forbindelsen blev afbrudt';
         this.closed.set(sid, { ts: Date.now(), reason, quit: !!conn.byeReason });
@@ -1254,6 +1336,35 @@ class Hub {
     const view = this.studentView(sid);
     this._logColor(sid, classId, view);
     this._broadcastClass(classId, { type: 'student', student: view });
+    this._myLamp(sid, view);
+  }
+
+  /**
+   * Elevens egen lampe: { type: 'my-lamp', color, reason, home } kun til elevens egen app, ved farveskift og højst hvert 10. sek.
+   * Rød har kategorien som tekst, grå har årsagen. Før appen har sendt sin første status, sendes intet (appen viser grå).
+   */
+  _myLamp(sid, view, now = Date.now()) {
+    const conn = this.agentByStudent.get(sid);
+    if (!conn || !conn.active || conn.active.studentId !== sid || !this.status.has(sid)) return;
+    const ml = conn.myLamp || (conn.myLamp = { key: '', at: 0, pending: false });
+    view = view || this.studentView(sid);
+    const color = view.color === 'green' || view.color === 'red' ? view.color : 'grey';
+    let reason = '';
+    if (color === 'red') {
+      const cat = (view.violations[0] || {}).category;
+      reason = CATEGORY_TEXT[cat] || (CATEGORY_LABELS[cat] || {}).label || 'Et forbudt program eller en forbudt side';
+    } else if (color === 'grey') reason = view.greyReason || view.activity || 'Overvågningen er ikke komplet';
+    reason = String(reason).slice(0, 160);
+    const key = color + '|' + reason;
+    if (key === ml.key) { ml.pending = false; return; }
+    if (now - ml.at < MY_LAMP_MS) { ml.pending = true; return; }
+    ml.key = key; ml.at = now; ml.pending = false;
+    this._send(conn, { type: 'my-lamp', color, reason, home: this.isHome(sid) });
+  }
+
+  /** Serveren lukker (genstart/opdatering): elevernes apps får besked, så skrivevinduet kan sige det. */
+  serverRestarting() {
+    for (const conn of this.agentConns) if (conn.helloDone) this._send(conn, { type: 'server-restart' });
   }
 
   /** Lektionsrapport: gem hvert farveskift under lektionen (rød med årsag, grå med årsag). */

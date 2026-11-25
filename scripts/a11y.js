@@ -71,6 +71,47 @@ const { createServer } = require('../server/src/index.js');
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  // Elev-appens skrivevindue (agent/renderer/write.html) med en attrap af broen window.hmw – uden Electron.
+  // Ukendte funktioner på broen er tomme, så siden kan få nye funktioner uden at tjekket går i stykker.
+  try {
+    const pw = await ctx.newPage();
+    const errors = [];
+    pw.on('pageerror', (e) => errors.push(e.message));
+    await pw.addInitScript(() => {
+      window.__saved = [];
+      const doc = { id: 'd1', title: 'Novelleanalyse', blocks: [{ t: 'h1', r: [{ x: 'Novelleanalyse' }] }, { t: 'p', r: [{ x: 'Novellen handler om en dreng, der flytter til en ny by.' }] }], stats: {}, submitted: 0, result: null, assignmentId: 7,
+        preview: { ok: false, categories: [{ key: 'kort', text: 'Teksten er for kort. Et bevis kræver mindst 100 ord.', fixable: true, need: 100 }] } };
+      const base = {
+        state: async () => ({ lesson: true, docs: [{ id: 'd1', title: 'Novelleanalyse', submitted: 0, words: 12, assignmentId: 7 }], labels: { base: '✓ Tastet i HolyMoly – intet indsat', lektion: '✓ Tastet i HolyMoly – intet indsat · i timen', hjemme: '✓ Tastet i HolyMoly – intet indsat · hjemme' }, writeLesson: { assignmentId: 7, title: 'Novelleanalyse' }, openId: '', aids: ['ordforslag'], prefs: { zoom: 0, size: 16, lh: 'normal' } }),
+        load: async () => JSON.parse(JSON.stringify(doc)),
+        assignments: async () => [{ id: 7, title: 'Novelleanalyse', className: '2.g Dansk', description: 'Skriv en analyse af novellen.', due: Date.now() + 86400000, home: true, submission: null }],
+        save: async (d) => { window.__saved.push(d.id); return { ok: true }; }, setPrefs: async (p) => p,
+      };
+      window.hmw = new Proxy(base, { get: (t, k) => (k in t ? t[k] : () => Promise.resolve(null)) });
+    });
+    await pw.goto('file://' + path.join(__dirname, '..', 'agent', 'renderer', 'write.html'));
+    await pw.waitForSelector('#editor');
+    await run('skrivevinduet (elev-appen)', pw);
+    await pw.click('#view-btn'); await pw.waitForSelector('#view-panel:not([hidden])');
+    await run('skrivevinduet (visning)', pw);
+    await pw.keyboard.press('Escape');
+    await pw.click('#practice'); await pw.waitForSelector('#notice.practice');
+    await run('skrivevinduet (øvedokument)', pw);
+    // Øvedokumentet forlader aldrig computeren: intet gemmes, heller ikke når eleven skifter dokument
+    await pw.keyboard.type('Jeg øver mig i skrivevinduet.', { delay: 5 });
+    await pw.selectOption('#docs', 'd1'); await pw.waitForTimeout(300);
+    const leaked = await pw.evaluate(() => window.__saved.filter(id => id !== 'd1').length);
+    if (leaked) { total++; console.log('✗ øvedokumentet blev sendt til gem'); }
+    await pw.click('#asg-btn'); await pw.waitForSelector('#asg[open]');
+    await run('skrivevinduet (afleveringer)', pw);
+    await pw.keyboard.press('Escape');
+    if (errors.length) { total += errors.length; console.log('✗ skrivevinduet – fejl i siden:\n    ' + errors.join('\n    ')); }
+    await pw.close();
+  } catch (e) {
+    total++;
+    console.log('✗ skrivevinduet kunne ikke tjekkes: ' + e.message);
+  }
+
   // Skolesiden findes kun med licens-styring: licens, lærere og sikkerhedsloggen (den åbnes også – virker i en rigtig browser)
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-a11y-skole-'));
   const srv2 = createServer({ port: 0, host: '127.0.0.1', dataDir: dir2, quiet: true, requireGuard: false, licensing: true, verifyEmail: false });

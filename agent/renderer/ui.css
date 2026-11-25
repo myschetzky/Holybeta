@@ -16,7 +16,7 @@ h1 { font-size: 18px; margin: 0; }
 input { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 #enroll { display: grid; gap: 10px; }
 #enroll-form { display: flex; flex-wrap: wrap; gap: 8px; }
-#student-pin { flex: 1; min-width: 0; font-size: 17px; letter-spacing: .2em; }
+#student-pin, #student-pin2 { flex: 1 1 140px; min-width: 0; font-size: 17px; letter-spacing: .2em; }
 #code { flex: 1; min-width: 0; font-size: 20px; letter-spacing: .12em; text-transform: uppercase; font-family: ui-monospace, monospace; user-select: text; }
 #student-name { flex: 1 1 100%; min-width: 0; font-size: 17px; }
 #status { display: grid; gap: 12px; }

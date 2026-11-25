@@ -136,7 +136,8 @@ Uptime Kuma skal kun nå serveren udefra. Den skal ikke have adgang til Docker e
 
 | Opgave | Sådan |
 | --- | --- |
-| Opdatering | `cd /opt/holymoly && git pull` og så samme `docker compose … up -d --build` som ved start |
+| Opdatering | `/opt/holymoly/scripts/opdater.sh`. Den henter ny kode, bygger og genstarter kun, når ingen lektioner eller skriveøkter er i gang. `--force` genstarter alligevel: eleverne får besked og skriver videre, og skriveøkterne fortsætter bagefter. Med Cloudflare Tunnel: `COMPOSE="docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.cloudflare.yml" scripts/opdater.sh` |
+| Er noget i gang? | `docker compose -f deploy/docker-compose.yml exec holymoly node /app/scripts/enkel.js aktive` |
 | Backup | Proxmox: *Datacenter → Backup → Add*, dagligt, behold 7. Data ligger i Docker-volumen `holymoly-data` i containeren. |
 | Log | `docker compose -f deploy/docker-compose.yml logs -f holymoly` |
 | Glemt lærer-adgangskode | `docker compose -f deploy/docker-compose.yml exec holymoly node /app/scripts/enkel.js nulstil <brugernavn>` |

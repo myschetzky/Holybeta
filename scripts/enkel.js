@@ -6,6 +6,7 @@
  *   npm run enkel -- nulstil <brugernavn> laver en ny midlertidig adgangskode til en lærer
  *   npm run enkel -- godkend <brugernavn> godkender en ny lærer (når ingen kollega kan gøre det)
  *   npm run enkel -- overdrag             registrerer, at skolens IT har overtaget driften (kræver SCHOOL_OPERATED=1)
+ *   npm run enkel -- aktive               er der lektioner eller skriveøkter i gang? (exit 1 = ja; bruges af scripts/opdater.sh)
  *
  * Lærere opretter sig med navn, brugernavn og adgangskode (den første med opsætningskoden, som skrives her ved start).
  * Elever skriver klassekoden, deres navn og en kode på 4 cifre i HolyMoly-appen. Lektioner kræver skolens ja:
@@ -58,6 +59,32 @@ if (process.argv[2] === 'overdrag') {
   console.log('Driften er registreret som overdraget til skolen.');
   if (String(process.env.SCHOOL_OPERATED || '') !== '1') console.log('Husk også SCHOOL_OPERATED=1 i miljøet – ellers er det stadig en testserver.');
   process.exit(0);
+}
+
+if (process.argv[2] === 'aktive') {
+  // Før en opdatering (scripts/opdater.sh): er der lektioner eller skriveøkter i gang? Exit 1 = ja, vent med at genstarte.
+  // Databasen åbnes kun til læsning og uden migrering, så tjekket kan køre ved siden af den kørende server.
+  const fs = require('node:fs');
+  const file = path.join(DATA_DIR, 'holymoly.db');
+  if (!fs.existsSync(file)) { console.log('Ingen database endnu. Intet er i gang.'); process.exit(0); }
+  const { DatabaseSync } = require('node:sqlite');
+  let db;
+  try { db = new DatabaseSync(file, { readOnly: true }); } catch (e) { db = new DatabaseSync(file); }
+  const now = Date.now();
+  const cols = new Set(db.prepare('PRAGMA table_info(lessons)').all().map(c => c.name));
+  const home = cols.has('kind') ? "(kind = 'hjemme' OR student_id IS NOT NULL)" : 'student_id IS NOT NULL';
+  const n = (sql) => { try { return db.prepare(sql).get(now).n; } catch (e) { return 0; } };
+  const lessons = n(`SELECT COUNT(*) AS n FROM lessons WHERE ended IS NULL AND ends_at > ? AND NOT ${home}`);
+  const solos = n(`SELECT COUNT(*) AS n FROM lessons WHERE ended IS NULL AND ends_at > ? AND ${home}`);
+  const extra = n('SELECT COUNT(*) AS n FROM lesson_extensions WHERE ends_at > ?');
+  db.close();
+  if (!lessons && !solos && !extra) { console.log('Ingen lektioner eller skriveøkter i gang.'); process.exit(0); }
+  const parts = [];
+  if (lessons) parts.push(`${lessons} ${lessons === 1 ? 'lektion' : 'lektioner'}`);
+  if (solos) parts.push(`${solos} ${solos === 1 ? 'skriveøkt' : 'skriveøkter'}`);
+  if (extra) parts.push(`${extra} ${extra === 1 ? 'elev' : 'elever'} med ekstra tid`);
+  console.log('I gang: ' + parts.join(', ') + '.');
+  process.exit(1);
 }
 
 const { createServer } = require('../server/src/index.js');

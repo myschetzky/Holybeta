@@ -61,6 +61,14 @@ Det opdateres løbende – se `git log -- docs/SIKKERHED.md`.
 - Ved ophør (licens-servere): skolens data slettes automatisk 90 dage efter, at prøveperiode og licens er udløbet; administratorerne varsles 30 og 7 dage før. Bestillinger bevares som fakturagrundlag (bogføringsloven) uden kobling til skolen.
 - Se `docs/JURA.md` for skolens del: databehandleraftale, DPIA og information til elever og forældre.
 
+**Skrive-beviset: grænserne er offentlige**
+- Grænserne står i koden (`shared/doc.js` `PROOF` og `server/src/docs.js`). At skjule dem her ville være teater. Eleven ser stadig kun kategorier og aldrig sine egne tal.
+- Elevens egne tal: mindst 100 ord, højst 15 tegn/sek. over 5 sek., højst 30 tegn inden for ét sekund, højst 25 % tastetryk hurtigere end 12 ms (fra 200 tastetryk), jævnhed (variationskoefficient) mindst 0,25 (fra 300 tastetryk) og højst 10 % dikteret tekst.
+- Serverens egne tjek: teksten må ikke vokse mere end 15 tegn/sek. mellem to gemninger, gennemsnittet over hele skrivetiden højst 10 tegn/sek. (over 600 tegn), et nyt dokument højst 150 tegn første gang, højst 10 % eller 3 min. grå tid, mens teksten voksede, og højst 15 % eller 10 min. grå tid uden vækst.
+- Rød lampe koster kun mærket ved AI, fjernstyring, virtuel maskine, proxy/VPN og rød uden kategori (fx en vagt-advarsel). Anden rød (video, spil, sociale medier …) er en note til læreren.
+- Hjælpemidler (`students.aids`: ordforslag, diktering) sættes af læreren i elevdialogen og logges i elevens logbog. Så bliver byger, hurtige tastetryk og jævnhed til noter, og beviset siger "Skrivetempo ikke vurderet". Serverens eget vækst-tjek gælder stadig. Listen over hjælpemidler står aldrig i beviset, mærket eller Word-filen.
+- Øvedokumentet i skrivevinduet ligger kun i vinduets hukommelse og sendes aldrig. Det vurderes lokalt med de samme regler (`evaluateStats`) – derfor er grænserne ikke en hemmelighed.
+
 ## Ændringer i sikkerhedsrunden 2026-11-24
 
 | # | Hvad | Hvorfor | Test |

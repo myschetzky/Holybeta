@@ -159,6 +159,9 @@ dialog::backdrop { background: rgba(10,12,16,.45); }
 .cats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .check input { width: auto; }
+fieldset.aids { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px 4px; margin: 4px 0 0; display: grid; gap: 6px; }
+fieldset.aids legend { font-size: 13px; font-weight: 600; padding: 0 4px; }
+fieldset.aids p { margin: 2px 0 4px; }
 .codes { width: 100%; border-collapse: collapse; }
 .codes td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
 .codes td:last-child { font-family: ui-monospace, monospace; font-size: 16px; letter-spacing: .05em; text-align: right; }

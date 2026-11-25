@@ -20,4 +20,13 @@ contextBridge.exposeInMainWorld('hmw', {
   openFor: (assignmentId) => ipcRenderer.invoke('write:open-for', Number(assignmentId) || 0),
   onWriteLesson: (cb) => ipcRenderer.on('write:write-lesson', (_e, w) => cb(w && typeof w === 'object' ? { assignmentId: Number(w.assignmentId) || 0, title: String(w.title || '') } : null)),
   onOpenDoc: (cb) => ipcRenderer.on('write:open-doc', (_e, id) => cb(String(id || ''))),
+  // Elevens egen lampe i footeren (writer.lampView) og en skriveøkt, der ikke kunne fortsættes efter en afbrydelse
+  onLamp: (cb) => ipcRenderer.on('write:lamp', (_e, v) => cb(v && typeof v === 'object' ? {
+    color: String(v.color || 'grey'), symbol: String(v.symbol || '?'), text: String(v.text || ''), homeNote: String(v.homeNote || ''), banner: !!v.banner,
+  } : null)),
+  onSessionEnded: (cb) => ipcRenderer.on('write:session-ended', (_e, msg) => cb(String(msg || ''))),
+  // Hjælpemidler fra læreren og skrivevinduets visning (tekststørrelse, linjeafstand, zoom)
+  onAids: (cb) => ipcRenderer.on('write:aids', (_e, list) => cb(Array.isArray(list) ? list.map(String) : [])),
+  setPrefs: (p) => ipcRenderer.invoke('write:prefs', p && typeof p === 'object' ? { size: Number(p.size) || 0, lh: String(p.lh || '') } : {}),
+  onPrefs: (cb) => ipcRenderer.on('write:prefs', (_e, p) => cb(p && typeof p === 'object' ? p : {})),
 });

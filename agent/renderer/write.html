@@ -12,20 +12,40 @@
     <input id="title" maxlength="120" placeholder="Titel på opgaven" aria-label="Titel" autocomplete="off" spellcheck="true" lang="da">
     <select id="docs" aria-label="Mine dokumenter"></select>
     <button class="btn" id="new">Nyt dokument</button>
+    <button class="btn" id="practice" title="Prøv skrivevinduet. Teksten forlader aldrig computeren.">Øv dig</button>
     <button class="btn" id="asg-btn">Afleveringer <span class="count" id="asg-count" hidden></span></button>
   </header>
 
   <div class="tools" role="toolbar" aria-label="Formatering">
-    <button data-cmd="bold" title="Fed (Ctrl+B)"><b>F</b></button>
-    <button data-cmd="italic" title="Kursiv (Ctrl+I)"><i>K</i></button>
-    <button data-cmd="underline" title="Understreget (Ctrl+U)"><u>U</u></button>
+    <button type="button" data-cmd="bold" title="Fed (Ctrl+B)" aria-label="Fed" aria-pressed="false"><b>F</b></button>
+    <button type="button" data-cmd="italic" title="Kursiv (Ctrl+I)" aria-label="Kursiv" aria-pressed="false"><i>K</i></button>
+    <button type="button" data-cmd="underline" title="Understreget (Ctrl+U)" aria-label="Understreget" aria-pressed="false"><u>U</u></button>
     <span class="sep"></span>
-    <button data-block="h1" title="Overskrift">Overskrift</button>
-    <button data-block="h2" title="Underoverskrift">Underoverskrift</button>
-    <button data-block="p" title="Brødtekst">Tekst</button>
+    <button type="button" data-block="h1" title="Overskrift (Ctrl+Alt+1)">Overskrift</button>
+    <button type="button" data-block="h2" title="Underoverskrift (Ctrl+Alt+2)">Underoverskrift</button>
+    <button type="button" data-block="p" title="Brødtekst">Tekst</button>
     <span class="sep"></span>
-    <button data-cmd="insertUnorderedList" title="Punktopstilling">• Liste</button>
-    <button data-cmd="insertOrderedList" title="Nummereret liste">1. Liste</button>
+    <button type="button" data-cmd="insertUnorderedList" title="Punktopstilling (Ctrl+Shift+8)">• Liste</button>
+    <button type="button" data-cmd="insertOrderedList" title="Nummereret liste">1. Liste</button>
+    <span class="sep"></span>
+    <!-- Visning: kun på skærmen (påvirker ikke Word-filen). Zoom: Ctrl +, Ctrl - og Ctrl 0 -->
+    <span class="view-wrap">
+      <button type="button" id="view-btn" aria-expanded="false" aria-controls="view-panel">Visning</button>
+      <div class="view-panel" id="view-panel" role="group" aria-label="Visning" hidden>
+        <div class="view-row">
+          <span class="view-label">Tekststørrelse</span>
+          <button type="button" id="size-down" title="Mindre tekst">A&minus;<span class="sr"> mindre tekst</span></button>
+          <span id="size-val" class="view-val" aria-live="polite">16 px</span>
+          <button type="button" id="size-up" title="Større tekst">A+<span class="sr"> større tekst</span></button>
+        </div>
+        <div class="view-row">
+          <span class="view-label">Linjeafstand</span>
+          <button type="button" data-lh="normal" aria-pressed="true">Normal</button>
+          <button type="button" data-lh="luftig" aria-pressed="false">Luftig</button>
+        </div>
+        <p class="view-help">Zoom: Ctrl + og Ctrl &minus;. Ctrl 0 nulstiller. Word-filen ændres ikke.</p>
+      </div>
+    </span>
     <span class="spacer"></span>
     <span class="shield" title="Indsæt er slået fra. Alt du skriver her, er tastet af dig.">Indsæt er slået fra</span>
   </div>
@@ -33,8 +53,9 @@
   <main class="page-wrap">
     <div class="notice write-lesson" id="write-banner" role="status" hidden></div>
     <div class="notice" id="notice" hidden></div>
+    <div class="notice lost" id="lost" hidden>Forbindelsen er væk. Det, du skriver nu, tæller måske ikke med i beviset.</div>
     <article class="page">
-      <div id="editor" contenteditable="true" spellcheck="true" lang="da" aria-label="Dokument" data-placeholder="Begynd at skrive…"></div>
+      <div id="editor" contenteditable="true" tabindex="0" spellcheck="true" lang="da" role="textbox" aria-multiline="true" aria-label="Dokument" data-placeholder="Begynd at skrive…"></div>
     </article>
   </main>
 
@@ -42,22 +63,23 @@
     <span id="words">0 ord</span>
     <span id="saved"></span>
     <span id="preview" class="preview" hidden></span>
+    <span id="lamp" class="lamp" role="status" aria-live="polite" hidden><span class="lamp-dot" aria-hidden="true"></span><span class="lamp-text"></span></span>
     <span class="spacer"></span>
     <button class="btn" id="del" hidden>Slet kladde</button>
     <button class="btn" id="docx">Gem som Word</button>
     <button class="btn primary" id="submit">Afslut dokument</button>
   </footer>
 
-  <div class="toast" id="toast" hidden></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
   <dialog id="confirm">
     <form method="dialog">
       <h2 id="confirm-title">Afslut dokumentet?</h2>
       <p id="confirm-text">Når du afslutter, kan teksten ikke længere ændres. HolyMoly tjekker skriveforløbet og sætter mærket <b id="confirm-mark"></b> på dokumentet, hvis alt er i orden.</p>
       <div id="confirm-why" hidden>
-        <p>Beviset vil mangle, fordi:</p>
+        <p>Mærket mangler, fordi:</p>
         <ul class="why-list" id="confirm-list"></ul>
-        <p class="muted">Skriver du videre, kan du stadig nå at få beviset. Afleverer du alligevel, kan teksten ikke længere ændres, og den får ikke mærket.</p>
+        <p class="muted" id="confirm-note">Skriver du videre, kan du stadig nå at få beviset. Afleverer du alligevel, kan teksten ikke længere ændres, og den får ikke mærket.</p>
       </div>
       <p id="confirm-asg" hidden></p>
       <div class="actions"><button class="btn" value="no" id="confirm-no">Annuller</button><button class="btn primary" value="yes" id="confirm-yes">Afslut</button></div>
@@ -88,6 +110,8 @@
     </form>
   </dialog>
 
+  <!-- Fælles dokumentkode (shared/doc.js via npm run sync): øvedokumentet vurderes lokalt med HMDoc.evaluateStats -->
+  <script src="../src/doc.js"></script>
   <script src="write.js"></script>
 </body>
 </html>

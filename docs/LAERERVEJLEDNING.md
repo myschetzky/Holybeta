@@ -33,7 +33,8 @@
 5. Vær ærlig over for eleverne om grænsen: beviset kan ikke se, om en tekst er skrevet af efter en telefon eller et papir.
 6. **Mærket er hverken en anklage eller et frikort.** Manglende mærke er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt. Er du i tvivl, så tag en kort samtale om teksten.
 7. **Tjek beviset via Afleveringer eller ved at uploade Word-filen på tjek-siden** – aldrig kun via linket i filen. Linket viser, at beviset findes; først uploaden viser, at teksten passer.
-8. **Elever med ordblinde-programmer eller andre hjælpemidler** (AppWriter, IntoWords, CD-ORD, diktering): kræv ikke mærket, før det er testet, at hjælpemidlet virker sammen med HolyMoly.
+8. **Elever med ordblinde-programmer eller andre hjælpemidler** (AppWriter, IntoWords, CD-ORD, diktering): klik på eleven og sæt flueben ved **Hjælpemidler: Ordforslag / Diktering**. Så tillader skrivevinduet ordforslag og diktering, og skrivetempoet vurderes ikke. Valget står i elevens logbog – aldrig på mærket eller i Word-filen. Kræv ikke mærket, før det er testet, at hjælpemidlet virker sammen med HolyMoly (`docs/ORDBLINDE-TEST.md`).
+9. **Alle elever** kan bruge stavekontrol (højreklik), **Visning** (større tekst og luftig linjeafstand), Ctrl + for zoom og **Øv dig** (et øvedokument, der aldrig forlader computeren).
 
 ## Beta: regler og nødprocedure
 - **Ikke til prøver eller eksamen i beta.** Brug HolyMoly til almindelige skriveopgaver.

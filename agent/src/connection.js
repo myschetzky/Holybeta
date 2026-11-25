@@ -26,6 +26,7 @@ class Connection extends EventEmitter {
     this.flushTimer = null;
     this.reconnectTimer = null;
     this.rtt = 300;
+    this.lastRecv = 0; // sidste besked fra serveren (skrivevinduets lampe bliver grå efter 15 sek. uden)
   }
 
   wsUrl() {
@@ -109,13 +110,20 @@ class Connection extends EventEmitter {
     this.reconnectTimer = setTimeout(() => this._connect(), delay);
   }
 
+  /** Ping hvert 5. sek. Intet svar i 30 sek. (fx wifi væk uden at forbindelsen lukkes): luk den og forbind igen. */
+  _ping() {
+    if (this.ws && Date.now() - this.lastRecv > 30_000) { try { this.ws.terminate(); } catch (e) { /* */ } return; }
+    this.send({ type: 'ping', t: Date.now() });
+  }
+
   _onMessage(msg) {
+    this.lastRecv = Date.now();
     switch (msg.type) {
       case 'welcome':
         this.backoff = 1000;
         this._setState('online');
         this.flushTimer = setInterval(() => this._flush(), 2000);
-        this.pingTimer = setInterval(() => this.send({ type: 'ping', t: Date.now() }), 15_000);
+        this.pingTimer = setInterval(() => this._ping(), 5_000);
         this._flush();
         break;
       case 'ack': {

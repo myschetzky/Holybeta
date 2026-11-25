@@ -105,6 +105,9 @@ function open(dataDir) {
   if (!scols.has('pin_reset_hash')) db.exec('ALTER TABLE students ADD COLUMN pin_reset_hash TEXT');
   // Forkerte kode-forsøg i alt (efter 10 er koden låst, til læreren nulstiller den)
   if (!scols.has('pin_fails')) db.exec('ALTER TABLE students ADD COLUMN pin_fails INTEGER NOT NULL DEFAULT 0');
+  // Elevens hjælpemidler (JSON-liste: 'ordforslag', 'diktering'), sat af læreren. Kun til skrivevinduet og vurderingen –
+  // aldrig i beviset, mærket eller Word-filen.
+  if (!scols.has('aids')) db.exec('ALTER TABLE students ADD COLUMN aids TEXT');
   // Små indstillinger for serveren (fx lærerkoden i enkel tilstand)
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   // Lektionsrapport: hvornår skiftede elevens lampe farve (kun under lektionen)
@@ -193,6 +196,15 @@ function open(dataDir) {
   if (!lc.has('student_id')) db.exec('ALTER TABLE lessons ADD COLUMN student_id INTEGER');
   // Skrivetime: klassens lektion, hvor eleverne skriver én bestemt aflevering
   if (!lc.has('write_assignment_id')) db.exec('ALTER TABLE lessons ADD COLUMN write_assignment_id INTEGER');
+  // Skriveøkt: hvilken slags række (klasse/hjemme), afleveringen, hvorfor den sluttede ('drop' = forbindelsen blev væk),
+  // og computeren (sha256 af elevens token, 16 tegn), så en afbrudt økt kun kan fortsættes på samme computer
+  if (!lc.has('kind')) {
+    db.exec("ALTER TABLE lessons ADD COLUMN kind TEXT NOT NULL DEFAULT 'klasse'");
+    db.exec("UPDATE lessons SET kind = 'hjemme' WHERE student_id IS NOT NULL");
+  }
+  if (!lc.has('assignment_id')) db.exec('ALTER TABLE lessons ADD COLUMN assignment_id INTEGER');
+  if (!lc.has('end_reason')) db.exec('ALTER TABLE lessons ADD COLUMN end_reason TEXT');
+  if (!lc.has('device_hash')) db.exec('ALTER TABLE lessons ADD COLUMN device_hash TEXT');
   // Ekstra tid: samme lektion (samme id) varer længere for enkelte elever
   db.exec(`CREATE TABLE IF NOT EXISTS lesson_extensions (
     lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
