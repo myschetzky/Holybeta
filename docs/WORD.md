@@ -17,7 +17,22 @@ Når eleven er færdig, trykker hun på **Tekst færdig** i bjælken:
 
 Dokumentet gemmes altid af Word. HolyMoly bekræfter kun.
 
-Mærket hedder `✓ Tastet i Word via HolyMoly – intet indsat · i timen` (eller `· hjemme`). Uden HolyMoly-vagten står der også `· kun Word`, og fra en testserver `· TESTSERVER`.
+Mærket siger kun det, HolyMoly har målt:
+
+- Med talte tastetryk (tastetælleren kørte i hele dokumentet, og tastetrykkene forklarer teksten): `✓ Tastet i Word via HolyMoly – intet indsat · i timen` (eller `· hjemme, uden opsyn`). Beviset har `observed: ['word', 'taster']`.
+- Uden talte tastetryk (ingen tæller, fx blokeret af antivirus, eller et dokument fra en ældre app): `✓ Skrevet i Word via HolyMoly – tekstvækst målt`. HolyMoly så kun, hvordan teksten voksede. Beviset har `observed: ['word']`.
+
+Uden HolyMoly-vagten står der også `· kun Word`, og fra en testserver `· TESTSERVER`. Tjek-siden skriver, at Word er et lavere niveau end skrivevinduet.
+
+## Slået fra i enkel tilstand (BETA_FEATURES=word)
+
+"Skriv i Word" er **slået fra** i enkel tilstand (beta), indtil hele den manuelle testplan nedenfor er kørt på 2-3 af skolens egne Windows-maskiner. Så længe det er fra:
+
+- viser elev-appen ikke "Skriv i Word" (hverken i hovedvinduet, i Min HolyMoly eller i skrivevinduet),
+- bruger "Skriv verificeret aflevering" HolyMolys skrivevindue,
+- afviser serveren Word-gemninger og Word-afleveringer (`source: 'word'`) med "Skriv i Word er slået fra på skolens server. Brug skrivevinduet."
+
+Slå det til med `BETA_FEATURES=word` (sammen med andre funktioner: `BETA_FEATURES=word,liveScreen`) og genstart serveren. Se docs/ENKEL.md. I den fulde udgave (koncept) er det slået til.
 
 ## Sådan virker det
 
@@ -83,7 +98,7 @@ Mens en Word-økt er åben, og Word (eller HolyMolys ramme) er i forgrunden, tø
 
 Word-økten sender tekst-snapshots som almindelige `doc`-gemninger med `source: 'word'` (blokke = afsnit). Derfor gælder serverens vækstbudget, grå/rød-reglerne, AI-fraserne og beviset præcis som i dag. For `source: 'word'`:
 
-- **Med tastetryk (`stats.keys: true`):** `typed − deleted + restored + max(20, 3 %) < tekstens længde` eller `untyped > 0` giver kategorien `indsat` med teksten "Der er kommet tekst i Word, som ikke er tastet (fx indsat, Copilot, diktering eller autotekst)". Er Ctrl+V brugt samtidig, får læreren også den grund. Over 20 injicerede taster giver `tempo` ("Taster sendt af et program"). Tempo-tjekkene (`maxCps`, `burst`, `fastShare`, `regularity`) er de samme som i skrivevinduet; med hjælpemidler er `burst`, `fastShare`, `regularity` og injicerede taster kun noter. `copilot: 'on'` er kun en note. Beviset siger "Teksten passer med tastetrykkene i Word".
+- **Med tastetryk (`stats.keys: true`):** `typed − deleted + restored + max(20, 3 %) < tekstens længde` eller `untyped > 0` giver kategorien `indsat` med teksten "Der er kommet tekst i Word, som ikke er tastet (fx indsat, Copilot, diktering eller autotekst)". Er Ctrl+V brugt samtidig, får læreren også den grund. Over 20 injicerede taster giver `tempo` ("Taster sendt af et program"). Tempo-tjekkene (`maxCps`, `burst`, `fastShare`, `regularity`) er de samme som i skrivevinduet; med diktering er `burst`, `fastShare`, `regularity` og injicerede taster kun noter; med ordforslag kun `burst`. `copilot: 'on'` er kun en note. Beviset siger "Teksten passer med tastetrykkene i Word".
 - **Uden tastetryk (`keys: false` eller intet felt):** tastetryk-tjekkene springes over, `copilot: 'on'` giver afslag, og læreren får noten "Tastetryk kan ikke tælles på denne computer".
 - Appen melder altid `pasteInserted` (spring udefra), `pasteBlocked` (udklipsholderen tømt), `focusLostMs` og `copilot`. `'unknown'` er en note til læreren.
 - `observed` bliver `['word']` (+ `'vagt'`), og `checks` i beviset siger "Skrevet i Word gennem HolyMoly".
@@ -100,7 +115,7 @@ Ved "Tekst færdig" læses teksten fra den .docx, Word lige har gemt (ikke fra W
 - **Taster i Copilot-ruden tæller med.** Ruden ligger i Word-vinduet, så det, eleven taster til Copilot, tæller som tastet. Copilots svar kan derfor "betales" med lige så mange tastetryk i ruden. Det er kun muligt med Copilot slået til; derfor er det stadig bedst, at skolens IT slår Copilot fra.
 - **Words tekstforslag (Text Predictions, accepteres med Tab) og autotekst** giver tekst uden tastetryk og kan gøre muldvarpen rød. Slå "Vis tekstforslag, mens du skriver" fra (*Filer > Indstillinger > Avanceret*).
 - **Erstat alle** (Søg og erstat) med længere ord kan i en kort tekst give mere ny tekst end margenen. Taster i Words dialoger tælles ikke.
-- **Skærmtastatur og hjælpeprogrammer, der sender taster** (fx ordforslag i et ordblindeprogram) tæller som injicerede taster: tekst fra dem er ikke tastet, og over 20 taster giver `tempo` (med hjælpemidler kun en note). Har eleven brug for dem, skal eleven bruge HolyMolys skrivevindue med hjælpemidler.
+- **Skærmtastatur og hjælpeprogrammer, der sender taster** (fx ordforslag i et ordblindeprogram) tæller som injicerede taster: tekst fra dem er ikke tastet, og over 20 taster giver `tempo` (med diktering kun en note). Har eleven brug for dem, skal eleven bruge HolyMolys skrivevindue med hjælpemidler.
 - **Antivirus/EDR:** En lavniveau-tastaturhook fra PowerShell er præcis det, mange antivirusprogrammer leder efter hos keyloggere. Microsoft Defender (AMSI) eller en EDR kan stoppe `keys.ps1` eller advare om den. Så stopper kun tællingen (noten "Tastetryk kan ikke tælles på denne computer"). Skolens IT kan tillade den; HolyMoly skjuler den ikke.
 - **Copilot skal stadig helst slås fra af skolens IT.** HolyMoly kan ikke slå Copilot fra. Med tastetryk fanges brug af Copilot af tastetjekket; uden tastetryk giver Copilot slået til afslag. Se politikkerne nedenfor.
 - **Words egen diktering ("Diktér") og "Omskriv"-forslag (Editor/Copilot):** diktering giver tekst uden tastetryk og gør muldvarpen rød. Begge er forbundne oplevelser, der analyserer indhold, og slås fra med samme politik som Copilot (`usercontentdisabled = 2`).
@@ -133,7 +148,7 @@ Kilder: [Microsoft: Use policy settings to manage privacy controls for Microsoft
 
 ## Udvikling og test
 
-- `npm test` kører alt, der kan testes på Linux: `test/word-session.test.js` (skiltet, tastetjekket og udklipsholderen), `test/word-bridge.test.js` (protokollen med den falske Word og den falske tastetæller som underprocesser, forseglingen, tjek-siden med en Word-lignende .docx og et statisk tjek af hooken i `keys.ps1`), `test/word-server.test.js` (`source: 'word'` i serveren), `test/word-manager.test.js` (hele økten mod en rigtig server), `test/word-frame.test.js` og `test/word-mine.test.js` (rammen og Min HolyMoly tegnet i Chromium, skærmbilleder i `test-results/`), `test/word-app.test.js` (knapperne og koblingen til Electron).
+- `npm test` kører alt, der kan testes på Linux: `test/word-session.test.js` (skiltet, tastetjekket og udklipsholderen), `test/word-bridge.test.js` (protokollen med den falske Word og den falske tastetæller som underprocesser, forseglingen, tjek-siden med en Word-lignende .docx og et statisk tjek af hooken i `keys.ps1`), `test/word-server.test.js` (`source: 'word'` i serveren), `test/word-manager.test.js` (hele økten mod en rigtig server), `test/word-frame.test.js` og `test/word-mine.test.js` (rammen og Min HolyMoly tegnet i Chromium, skærmbilleder i `test-results/`), `test/word-app.test.js` (knapperne og koblingen til Electron), `test/word-graenser.test.js` (grænserne: til serveren går kun samlede tal pr. snapshot – aldrig tastekoder eller tid pr. tast – tælleren kører kun under en Word-økt med Word-vinduet i forgrunden, og skrivelogens uddrag er kun dokumentets egen tekst) og `test/word-flag.test.js` (serverflaget og mærket).
 - Demo uden Word: `HOLYMOLY_WORD_FAKE=1 npm run agent` (kun i en app, der ikke er pakket). Rammen og muldvarpen vises over et tænkt Word-vindue øverst til venstre.
 - `word.ps1` og `keys.ps1` er **ikke kørt** – der er hverken Windows, PowerShell eller Word i udviklingsmiljøet. De er kun tjekket statisk. For `keys.ps1` tjekker testen, at hooken altid kalder `CallNextHookEx`, at der kun tælles, når Word-vinduet er i forgrunden, at tasten kun bruges til kategorien og aldrig gemmes eller sendes, og at kun tællerne sendes.
 

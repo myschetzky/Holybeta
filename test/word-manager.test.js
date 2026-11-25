@@ -125,7 +125,7 @@ test('Word-økt: skriv -> Tekst færdig -> bevis -> forseglet fil, som tjek-side
   // Den forseglede fil: sidefod med mærket, koden og tjek-linket, læsebeskyttet, og brødteksten passer til beviset
   assert.ok(r.fake.sealed.footerLines[1].startsWith('HolyMoly HM-' + res.certId.slice(0, 8).toUpperCase() + '  ·  Tjek: https://holymoly.test/bevis/' + res.certId));
   const cert = await r.call('GET', '/api/bevis/' + res.certId);
-  assert.deepStrictEqual(cert.payload.observed, ['word']);
+  assert.deepStrictEqual(cert.payload.observed, ['word', 'taster'], 'tastetrykkene er talt');
   const bytes = fs.readFileSync(res.path);
   const ver = await S.verifySealed(bytes, cert.payload.sha256);
   assert.deepStrictEqual([ver.ok, ver.protected], [true, true]);
@@ -218,11 +218,11 @@ function local(t, opts = {}) {
 test('uden Word eller uden Windows: en klar besked, og intet startes', async (t) => {
   const { WordBridge } = require('../agent/src/word/bridge.js');
   let l = local(t, { bridge: new WordBridge({ platform: 'darwin' }) });
-  assert.deepStrictEqual(await l.mgr.info(), { supported: false, word: false, available: false });
+  assert.deepStrictEqual(await l.mgr.info(), { supported: false, word: false, allowed: true, available: false });
   assert.strictEqual((await l.mgr.start({})).error, 'Skriv i Word findes kun på Windows');
   l = local(t, { bridge: new FakeWordBridge({ word: false }) });
   assert.strictEqual((await l.mgr.start({})).error, 'Word findes ikke på computeren');
-  assert.deepStrictEqual(await l.mgr.info(), { supported: true, word: false, available: false });
+  assert.deepStrictEqual(await l.mgr.info(), { supported: true, word: false, allowed: true, available: false });
 });
 
 test('serveren får Word-teksten som afsnit med source: word og stats uden tekst; Word gemmer selv hvert minut', async (t) => {

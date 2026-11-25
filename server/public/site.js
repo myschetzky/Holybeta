@@ -120,6 +120,24 @@
     }
     const drift = op ? (op.handedOver ? 'Skolens IT' : op.dba ? 'Databehandleraftale' : '') : '';
     set(list.querySelector('[data-key="DRIFT"]'), !!drift, drift);
+    // Låst konfiguration: ændret siden skolens ja (DPIA)?
+    const changed = Array.isArray(info.configChanged) ? info.configChanged : [];
+    const ja = !missing.size;
+    set(list.querySelector('[data-key="KONFIG"]'), ja && !changed.length, !ja ? 'Venter på skolens ja' : changed.length ? 'Ændret siden DPIA: ' + changed.map(k => FEATURE_NAME[k] || k).join(', ') : 'Uændret');
+  }
+
+  /* ---------- funktionerne, der er slået til på denne server (/privatliv og /vilkaar-elev) ---------- */
+  const FEATURE_NAME = { liveScreen: 'live-skærm', screenshot: 'skærmbilleder ved klik', autoEvidence: 'automatiske skærmbilleder ved forbudt brug', similar: 'lighedstjek mellem elever', word: 'Skriv i Word', hand: 'ræk hånden op', writeLesson: 'skrivetime' };
+  const OPTIONAL = ['liveScreen', 'screenshot', 'autoEvidence', 'similar', 'word'];
+  function fillFeatures(f) {
+    if (!f) return;
+    for (const e of document.querySelectorAll('[data-feature]')) if (f[e.dataset.feature] === false) e.hidden = true;
+    const on = OPTIONAL.filter(k => f[k]).map(k => FEATURE_NAME[k]);
+    const off = OPTIONAL.filter(k => f[k] === false).map(k => FEATURE_NAME[k]);
+    for (const e of document.querySelectorAll('[data-features]')) {
+      e.textContent = 'På denne server er slået til: ' + (on.length ? on.join(', ') : 'ingen af de valgfri funktioner') + '.' + (off.length ? ' Slået fra: ' + off.join(', ') + '.' : '');
+      e.hidden = false;
+    }
   }
 
   /* ---------- links: opret / log ind / demo / kontakt ---------- */
@@ -202,7 +220,7 @@
       // Enkel tilstand: beta-topbar og -footer på alle sider, og ingen priser
       if (i.simple && !beta) { beta = true; betaChrome(); }
       if (!i.simple) fetch('/api/pricing').then(r => r.json()).then(applyPricing).catch(() => {});
-      applyCompany(i.company); wireLinks(i); fillDownloads(i); fillApproval(i); fillRetention(i.retention); fillBeta(i);
+      applyCompany(i.company); wireLinks(i); fillDownloads(i); fillApproval(i); fillRetention(i.retention); fillBeta(i); fillFeatures(i.features);
     }).catch(() => fillDownloads(null));
   }
 })();

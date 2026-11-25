@@ -36,7 +36,7 @@
 5. Vær ærlig over for eleverne om grænsen: beviset kan ikke se, om en tekst er skrevet af efter en telefon eller et papir.
 6. **Mærket er hverken en anklage eller et frikort.** Manglende mærke er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt. Er du i tvivl, så tag en kort samtale om teksten.
 7. **Tjek beviset via Afleveringer eller ved at uploade Word-filen på tjek-siden** – aldrig kun via linket i filen. Linket viser, at beviset findes; først uploaden viser, at teksten passer. Har du mange filer (fx zip-filen fra Lectio), så åbn `/bevis` og træk dem alle ind på én gang. Siden viser én tabel med mærke, om teksten passer, og om beviset er udstedt af denne server.
-8. **Elever med ordblinde-programmer eller andre hjælpemidler** (AppWriter, IntoWords, CD-ORD, diktering): klik på eleven og sæt flueben ved **Hjælpemidler: Ordforslag / Diktering**. Så tillader skrivevinduet ordforslag og diktering, og skrivetempoet vurderes ikke. Valget står i elevens logbog – aldrig på mærket eller i Word-filen. Kræv ikke mærket, før det er testet, at hjælpemidlet virker sammen med HolyMoly (`docs/ORDBLINDE-TEST.md`).
+8. **Elever med ordblinde-programmer eller andre hjælpemidler** (AppWriter, IntoWords, CD-ORD, diktering): klik på eleven, tryk **Hjælpemidler** (ved siden af **+ tid**) og sæt flueben ved **Ordforslag** og/eller **Diktering**. Så tillader skrivevinduet ordforslag og diktering, og eleven kan se dem nederst i skrivevinduet. Med diktering vurderes skrivetempoet ikke; med ordforslag gælder tjekket for maskinelt tempo stadig. Valget står i revisionssporet og gælder til skoleårets slutning – aldrig på mærket eller i Word-filen. Kræv ikke mærket, før det er testet, at hjælpemidlet virker sammen med HolyMoly (`docs/ORDBLINDE-TEST.md`).
 9. **Alle elever** kan bruge stavekontrol (højreklik), **Visning** (større tekst og luftig linjeafstand), Ctrl + for zoom og **Øv dig** (et øvedokument, der aldrig forlader computeren).
 
 ## Beta: regler og nødprocedure
@@ -46,6 +46,8 @@
 
 ## Skrivetime og ekstra tid
 - **Skrivetime**: vælg en opgave under "Skal eleverne skrive en opgave?", når du starter lektionen. Knappen hedder så **Start skrivetime**. Elevernes app åbner opgaven i skrivevinduet (deres kladde, hvis de har en), og teksten afleveres til opgaven, når eleven trykker "Afslut dokument". Det er en almindelig lektion: mærket siger "i timen".
+- **Uden HolyMoly (andet udstyr)**: har en elev en Mac, Chromebook, iPad eller Linux, så klik på eleven → **Uden HolyMoly (andet udstyr)**. Eleven vises neutralt i stedet for gråt og tæller ikke med i grå minutter. Aftal en anden skriveform; der udstedes intet bevis. Det virker kun, mens eleven ikke er forbundet, og det står i revisionssporet.
+- **Var det forkert?**: ved en rød lampe (i elevskuffen) og ved et afslag på mærket (i dokumentet). Det gemmes uden navn og bruges kun til at måle falske røde lamper i piloten.
 - **Ekstra tid** (fx ordblinde): klik på eleven → **+ tid** → +10, +15 eller +30 min. Det er den samme lektion, bare længere for eleven. Når du afslutter lektionen, kan du vælge **Afslut, men lad dem skrive færdig** eller **Afslut for alle**. Kun du ser den ekstra tid – den står ikke i rapporten, på beviset eller i Word-filen.
 
 ## Tips

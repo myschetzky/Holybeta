@@ -124,6 +124,8 @@ const state = {
   pendingApp: null,
   monitorBroken: false,
   error: '',
+  // "Skriv i Word": skjult, indtil serveren har sagt ja (welcome.features.word)
+  wordAllowed: false,
 };
 
 let win = null;
@@ -151,6 +153,10 @@ let captureTimer = null;
 /** Det eleven skal ordne, før HolyMoly virker (vises som en kort tjekliste). */
 function computeNeeds() {
   const needs = [];
+  // Skolen har slået noget nyt til siden elevens accept (serverens configlock.js): læs vilkårene igen og bekræft
+  if (state.termsChanged) {
+    needs.push({ id: 'terms', text: 'Vilkårene er ændret: skolen har slået noget nyt til. Læs dem, og bekræft.', actions: [{ id: 'terms', label: 'Læs vilkårene' }, { id: 'terms:accept', label: 'Jeg har læst dem' }] });
+  }
   if (state.updateRequired) {
     needs.push({ id: 'update', text: 'HolyMoly skal opdateres', actions: state.downloadUrl ? [{ id: 'download', label: 'Hent opdatering' }] : [] });
   }
@@ -218,8 +224,8 @@ function uiState() {
     links: live ? linksOf(state.lesson).map(l => ({ title: l.title, host: hostOf(l.url) })) : [],
     // Afleveringer fra læreren, som eleven mangler at aflevere
     assignmentsOpen: writer ? writer.openCount() : 0,
-    // "Skriv i Word": kun når broen siger supported og Word findes
-    word: !!state.wordAvailable,
+    // "Skriv i Word": kun når broen siger supported, Word findes og skolens server tillader det (welcome.features.word)
+    word: !!state.wordAvailable && !!state.wordAllowed,
   };
 }
 function linksOf(lesson) {
@@ -635,6 +641,10 @@ function startConnection() {
         if (msg.guardPair && Object.keys(msg.guardPair).length) guard.writePairRequest(msg.guardPair);
         state.downloadUrl = /^https:\/\//.test(String(msg.downloadUrl || '')) ? msg.downloadUrl : '';
         state.minExtensionVersion = String(msg.minExtensionVersion || '');
+        // Ændrede vilkår siden elevens accept (kun enkel tilstand)
+        state.termsChanged = (msg.enrollments || []).some(en => en && en.termsChanged === true);
+        // "Skriv i Word" kun, når serveren tillader det. En ældre server uden features kender ikke flaget.
+        state.wordAllowed = !msg.features || msg.features.word !== false;
         // Opdatér navne hvis læreren har omdøbt
         for (const en of msg.enrollments || []) {
           const e = state.data.enrollments.find(x => x.studentId === en.studentId);
@@ -891,7 +901,7 @@ async function enrollWith(code, extra) {
 ipcMain.handle('action', (_e, id) => {
   if (id === 'write') { if (writer) writer.open(); return; }
   if (id === 'assignments') { showAssignmentsPage(); return; }
-  if (id === 'word') return word ? word.manager.start({}) : { ok: false, error: 'Skriv i Word er ikke klar' };
+  if (id === 'word') return word && state.wordAllowed ? word.manager.start({}) : { ok: false, error: 'Skriv i Word er ikke klar' };
   if (id === 'mine') { if (word) word.mine.open(); return; }
   if (id === 'hand') { setHand(!state.hand); return; }
   // Lektionens links: kun de links læreren har lagt ind for den igangværende lektion
@@ -905,6 +915,12 @@ ipcMain.handle('action', (_e, id) => {
   const open = (u) => { if (u && /^https:\/\//.test(u)) shell.openExternal(u); };
   const panes = { 'mac:screen': 'Privacy_ScreenCapture', 'mac:accessibility': 'Privacy_Accessibility', 'mac:automation': 'Privacy_Automation' };
   if (id === 'terms') { if (serverUrlOk(SERVER_URL)) shell.openExternal(new URL('/vilkaar-elev', SERVER_URL).toString()).catch(() => {}); return; }
+  if (id === 'terms:accept') {
+    if (!conn || !conn.send({ type: 'accept-terms' })) return { ok: false, error: 'Ingen forbindelse til serveren' };
+    state.termsChanged = false;
+    pushUi();
+    return { ok: true };
+  }
   if (id === 'download') open(state.downloadUrl);
   else if (id === 'mac:filter' && macFilter && !state.filterBusy) activateFilter();
   else if (id === 'mac:extensions' && process.platform === 'darwin') shell.openExternal('x-apple.systempreferences:com.apple.LoginItems-Settings.extension');
@@ -1011,7 +1027,7 @@ app.whenReady().then(async () => {
   // "Skriv i Word" (Windows): samme forbindelse og lektion som skrivevinduet
   word = createWordMode({
     send: (m) => !!(conn && conn.send(m)), lessonActive, online: () => !!(conn && conn.online),
-    serverUrl: () => SERVER_URL, writer: () => writer,
+    serverUrl: () => SERVER_URL, writer: () => writer, allowed: () => !!state.wordAllowed,
   });
   // Afleveringssiden (verified.js): Word-dokumenter står også under "Verificerede afleveringer" og kan vedhæftes med "Aflever"
   if (writer) {

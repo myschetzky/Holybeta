@@ -1,6 +1,6 @@
 'use strict';
 // "Skriv i Word": serveren behandler Word-gemninger (source: 'word') med samme pipeline som skrivevinduet.
-// Tastetryk-tjek springes over, observed bliver ['word'] (+ 'vagt'), og mærket hedder "Tastet i Word via HolyMoly".
+// Uden talte tastetryk springes tastetjekket over, observed bliver ['word'] (+ 'vagt'), og mærket hedder "Skrevet i Word via HolyMoly – tekstvækst målt".
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -56,7 +56,7 @@ test('Word: et ærligt skriveforløb uden tastestatistik giver et bevis med obse
     assert.strictEqual(c.payload.checks[0], 'Skrevet i Word gennem HolyMoly – ingen tekst indsat fra andre programmer');
     assert.ok(c.payload.checks.includes('Teksten voksede i et menneskeligt tempo'));
     assert.strictEqual(c.payload.sha256, crypto.createHash('sha256').update(D.normalizeText(text), 'utf8').digest('hex'));
-    assert.strictEqual(D.label(r.facts.place, { observed: r.observed }), '✓ Tastet i Word via HolyMoly – intet indsat · i timen · kun Word');
+    assert.strictEqual(D.label(r.facts.place, { observed: r.observed }), '✓ Skrevet i Word via HolyMoly – tekstvækst målt · i timen · kun Word');
     assert.strictEqual(docs.full(id).source, 'word');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -67,7 +67,7 @@ test('Word: med vagten bliver observed ["word", "vagt"], og mærket er grønt', 
     const { id, t } = writeWord(docs, anna, SENT.repeat(9).trim());
     const r = docs.submit(anna, id, Object.assign({ observed: ['skrivevindue', 'vagt'] }, meta), t + 1000);
     assert.deepStrictEqual(r.observed, ['word', 'vagt']);
-    assert.strictEqual(D.label('hjemme', { observed: r.observed }), '✓ Tastet i Word via HolyMoly – intet indsat · hjemme, uden opsyn');
+    assert.strictEqual(D.label('hjemme', { observed: r.observed }), '✓ Skrevet i Word via HolyMoly – tekstvækst målt · hjemme, uden opsyn');
     assert.strictEqual(D.markGreen({ observed: r.observed }), true);
     assert.ok(docs.certificate(r.certId).payload.checks.includes('HolyMoly-vagten blokerede AI på computeren'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -193,7 +193,7 @@ test('Word: hele vejen gennem serveren (doc med source word -> doc-submit -> bev
     const at = await wait(m => m.type === 'assignment-result');
     assert.strictEqual(at.ok, true, at.error);
     const alerts = await call('GET', `/api/students/${en.studentId}/events?kind=alerts&limit=10&before=${Date.now() + 1000}`);
-    assert.match(alerts.events.map(e => e.title).join(), /Tastet i Word via HolyMoly/);
+    assert.match(alerts.events.map(e => e.title).join(), /Skrevet i Word via HolyMoly/);
     ag.close();
   } finally {
     await srv.close();
@@ -202,12 +202,13 @@ test('Word: hele vejen gennem serveren (doc med source word -> doc-submit -> bev
 });
 
 test('mærket og sidefoden: Word-mærket, "kun Word" og de samme sidefodslinjer i toDocx', () => {
-  assert.strictEqual(D.label('lektion', { observed: ['word', 'vagt'] }), '✓ Tastet i Word via HolyMoly – intet indsat · i timen');
+  assert.strictEqual(D.label('lektion', { observed: ['word', 'taster', 'vagt'] }), '✓ Tastet i Word via HolyMoly – intet indsat · i timen');
+  assert.strictEqual(D.label('lektion', { observed: ['word', 'vagt'] }), '✓ Skrevet i Word via HolyMoly – tekstvækst målt · i timen');
   assert.strictEqual(D.label('lektion', { observed: ['skrivevindue'] }), '✓ Tastet i HolyMoly – intet indsat · i timen · kun skrivevinduet');
   const mark = { code: 'HM-ABCD1234', url: 'https://holymoly.test/bevis/abcd', place: 'lektion', observed: ['word'], test: true };
   let lines = D.footerLines(mark, 120);
   assert.deepStrictEqual(lines, [
-    '✓ Tastet i Word via HolyMoly – intet indsat · i timen · kun Word · TESTSERVER',
+    '✓ Skrevet i Word via HolyMoly – tekstvækst målt · i timen · kun Word · TESTSERVER',
     'HolyMoly HM-ABCD1234  ·  Tjek: https://holymoly.test/bevis/abcd',
     D.LIMIT_TEXT + ' 120 ord.',
     D.TEST_TEXT,
@@ -276,14 +277,16 @@ test('Word med tastetryk: Ctrl+V og et spring, der ikke er tastet, giver "indsat
   assert.deepStrictEqual(r.found, []);
 });
 
-test('Word med tastetryk: taster sendt af et program (injected) giver "tempo" – med hjælpemidler kun en note', () => {
+test('Word med tastetryk: taster sendt af et program (injected) giver "tempo" – med diktering kun en note', () => {
   const text = SENT.repeat(9).trim();
   const len = D.normalizeText(text).length;
   let r = D.evaluateStats(text, keyStats(len, { injected: 21 }), { word: true, minWords: 5 });
   assert.deepStrictEqual(r.cats, ['tempo']);
   assert.ok(r.reasons.some(x => /^Taster sendt af et program/.test(x)));
   assert.deepStrictEqual(D.evaluateStats(text, keyStats(len, { injected: 20 }), { word: true, minWords: 5 }).found, []);
-  r = D.evaluateStats(text, keyStats(len, { injected: 400 }), { word: true, minWords: 5, aids: ['ordforslag'] });
+  // Ordforslag bevarer autotyper-tjekket – kun diktering gør det til en note
+  assert.deepStrictEqual(D.evaluateStats(text, keyStats(len, { injected: 400 }), { word: true, minWords: 5, aids: ['ordforslag'] }).cats, ['tempo']);
+  r = D.evaluateStats(text, keyStats(len, { injected: 400 }), { word: true, minWords: 5, aids: ['diktering'] });
   assert.deepStrictEqual(r.found, []);
   assert.ok(r.notes.some(x => /Taster sendt af et program.*hjælpemidler/.test(x)), r.notes.join());
   // Samme tempo-tjek som skrivevinduet

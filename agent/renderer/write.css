@@ -44,6 +44,7 @@ dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top
 .why { color: var(--red); }
 .why li, .notes li { margin: 3px 0; }
 .notes { color: var(--muted); font-size: 13px; }
+.aids { white-space: nowrap; }
 .preview { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .why-list li { margin: 3px 0; }
 

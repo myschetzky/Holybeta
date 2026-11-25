@@ -119,7 +119,7 @@ test('tjek-siden kan tjekke den forseglede fil: Word-lignende .docx med deflate,
 });
 
 test('footerFor: samme linjer som HolyMolys egen Word-fil, grøn kun med vagten og uden testserver', () => {
-  const res = { certId: 'abcdefghijklmnop', facts: { place: 'lektion' }, observed: ['word', 'vagt'], test: false };
+  const res = { certId: 'abcdefghijklmnop', facts: { place: 'lektion' }, observed: ['word', 'taster', 'vagt'], test: false };
   const f = S.footerFor(res, 'https://holymoly.test/bevis/abcdefghijklmnop', 250);
   assert.deepStrictEqual(f.lines, [
     '✓ Tastet i Word via HolyMoly – intet indsat · i timen',

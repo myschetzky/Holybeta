@@ -99,6 +99,8 @@ function open(dataDir) {
   if (!scols.has('pin_hash')) db.exec('ALTER TABLE students ADD COLUMN pin_hash TEXT');
   // Hvornår eleven accepterede vilkårene for elever i appen (enkel tilstand)
   if (!scols.has('terms_accepted')) db.exec('ALTER TABLE students ADD COLUMN terms_accepted INTEGER');
+  // Hash af de funktioner, der var slået til, da eleven accepterede (configlock.js): ændres de, skal eleven acceptere igen
+  if (!scols.has('terms_features')) db.exec('ALTER TABLE students ADD COLUMN terms_features TEXT');
   // Læreren har nulstillet elevens kode: engangskoden gælder indtil dette tidspunkt
   if (!scols.has('pin_reset_until')) db.exec('ALTER TABLE students ADD COLUMN pin_reset_until INTEGER');
   // Nulstillet kode: engangskoden fra læreren (scrypt-hash), som eleven skriver i appen inden pin_reset_until
@@ -108,6 +110,13 @@ function open(dataDir) {
   // Elevens hjælpemidler (JSON-liste: 'ordforslag', 'diktering'), sat af læreren. Kun til skrivevinduet og vurderingen –
   // aldrig i beviset, mærket eller Word-filen.
   if (!scols.has('aids')) db.exec('ALTER TABLE students ADD COLUMN aids TEXT');
+  // "Uden HolyMoly (andet udstyr)": læreren har markeret eleven (tidspunkt). Virker kun, mens eleven ikke er forbundet.
+  if (!scols.has('other_device')) db.exec('ALTER TABLE students ADD COLUMN other_device INTEGER');
+  // Hjælpemidlerne udløber ved skoleårets slutning (læreren sætter dem igen næste skoleår). Ældre rækker: dette skoleår.
+  if (!scols.has('aids_until')) {
+    db.exec('ALTER TABLE students ADD COLUMN aids_until INTEGER');
+    db.prepare('UPDATE students SET aids_until = ? WHERE aids IS NOT NULL').run(schoolYearEnd());
+  }
   // Små indstillinger for serveren (fx lærerkoden i enkel tilstand)
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
   // Lektionsrapport: hvornår skiftede elevens lampe farve (kun under lektionen)
@@ -293,4 +302,17 @@ function open(dataDir) {
   return db;
 }
 
-module.exports = { open };
+/** Skoleårets slutning efter now: 1. august kl. 00 (dansk sommertid). August-december: næste år. */
+function schoolYearEnd(now = Date.now()) {
+  const d = new Date(now);
+  const y = d.getUTCMonth() >= 7 ? d.getUTCFullYear() + 1 : d.getUTCFullYear();
+  return Date.UTC(y, 6, 31, 22, 0, 0);
+}
+/** Elevens hjælpemidler fra en students-række (aids, aids_until) – tom liste, når de er udløbet. Ukendte værdier fjernes ikke her. */
+function activeAids(row, now = Date.now()) {
+  if (!row || !row.aids) return [];
+  if (row.aids_until != null && Number(row.aids_until) <= now) return [];
+  try { const v = JSON.parse(row.aids); return Array.isArray(v) ? v.map(String).slice(0, 10) : []; } catch (e) { return []; }
+}
+
+module.exports = { open, schoolYearEnd, activeAids };

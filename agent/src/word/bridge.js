@@ -30,7 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
-const { powershellKeys } = require('./keys.js');
+const { powershellKeys, cleanKeys } = require('./keys.js');
 
 /** JSON uden andre tegn end ASCII. */
 function asciiJson(o) {
@@ -162,7 +162,7 @@ class WordBridge extends EventEmitter {
       // Tællerne læses EFTER teksten: hooken tæller en tast, før Word får den, så teksten kan aldrig være foran tællerne
       const k = this.keys ? await this.keys.get(r.hwnd) : null;
       if (k !== undefined) r.keys = k;
-    }
+    } else if (r.ok && r.keys != null) r.keys = cleanKeys(r.keys); // en anden Word-proces: også kun de kendte tal
     delete r.hwnd;
     return r;
   }

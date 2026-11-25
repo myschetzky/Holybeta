@@ -22,12 +22,13 @@
  * lampen (rød/grå) og AI-fraserne gælder som i skrivevinduet. Kan appen tælle tastetryk i Word-vinduet (stats.keys),
  * gælder tastetjekkene også – med en margin til autokorrektur (shared/doc.js evaluateStats). Ellers springes de over,
  * og Copilot slået til giver afslag. Appen melder selv tekst indsat fra et andet program (pasteInserted).
- * Beviset siger observed: ['word'] (+ 'vagt').
+ * Beviset siger observed: ['word'] (+ 'taster', når tastetrykkene er talt, + 'vagt').
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const D = require('../../shared/doc.js');
+const KR = require('./keyring');
 const RET = require('./retention.js');
 
 const ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
@@ -247,7 +248,8 @@ class DocStore {
     this.privateKey = crypto.createPrivateKey(fs.readFileSync(keyPath));
     this.publicKey = crypto.createPublicKey(this.privateKey);
     this.publicPem = this.publicKey.export({ type: 'spki', format: 'pem' });
-    this.keyId = crypto.createHash('sha256').update(this.publicKey.export({ type: 'spki', format: 'der' })).digest('hex').slice(0, 16);
+    // Nøgleringen (trusted_keys): den aktive nøgle står der; gamle nøgler kan kun verificere (server/src/keyring.js)
+    this.keyId = KR.registerActive(db, this.publicKey);
     this.q = {
       get: db.prepare('SELECT * FROM documents WHERE id = ?'),
       ins: db.prepare('INSERT INTO documents (id, student_id, class_id, title, blocks, text, stats, monitor, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?)'),
@@ -769,17 +771,20 @@ class DocStore {
   /** Elevens hjælpemidler (students.aids, sat af læreren). Kun til vurderingen – aldrig i beviset. */
   aidsOf(studentId) {
     try {
-      const r = this.db.prepare('SELECT aids FROM students WHERE id = ?').get(Number(studentId));
-      return D.cleanAids(r && r.aids ? JSON.parse(r.aids) : []);
+      const r = this.db.prepare('SELECT * FROM students WHERE id = ?').get(Number(studentId));
+      return D.cleanAids(require('./db').activeAids(r));
     } catch (e) { return []; }
   }
 
   /**
    * Hvad HolyMoly målte (v3): altid skrivevinduet (eller 'word' for et dokument skrevet i Word), og vagten kun hvis klassen kræver den (hub.policyFor)
    * og vagten fulgte hele forløbet (ingen grå tid, fordi vagten manglede, ikke svarede eller havde en fejl).
+   * Word: 'taster', når elev-appen talte tastetrykkene i hele dokumentet (stats.keys) – kun så siger mærket "Tastet i Word".
    */
   _observed(row, observed) {
-    const out = [JSON.parse(row.monitor).source === 'word' ? 'word' : 'skrivevindue'];
+    const word = JSON.parse(row.monitor).source === 'word';
+    const out = [word ? 'word' : 'skrivevindue'];
+    if (word) { try { if (JSON.parse(row.stats || '{}').keys === true) out.push('taster'); } catch (e) { /* */ } }
     if (Array.isArray(observed) && observed.includes('vagt')) {
       const m = JSON.parse(row.monitor);
       const gone = (m.grey || []).some(g => /vagten (er ikke tilknyttet|findes ikke|svarer ikke|har en fejl)/i.test(g));
@@ -810,7 +815,8 @@ class DocStore {
     const place = where.home ? (where.lesson ? 'lektion og hjemme' : 'hjemme') : 'lektion';
     ev.facts.place = place;
     // Kun til læreren (documents.result) – aldrig i beviset
-    if (aids.length && JSON.parse(row.monitor).source !== 'word' && !ev.notes.includes(TEMPO_NOT_ASSESSED)) ev.notes.push(TEMPO_NOT_ASSESSED);
+    // Kun diktering lemper tempo-tjekket (ordforslag kun byger – se D.evaluateStats)
+    if (aids.includes('diktering') && JSON.parse(row.monitor).source !== 'word' && !ev.notes.includes(TEMPO_NOT_ASSESSED)) ev.notes.push(TEMPO_NOT_ASSESSED);
     if (!ev.ok && !meta.force) {
       return {
         ok: false, confirm: true, reasons: ev.reasons, notes: ev.notes, categories: ev.categories,
@@ -821,6 +827,8 @@ class DocStore {
     const observed = this._observed(this.q.get.get(row.id), meta.observed);
     const test = this.testServer;
     let cert = null;
+    // Kun den aktive nøgle må signere: efter et nøgleskifte (npm run enkel -- ny-noegle) skal serveren genstartes først
+    if (ev.ok && !KR.canSign(this.db, this.keyId)) return { ok: false, error: 'Signeringsnøglen er skiftet. Serveren skal genstartes, før der kan udstedes beviser.' };
     if (ev.ok) {
       const certId = crypto.randomBytes(12).toString('base64url');
       const issuer = this.testServer ? (meta.issuer ? `${meta.issuer} (${TEST_ISSUER})` : TEST_ISSUER) : String(meta.issuer || '');
@@ -899,6 +907,8 @@ class DocStore {
       id: r.id, studentId: r.student_id, title: r.title, blocks: JSON.parse(r.blocks), words: D.wordCount(r.text),
       created: r.created, updated: r.updated, submitted: r.submitted, certId: r.cert_id,
       reasons: res ? res.reasons : live.reasons, notes: res ? res.notes : live.notes, facts: res ? res.facts : live.facts,
+      // Årsagskoderne til et afslag (til "Var det forkert?")
+      categories: (res ? res.categories || [] : live.categories || []).map(c => c.key),
       place: res && res.facts ? res.facts.place : undefined,
       // Mærket (v3): hvad der blev målt, og om beviset er fra en testserver. Ældre afleveringer har ikke observed.
       kind: res ? res.kind : undefined, observed: res && Array.isArray(res.observed) ? res.observed : undefined,
@@ -917,12 +927,14 @@ class DocStore {
     if (!c) return null;
     // Udløbet efter fristen (retention.js): id'et er udstedt her, men beviset findes ikke længere
     if (c.expired) return { expired: c.expired, created: c.created };
-    const valid = crypto.verify(null, Buffer.from(c.payload), this.publicKey, Buffer.from(c.sig, 'base64'));
     let p = {};
     try { p = JSON.parse(c.payload); } catch (e) { /* ødelagt: ugyldig */ }
+    // Nøglen for beviset (keyId) fra nøgleringen – også efter et nøgleskifte. Udstedt uden for nøglens gyldighed: ugyldigt.
+    const vr = KR.verify(this.db, c.payload, c.sig, p, c.created);
+    const valid = vr.valid;
     const docDeleted = c.doc_deleted || null; // gravsten: teksten er slettet efter skolens frist
     if (p.v !== 2 && p.v !== 3) return Object.assign({ v: Number(p.v) || 1, legacy: true, valid, submitted: Number(p.submitted) || c.created }, docDeleted ? { docDeleted } : {});
-    return { v: p.v, payload: p, signed: c.payload, sig: c.sig, publicKey: this.publicPem, valid, docDeleted };
+    return { v: p.v, payload: p, signed: c.payload, sig: c.sig, publicKey: vr.key ? vr.key.pem : this.publicPem, valid, docDeleted };
   }
 
   /**
@@ -937,9 +949,9 @@ class DocStore {
     for (const sha of list) {
       for (const c of q.all(sha)) {
         if (c.expired) continue;
-        if (!crypto.verify(null, Buffer.from(c.payload), this.publicKey, Buffer.from(c.sig, 'base64'))) continue;
         let p = {};
         try { p = JSON.parse(c.payload); } catch (e) { continue; }
+        if (!KR.verify(this.db, c.payload, c.sig, p, c.created).valid) continue;
         if (p.v !== 3 && p.v !== 2) continue;
         const submitted = Number(p.submitted) || c.created;
         out.push({

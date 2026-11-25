@@ -71,6 +71,15 @@ I enkel tilstand kan der først startes lektioner og skriveøkter, når skolens 
 
 Felterne vises på privatlivssiden, så elever og forældre kan se, hvem der er ansvarlig.
 
+### Låst konfiguration
+
+Når skolens ja er udfyldt, gemmer serveren et fingeraftryk af det, skolen sagde ja til: hvilke funktioner der er slået til (`BETA_FEATURES`, også "Skriv i Word"), fristerne, `REQUIRE_GUARD` og signeringsnøglens keyId. Ingen hemmeligheder.
+
+- Ændres noget bagefter, står der "ændret siden DPIA: …" i startlinjen i loggen, på `/healthz?deep=1` (svarer 503) og i tjeklisten på beta-forsiden.
+- Nye lektioner og skriveøkter blokeres **kun**, når en overvågningsfunktion er slået til siden (live-skærm, skærmbilleder, automatiske skærmbilleder, lighedstjek eller Skriv i Word). Ændrede frister blokerer aldrig, og en lektion, der er i gang, stoppes aldrig.
+- Få skolens ja til ændringen, og kør `npm run enkel -- bekraeft-ja` med samme miljø som serveren (i Docker: `docker compose exec holymoly node /app/scripts/enkel.js bekraeft-ja`). Det står i revisionssporet. Nye datoer i `DPIA_DATO` eller `LEDELSE_JA_DATO` er et nyt ja og registrerer konfigurationen igen.
+- Eleverne har accepteret vilkårene med de funktioner, der var slået til. Ændres funktionerne, beder elev-appen eleven om at læse vilkårene igen og trykke "Jeg har læst dem". `/privatliv` og `/vilkaar-elev` viser, hvad der er slået til på serveren.
+
 ## Testserver eller skolens server
 
 Den, der driver serveren, har signeringsnøglen og kan læse alle elevdata. Kører serveren hos en elev eller privatperson, er det en **testserver**, og beviserne siger "Testserver – må ikke bruges til bedømmelse". Når skolens IT driver serveren og ejer nøglen, sættes `SCHOOL_OPERATED=1`.
@@ -81,7 +90,17 @@ Lektioner kræver også, at driften er på plads. Enten er der en databehandlera
 | --- | --- |
 | `DBA_DATO` | 2026-11-20 |
 | `DRIFTSANSVARLIG` | en lærer på skolen (en rolle, ikke et navn – står på forsiden) |
-| `BETA_FEATURES` | tom. Beta har ingen live-skærm, ingen skærmbilleder og intet lighedstjek. `liveScreen,screenshot` slår dem til |
+| `BETA_FEATURES` | tom. Beta har ingen live-skærm, ingen skærmbilleder, intet lighedstjek og ingen "Skriv i Word". `liveScreen,screenshot` slår dem til |
+
+### Skriv i Word slås til
+
+"Skriv i Word" er slået fra i beta. Elev-appen viser ikke knappen, og serveren afviser Word-gemninger. Slå det først til, når hele den manuelle testplan i docs/WORD.md er kørt og bestået på 2-3 af skolens egne Windows-maskiner med Word:
+
+1. Kør testplanen i docs/WORD.md ("Manuel testplan"). Notér resultatet af hvert trin.
+2. Sæt `BETA_FEATURES=word` i `.env` (flere funktioner adskilles med komma, fx `word,liveScreen`).
+3. Genstart serveren (`docker compose up -d`). Elev-appen viser "Skriv i Word", næste gang den forbinder.
+
+Slå det fra igen ved at fjerne `word`. Påbegyndte Word-dokumenter kan så ikke afleveres med mærke; eleven skriver videre i skrivevinduet.
 
 Forsiden i enkel tilstand er beta-forsiden: ingen priser, ingen prøveperiode og ingen Unilogin. Den viser, hvem der driver serveren, tjeklisten "Skolens ja" og nødproceduren.
 
@@ -93,7 +112,8 @@ Elevernes accept dækker informationen til eleverne. Den erstatter ikke skolens 
 
 HolyMoly bruger SQLite: én fil, `holymoly.db`, i datamappen. Der er ingen separat databaseserver at installere eller passe.
 
-- Hver nat laves en hel kopi i `backup/holymoly-ÅÅÅÅ-MM-DD.db` i datamappen. De seneste 14 gemmes (`BACKUP_DAYS`).
+- Hver nat laves en hel kopi i `backup/holymoly-ÅÅÅÅ-MM-DD.db` i datamappen. De seneste 14 gemmes (`BACKUP_DAYS`). Signeringsnøglen (`proof-key.pem`) ligger aldrig der i klartekst.
+- Backup ud af huset: `npm run enkel -- backup-ud <mål>` laver én krypteret fil med databasen og nøglen (kræver `BACKUP_PASSPHRASE`). Tjek den med `npm run enkel -- gendan-test <fil>`. Nøgleskifte: `npm run enkel -- ny-noegle`. Se docs/PROXMOX.md.
 - Skærmbilleder ligger i `evidence/` ved siden af.
 - En kopi kan åbnes med ethvert SQLite-værktøj, fx DB Browser for SQLite.
 
@@ -104,6 +124,16 @@ Serveren gemmer, hvilken lærer der gjorde hvad hos hvilken elev og hvornår (fx
 ```bash
 npm run enkel -- revisionsspor 90 > revisionsspor.csv
 ```
+
+## Pilottal
+
+Lærerne kan trykke **Var det forkert?** ved en rød lampe (i elevskuffen) og ved et afslag på mærket (i dokumentet). Serveren gemmer kun dagen, årsagskoden og om det var i timen, hjemme eller i Word – ikke hvem. Markeringerne slettes efter `AUDIT_DAYS`.
+
+```bash
+npm run enkel -- pilottal 2027-02 > pilottal-2027-02.csv
+```
+
+CSV'en har kun månedstal for hele skolen: antal lektioner, minutter til alle er grønne (median), lektioner hvor ikke alle blev grønne, grå og røde minutter pr. årsag, afleveringer, andel med mærke, afslag pr. årsag, andel markeret forkert, driftsforstyrrelser (serveren stoppede uden at lukke pænt) og åbnede afspilninger. Der er ingen opdeling pr. lærer, klasse eller elev, ingen navne og ingen tælling af AI-forsøg. Et tal, der bygger på færre end 5, vises ikke ("færre end 5"). Lampens minutter bygger på lektionsrapporten, som slettes efter `LOG_RETENTION_DAYS` – kør kommandoen hver måned. Spørgeskemaet til lærere og elever køres på papir eller i Forms uden for HolyMoly.
 
 ## Indstillinger
 

@@ -20,8 +20,8 @@ test('valget af skrivemåde: knapperne findes i hovedvinduet og skrivevinduet, o
   assert.match(ui, /\$\('write-word'\)\.hidden = !s\.word;/, 'kun når Word findes');
   assert.match(ui, /window\.hm\.action\('word'\)/);
   const main = read('src', 'main.js');
-  assert.match(main, /word: !!state\.wordAvailable/);
-  assert.match(main, /if \(id === 'word'\) return word \? word\.manager\.start\(\{\}\)/);
+  assert.match(main, /word: !!state\.wordAvailable && !!state\.wordAllowed/, 'kun når serveren tillader Word');
+  assert.match(main, /if \(id === 'word'\) return word && state\.wordAllowed \? word\.manager\.start\(\{\}\)/);
   assert.match(main, /if \(word\) word\.manager\.onMessage\(msg\);/);
   assert.match(read('renderer', 'write.html'), /<script src="word-writer\.js"><\/script>/);
   const pre = read('src', 'write-preload.js');
@@ -56,7 +56,7 @@ test('app.js: kobler Word-tilstanden til Electron (IPC, Dokumenter/HolyMoly, fal
   try {
     const writer = { writeAsg: { assignmentId: 7, title: 'Stil' }, _summary: () => [{ id: 'h1', title: 'K', submitted: 0 }], _get: () => ({ updated: 5 }), open() { this.opened = true; } };
     const w = createWordMode({ send: () => true, lessonActive: () => true, online: () => true, serverUrl: () => 'https://holymoly.test', writer: () => writer });
-    assert.deepStrictEqual(await handlers.get('word:info')(), { supported: true, word: true, available: true }, 'falsk Word under udvikling');
+    assert.deepStrictEqual(await handlers.get('word:info')(), { supported: true, word: true, allowed: true, available: true }, 'falsk Word under udvikling');
     assert.deepStrictEqual(await handlers.get('word:write-lesson')(), { assignmentId: 7, title: 'Stil' });
     assert.strictEqual(w.manager.o.dir, path.join(dir, 'documents', 'HolyMoly'));
     const r = await handlers.get('word:start')({}, { assignmentId: 0 });

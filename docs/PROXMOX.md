@@ -88,7 +88,7 @@ Der skal ikke laves eller installeres en database. HolyMoly bruger SQLite, som e
 
 Data er beskyttet på to måder:
 
-1. **HolyMoly** laver hver nat en hel kopi i `/data/backup/` (de seneste 7 gemmes).
+1. **HolyMoly** laver hver nat en hel kopi af databasen i `/data/backup/` (de seneste `BACKUP_DAYS` gemmes). Signeringsnøglen ligger ikke der – se "Nøglen og backup ud af huset".
 2. **Proxmox' backup** af containeren tager det hele med: databasen, kopierne og skærmbillederne.
 
 Hent nattens kopier ud af containeren:
@@ -110,6 +110,56 @@ docker compose -f deploy/docker-compose.yml cp ./backup/holymoly-ÅÅÅÅ-MM-DD.
 ```bash
 docker compose -f deploy/docker-compose.yml start holymoly
 ```
+
+## Nøglen og backup ud af huset
+
+Signeringsnøglen (`/data/proof-key.pem`) gør beviserne gyldige. Ligger databasen, de natlige kopier og nøglen på samme disk, forsvinder alt på én gang, hvis disken går tabt. Og et læk af én ukrypteret kopi af nøglen gør alle mærker værdiløse. Derfor:
+
+- `/data/backup/` har kun databasen. Nøglen kopieres aldrig dertil (en gammel kopi slettes ved næste backup).
+- Nøglen kommer kun ud af containeren **krypteret**, sammen med databasen, i én fil.
+
+### Adgangsfrasen
+
+Sæt `BACKUP_PASSPHRASE` i `deploy/.env` (mindst 12 tegn, fx fire tilfældige ord), og genstart med `docker compose -f deploy/docker-compose.yml up -d`. Opbevar frasen **to steder** uden for serveren, fx i skolens kodeordsboks og i en lukket kuvert hos ledelsen. Er frasen glemt, kan backuppen ikke åbnes, og nøglen er tabt.
+
+### Krypteret backup (fx en gang om ugen og efter et nøgleskifte)
+
+```bash
+cd /opt/holymoly && docker compose -f deploy/docker-compose.yml exec holymoly node /app/scripts/enkel.js backup-ud /data/ud
+```
+
+Kommandoen laver `/data/ud/holymoly-backup-ÅÅÅÅ-MM-DD.hmbak`: databasen, `proof-key.pem` og `totp.key`, krypteret med AES-256-GCM og en nøgle afledt af frasen (scrypt). Den kan køre, mens HolyMoly kører. Hent filen ud, og læg den på skolens NAS eller hos en EU-udbyder (fx restic til en S3-bucket i EU):
+
+```bash
+docker compose -f deploy/docker-compose.yml cp holymoly:/data/ud ./ud && cp ./ud/*.hmbak /mnt/nas/holymoly/
+```
+
+Slet derefter `./ud` og `/data/ud` igen, hvis I ikke vil have kopien liggende på serveren.
+
+### Gendannelsestest (mindst én gang før piloten)
+
+Tjek, at filen kan gendannes. Det kan gøres på en anden maskine med HolyMoly hentet fra GitHub og Node 22:
+
+```bash
+BACKUP_PASSPHRASE='…' npm run enkel -- gendan-test /mnt/nas/holymoly/holymoly-backup-ÅÅÅÅ-MM-DD.hmbak
+```
+
+Testen dekrypterer til en midlertidig mappe, åbner databasen (`PRAGMA integrity_check`) og verificerer det nyeste bevis med nøgleringen. Den svarer "Gendannelsestesten bestod." eller hvad der fejlede (exit 1). Skriv dato og resultat i driftsloggen.
+
+Gendan rigtigt: giv en tom mappe med, så beholdes filerne der, når testen er bestået: `npm run enkel -- gendan-test <fil> ./gendannet`. Stop HolyMoly, kopiér `holymoly.db`, `proof-key.pem` og `totp.key` fra `./gendannet` til `/data` (`docker compose … cp`), og start igen.
+
+### Nøgleskifte (trusted_keys)
+
+Nøgleringen er tabellen `trusted_keys` i databasen: én række pr. nøgle med `key_id`, den offentlige nøgle, `valid_from`, `valid_to` og evt. `compromised_from`. Kun den aktive nøgle i `proof-key.pem` kan signere. Gamle nøgler ligger kun som offentlige nøgler og kan kun verificere, så gamle beviser stadig viser gyldigt efter et skifte. Et bevis med en gammel nøgle, der er udstedt efter skiftet, er ugyldigt.
+
+Skift nøgle (fx hvis en kopi kan være lækket):
+
+```bash
+docker compose -f deploy/docker-compose.yml exec holymoly node /app/scripts/enkel.js ny-noegle
+docker compose -f deploy/docker-compose.yml restart holymoly
+```
+
+Ved et kendt læk: `ny-noegle --kompromitteret ÅÅÅÅ-MM-DD`. Så er beviser fra den dato med den gamle nøgle ugyldige. Ældre beviser holder. Serveren udsteder ingen beviser mellem skiftet og genstarten. Lav en ny krypteret backup bagefter. Den gamle offentlige nøgle står også i `/data/proof-keys/<keyId>.pub.pem`.
 
 ## Overvågning med Uptime Kuma
 

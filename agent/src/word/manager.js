@@ -12,7 +12,8 @@
  *
  * Ingen Electron her: alt udefra gives som opts, så hele forløbet kan testes med bridge-fake.js.
  *   opts: { bridge, overlay, clipboard, send(msg) -> bool, lessonActive() -> bool, online() -> bool, serverUrl, dir, dataDir,
- *           showInFolder(p), onChange(), onOpenMine(), autoTick (standard true), saveEveryMs, now() }
+ *           showInFolder(p), onChange(), onOpenMine(), autoTick (standard true), saveEveryMs, now(),
+ *           allowed() -> bool (serveren tillader "Skriv i Word" – welcome.features.word; uden den: tilladt) }
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -70,16 +71,20 @@ class WordManager {
   }
   static markInfo(r) {
     const out = {};
-    if (r && Array.isArray(r.observed)) out.observed = r.observed.map(String).filter(x => x === 'word' || x === 'vagt');
+    if (r && Array.isArray(r.observed)) out.observed = r.observed.map(String).filter(x => x === 'word' || x === 'taster' || x === 'vagt');
     if (r && r.test) out.test = true;
     return out;
   }
 
-  /** Kan "Skriv i Word" bruges her? { supported, word } (startes én gang, Word startes ikke) */
+  /** Tillader skolens server "Skriv i Word"? (BETA_FEATURES=word – se docs/WORD.md) */
+  allowed() { return typeof this.o.allowed === 'function' ? !!this.o.allowed() : true; }
+
+  /** Kan "Skriv i Word" bruges her? { supported, word, allowed, available } (startes én gang, Word startes ikke) */
   async info() {
     if (!this._info) this._info = this.bridge.probe().catch(() => ({ supported: false, word: false }));
     const r = await this._info;
-    return { supported: !!r.supported, word: !!r.word, available: !!(r.supported && r.word) };
+    const allowed = this.allowed();
+    return { supported: !!r.supported, word: !!r.word, allowed, available: !!(r.supported && r.word && allowed) };
   }
 
   /* ---------------------------------------------------------------- serveren ---------------------------------------------------------------- */
@@ -140,6 +145,7 @@ class WordManager {
     const inf = await this.info();
     if (!inf.supported) return { ok: false, error: 'Skriv i Word findes kun på Windows' };
     if (!inf.word) return { ok: false, error: 'Word findes ikke på computeren' };
+    if (!inf.allowed) return { ok: false, error: 'Skriv i Word er slået fra på skolens server. Brug skrivevinduet.' };
     if (this.s) return { ok: false, error: 'Du har allerede et Word-dokument åbent i HolyMoly. Tryk "Tekst færdig" eller luk det først.' };
     const aid = Number(input.assignmentId) || 0;
     const asg = aid ? this.assignments.find(a => a.id === aid) : null;

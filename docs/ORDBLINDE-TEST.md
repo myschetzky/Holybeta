@@ -7,12 +7,12 @@ Uden testen ved vi ikke, om en ordblind elev kan skrive i HolyMoly uden at blive
 
 Skrivevinduet afviser tekst, der ikke er tastet. Ordblinde-programmer sætter hele ord ind (ordforslag),
 og diktering sætter hele sætninger ind. Uden hjælpemidler slår det til som "indsat tekst".
-Med hjælpemidler (læreren sætter dem i elevdialogen) skal det virke sådan:
+Med hjælpemidler (læreren sætter dem med knappen "Hjælpemidler" i elevskuffen, ved siden af "+ tid") skal det virke sådan. Eleven ser dem nederst i skrivevinduet ("Hjælpemidler: ordforslag"). De gælder til skoleårets slutning, og hver ændring står i revisionssporet.
 
 | Hjælpemiddel | Hvad skrivevinduet tillader | Tælles i | Betydning for mærket |
 |---|---|---|---|
-| Ordforslag | Ét ord ad gangen, højst 30 tegn, højst ét ord pr. 700 ms, og kun når det fuldender et ord, eleven er begyndt på | `stats.predicted` | Ingen. Byger, hurtige tastetryk og jævnhed bliver noter. |
-| Diktering | Én diktering (IME `compositionend`) på højst 300 tegn ad gangen | `stats.dictated` | Over 10 % dikteret tekst giver ikke mærket. Eleven ser "Diktering kan ikke bevises som tastet. Aflever alligevel – du får ingen ulempe." |
+| Ordforslag | Ét ord ad gangen, højst 30 tegn, højst ét ord pr. 700 ms, og kun når det fuldender et ord, eleven er begyndt på | `stats.predicted` | Byger bliver noter. Autotyper-tjekket (jævnhed og hurtige tastetryk) gælder som for alle andre. |
+| Diktering | Én diktering (IME `compositionend`) på højst 300 tegn ad gangen | `stats.dictated` | Byger, hurtige tastetryk og jævnhed bliver noter. Over 10 % dikteret tekst giver ikke mærket. Eleven ser "Diktering kan ikke bevises som tastet. Aflever alligevel – du får ingen ulempe." |
 
 Uden hjælpemidler ser eleven: "Det kunne ikke sættes ind her. Bruger du et ordblinde-program eller diktering, så sig det til din lærer."
 
@@ -55,7 +55,7 @@ Udfyld med **ja / nej / delvist** og en kort note. "Lukket af politik?" betyder:
 - **Lampen**: bliver den rød eller grå, når programmet starter eller læser op? Rød koster kun mærket ved AI, fjernstyring, virtuel maskine og proxy/VPN.
 - **AI-funktioner**: har programmet en AI-funktion (fx omskrivning eller "skriv for mig")? Den må ikke kunne skrive teksten for eleven. Notér, om den kan slås fra.
 - **Stavekontrol og visning**: virker højreklik med forslag, A−/A+, Luftig og Ctrl +/- sammen med programmet?
-- **Tempo**: får eleven med ordforslag en tempo-grund (det må ikke ske) eller kun en note?
+- **Tempo**: får eleven med ordforslag en tempo-grund? Det må kun ske ved et maskinelt tempo (jævnhed, hurtige tastetryk). Sker det for en rigtig elev, så notér tallene ordret – så skal autotyper-tjekket justeres, før piloten.
 - **Mærket og Word-filen**: nævner de et hjælpemiddel? (Det må de ikke.)
 
 ## Når testen er kørt

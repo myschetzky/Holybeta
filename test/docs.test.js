@@ -523,7 +523,7 @@ test('nyt dokument: fast budget på 150 tegn første gang serveren ser det – o
 
 /* ---------- Hjælpemidler, rød lampe og prøve-vurdering med 'fixable' (designplan build_now 4) ---------- */
 
-test('hjælpemidler: med aids=[ordforslag] bliver hurtige tastetryk, byger og jævnhed til noter – ikke grunde', () => {
+test('hjælpemidler: med diktering bliver hurtige tastetryk, byger og jævnhed til noter – ordforslag bevarer autotyper-tjekket', () => {
   const { dir, db, docs, anna, bo } = setup();
   try {
     const text = SENT.repeat(9).trim();
@@ -532,9 +532,16 @@ test('hjælpemidler: med aids=[ordforslag] bliver hurtige tastetryk, byger og j�
     const plain = docs.submit(bo, write(docs, bo, text, { stats: machine }), meta, 2_000_000);
     assert.strictEqual(plain.ok, false);
     assert.deepStrictEqual(plain.categories.map(c => c.key), ['tempo']);
-    // Med ordforslag (sat af læreren i students.aids): kun noter, og beviset udstedes
+    // Kun ordforslag: jævnhed og hurtige tastetryk er stadig en grund (autotyper-tjekket)
     db.prepare('UPDATE students SET aids = ? WHERE id = 1').run(JSON.stringify(['ordforslag']));
     assert.deepStrictEqual(docs.aidsOf(1), ['ordforslag']);
+    const pred = docs.submit(anna, write(docs, anna, text, { stats: machine }), meta, 2_000_000);
+    assert.strictEqual(pred.ok, false);
+    assert.deepStrictEqual(pred.categories.map(c => c.key), ['tempo']);
+    assert.ok(pred.reasons.some(n => /maskinelt jævnt/.test(n)) && pred.reasons.some(n => /hurtigere, end en finger/.test(n)), pred.reasons.join('|'));
+    assert.ok(pred.notes.some(n => /tegn kom på under ét sekund.*ordforslag/.test(n)), 'byger er kun en note med ordforslag');
+    // Med diktering (sat af læreren i students.aids): kun noter, og beviset udstedes
+    db.prepare('UPDATE students SET aids = ? WHERE id = 1').run(JSON.stringify(['diktering']));
     const id = write(docs, anna, text, { stats: machine });
     const r = docs.submit(anna, id, meta, 2_000_000);
     assert.ok(r.ok && r.certId, JSON.stringify(r.reasons));
@@ -607,7 +614,9 @@ test('evaluateStats i shared/doc.js: samme vurdering lokalt (øvedokument) som h
   assert.deepStrictEqual(D.evaluateStats('Fem ord står i teksten.', { typed: 30 }).cats, ['kort']);
   assert.deepStrictEqual(D.evaluateStats(text, { typed: 10 }).cats, ['indsat']);
   assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }).cats, ['tempo']);
-  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }, { aids: ['ordforslag'] }).cats, []);
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }, { aids: ['ordforslag'] }).cats, [], 'byger: ordforslag sætter hele ord ind');
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, keystrokes: 900, fastShare: 0.6 }, { aids: ['ordforslag'] }).cats, ['tempo'], 'hurtige tastetryk: ikke med ordforslag');
+  assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, keystrokes: 900, fastShare: 0.6 }, { aids: ['diktering'] }).cats, []);
   assert.deepStrictEqual(D.evaluateStats(text, { typed: 900, burst: 50 }, { aids: ['ukendt'] }).cats, ['tempo'], 'kun kendte hjælpemidler');
   assert.deepStrictEqual(D.cleanAids(['diktering', 'x', 'ordforslag']), ['ordforslag', 'diktering']);
   assert.strictEqual(D.CATEGORY_TEXT.hjaelpemiddel, 'Diktering kan ikke bevises som tastet. Aflever alligevel – du får ingen ulempe.');
@@ -652,7 +661,7 @@ test('hjælpemidler: læreren sætter dem i elevdialogen (PUT /api/students/:id/
     await call('POST', '/api/register', { email: 'b@x.dk', name: 'B', password: 'tavle-kridt-1234', signupCode: 'k' });
     assert.strictEqual((await call('PUT', `/api/students/${en.studentId}/aids`, { aids: ['diktering'] }))._status, 404);
     ag.close();
-    // Elevdialogen i dashboardet: "Hjælpemidler: [ ] Ordforslag [ ] Diktering"
+    // Elevskuffen i dashboardet: "Hjælpemidler: [ ] Ordforslag [ ] Diktering"
     const app = fs.readFileSync(path.join(__dirname, '..', 'server', 'public', 'app.js'), 'utf8');
     assert.match(app, /h\('legend', \{ text: 'Hjælpemidler' \}\),\s*aidBox\('ordforslag', 'Ordforslag'\), aidBox\('diktering', 'Diktering'\)/);
     assert.ok(app.includes("api(`/api/students/${id}/aids`, { method: 'PUT', body: { aids: picked } })"));

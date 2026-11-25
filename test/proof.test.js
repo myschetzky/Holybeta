@@ -197,7 +197,7 @@ test('H: vagten tæller kun med i "observed", hvis den fulgte hele forløbet –
     assert.deepStrictEqual(t.docs.certificate(d.certId).payload.observed, ['skrivevindue']);
     // Hjælpemidler: tempoet vurderes ikke – men beviset er ord for ord det samme som uden (neutral tempolinje)
     const eId = write(t.docs, t.anna, LONG).id;
-    const e = t.docs.submit(t.anna, eId, Object.assign({}, meta, { aids: ['ordforslag'] }), 3_000_000);
+    const e = t.docs.submit(t.anna, eId, Object.assign({}, meta, { aids: ['ordforslag', 'diktering'] }), 3_000_000);
     const pe = t.docs.certificate(e.certId).payload;
     assert.deepStrictEqual(pe.checks, t.docs.certificate(d.certId).payload.checks, 'samme checks med og uden hjælpemidler');
     assert.ok(!/vurderet|hjælpemid|ordforslag|diktering/i.test(t.docs.certificate(e.certId).signed));

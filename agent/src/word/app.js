@@ -15,7 +15,7 @@ const { WordOverlay } = require('./overlay.js');
 const { MineWindow } = require('./mine-window.js');
 
 /**
- * opts: { send(msg) -> bool, lessonActive(), online(), serverUrl() -> string, writer() -> Writer|null, onChange() }
+ * opts: { send(msg) -> bool, lessonActive(), online(), serverUrl() -> string, writer() -> Writer|null, onChange(), allowed() -> bool }
  * Returnerer { manager, mine }.
  */
 function createWordMode(opts) {
@@ -42,7 +42,7 @@ function createWordMode(opts) {
 
   manager = new WordManager({
     bridge, overlay, clipboard,
-    send: opts.send, lessonActive: opts.lessonActive, online: opts.online,
+    send: opts.send, lessonActive: opts.lessonActive, online: opts.online, allowed: opts.allowed,
     get serverUrl() { return opts.serverUrl(); },
     dir: path.join(app.getPath('documents'), 'HolyMoly'),
     dataDir: app.getPath('userData'),

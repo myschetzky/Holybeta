@@ -144,7 +144,9 @@
    * Den del af vurderingen, der kun bygger på teksten og elevens egne tal fra skrivevinduet.
    * Bruges af serveren (docs.evaluate) og lokalt af øvedokumentet i skrivevinduet.
    * Lampen, forbindelsen og serverens eget vækst-tjek ligger kun hos serveren.
-   * opts: { minWords, aids: ['ordforslag', 'diktering'], word }. Med hjælpemidler bliver jævnhed, byger og hurtige tastetryk til noter.
+   * opts: { minWords, aids: ['ordforslag', 'diktering'], word }. Hjælpemidler lemper tempo-tjekket så lidt som muligt:
+   * diktering gør byger, hurtige tastetryk, jævnhed og taster fra et program til noter; ordforslag kun byger (ét helt ord ad gangen).
+   * Autotyper-tjekket (jævnhed, hurtige tastetryk, taster fra et program) gælder altså stadig med ordforslag.
    * word: dokumentet er skrevet i Word gennem HolyMoly. Med stats.keys === true (appen talte tastetryk i Word-vinduet)
    * gælder tastetjekkene med en margin til autokorrektur (wordKeyMargin); ellers kun vækst, indsat tekst og Copilot-reglen.
    * Returnerer { reasons, notes, cats: [nøgle, …], found: [{ cat, why }] } – reasons/notes er til læreren, cats til eleven.
@@ -155,15 +157,21 @@
     const n = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
     const t = String(text || '');
     const minWords = Number(o.minWords) > 0 ? Number(o.minWords) : PROOF.MIN_WORDS;
-    const aids = cleanAids(o.aids).length > 0;
+    const aidList = cleanAids(o.aids);
+    const dictation = aidList.includes('diktering');
+    const prediction = aidList.includes('ordforslag');
     const word = !!o.word; // Word via HolyMoly
     // Word: tastetryk tælles kun, når elev-appen kunne tælle dem i hele dokumentet (stats.keys === true).
     // Ellers findes der ingen tastestatistik – kun hvordan teksten voksede – og de gamle regler gælder.
     const keys = !word || s.keys === true;
     const reasons = [], notes = [], cats = [], found = [];
     const no = (cat, why) => { reasons.push(why); found.push({ cat, why }); if (!cats.includes(cat)) cats.push(cat); };
-    // Med hjælpemidler er tempo-fund kun en oplysning (ordforslag og diktering giver ujævne byger)
-    const tempo = (why) => { if (aids) notes.push(why + ' – eleven har hjælpemidler, så skrivetempoet vurderes ikke'); else no('tempo', why); };
+    // Med diktering er tempo-fund kun en oplysning. Med ordforslag gælder det kun byger (burst: true).
+    const tempo = (why, burst) => {
+      if (dictation) notes.push(why + ' – eleven har hjælpemidler, så skrivetempoet vurderes ikke');
+      else if (burst && prediction) notes.push(why + ' – eleven har ordforslag, så byger vurderes ikke');
+      else no('tempo', why);
+    };
     if (wordCount(t) < minWords) no('kort', `Teksten er for kort til et bevis (mindst ${minWords} ord)`);
     if (n(s.pasteInserted) > 0) no('indsat', word ? 'Der er indsat tekst fra et andet program i Word' : 'Der er indsat tekst, som ikke er tastet');
     if (!word) {
@@ -180,7 +188,7 @@
       if (n(s.injected) > PROOF.MAX_INJECTED) tempo(`Taster sendt af et program (${Math.round(n(s.injected))} taster, fx en autotyper eller makro)`);
     } else notes.push(WORD_NO_KEYS + ' – teksten er vurderet uden tastestatistik');
     if (keys && n(s.maxCps) > PROOF.MAX_HUMAN_CPS) no('tempo', `Skrevet hurtigere end et menneske kan (${Math.round(n(s.maxCps))} tegn/sek.)`);
-    if (keys && n(s.burst) > PROOF.MAX_BURST) tempo(`${Math.round(n(s.burst))} tegn kom på under ét sekund (et program, ikke et menneske)`);
+    if (keys && n(s.burst) > PROOF.MAX_BURST) tempo(`${Math.round(n(s.burst))} tegn kom på under ét sekund (et program, ikke et menneske)`, true);
     if (keys && n(s.keystrokes) >= 200 && n(s.fastShare) > PROOF.MAX_FAST_SHARE) tempo('Mange tastetryk kom hurtigere, end en finger kan trykke');
     if (keys && s.regularity != null && n(s.keystrokes) >= 300 && n(s.regularity) < PROOF.MIN_REGULARITY) tempo('Tastetrykkene kom i et maskinelt jævnt tempo');
     // Diktering kan ikke bevises som tastet: over 10 % dikteret tekst giver den neutrale kategori 'hjaelpemiddel'
@@ -203,11 +211,14 @@
    * at teksten er tastet i HolyMoly uden indsat tekst, om det skete i timen eller hjemme,
    * om kun skrivevinduet blev fulgt (ingen HolyMoly-vagt på computeren) – og om beviset kommer fra en testserver.
    * place: 'lektion' | 'klasse' | 'ekstra' | 'hjemme' | 'lektion og hjemme' (v2: place, v3: kind). Ukendt sted: intet sted i mærket.
-   * opts: { observed: ['skrivevindue' | 'word', 'vagt'?], test } fra et v3-bevis ('word' = skrevet i Word via HolyMoly). Uden observed (v2 og ældre) er teksten som før.
+   * opts: { observed: ['skrivevindue' | 'word', 'taster'?, 'vagt'?], test } fra et v3-bevis ('word' = skrevet i Word via HolyMoly,
+   * 'taster' = elev-appen talte tastetrykkene i Word, og de forklarer teksten). Uden observed (v2 og ældre) er teksten som før.
    */
   const MARK = '\u2713 Tastet i HolyMoly \u2013 intet indsat';
-  // Skrevet i Word gennem HolyMoly ("Skriv i Word", observed indeholder 'word')
+  // Skrevet i Word gennem HolyMoly med talte tastetryk ("Skriv i Word", observed indeholder 'word' og 'taster')
   const WORD_MARK = '\u2713 Tastet i Word via HolyMoly \u2013 intet indsat';
+  // Skrevet i Word uden talte tastetryk: HolyMoly fulgte kun, hvordan teksten voksede – mærket lover ikke mere
+  const WORD_MARK_GROWTH = '\u2713 Skrevet i Word via HolyMoly \u2013 tekstv\u00e6kst m\u00e5lt';
   // "Tjek altid teksten på linket" står på alle mærker: en sidefod og en kode kan kopieres – teksten kan ikke
   const LIMIT_TEXT = 'M\u00e6rket viser, hvad HolyMoly m\u00e5lte p\u00e5 elevens computer. Det d\u00e6kker ikke afskrift fra telefon eller papir, og en computer, eleven selv har \u00e6ndret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler m\u00e6rket, er det ikke et tegn p\u00e5 snyd. Tjek altid teksten p\u00e5 linket.';
   const TEST_TEXT = 'Testserver \u2013 m\u00e5 ikke bruges til bed\u00f8mmelse.';
@@ -216,7 +227,7 @@
     const p = String(place || '');
     const v3 = Array.isArray(o.observed);
     const word = v3 && o.observed.includes('word');
-    let s = word ? WORD_MARK : MARK;
+    let s = word ? (o.observed.includes('taster') ? WORD_MARK : WORD_MARK_GROWTH) : MARK;
     // Hjemme er et lavere niveau end i timen: ingen lærer var til stede
     if (p) s += ' \u00b7 ' + (/hjemme/.test(p) ? (v3 ? 'hjemme, uden opsyn' : 'hjemme uden opsyn') : 'i timen');
     if (v3 && !o.observed.includes('vagt')) s += word ? ' \u00b7 kun Word' : ' \u00b7 kun skrivevinduet';
@@ -484,5 +495,5 @@
     return { mark, code, url };
   }
 
-  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, CATEGORY_TEXT_WORD, wordKeyMargin, WORD_UNTYPED, WORD_NO_KEYS, WORD_COPILOT_ON, label, markGreen, footerLines, MARK, WORD_MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, zipNames, docxFooter, LIMITS };
+  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, CATEGORY_TEXT_WORD, wordKeyMargin, WORD_UNTYPED, WORD_NO_KEYS, WORD_COPILOT_ON, label, markGreen, footerLines, MARK, WORD_MARK, WORD_MARK_GROWTH, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, zipNames, docxFooter, LIMITS };
 });

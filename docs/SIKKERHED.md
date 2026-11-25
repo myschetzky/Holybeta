@@ -35,6 +35,7 @@ Det opdateres løbende – se `git log -- docs/SIKKERHED.md`.
 **Kryptografi (A04)**
 - Adgangskoder hashes med scrypt i OWASP's anbefalede styrke (N=2^14, r=8, p=5 ≈ N=2^17, p=1, men med 16 MiB i stedet for 128 MiB). Parametrene står i hashen; ældre, svagere hashes opgraderes automatisk ved lærerens næste login.
 - To-faktor-hemmeligheder krypteres i databasen; skrive-beviser signeres med Ed25519.
+- Signeringsnøglen ligger aldrig i klartekst i `backup/`. Den kommer kun ud af serveren krypteret (AES-256-GCM, scrypt-afledt nøgle fra `BACKUP_PASSPHRASE`) med `enkel -- backup-ud`, og `enkel -- gendan-test` tjekker gendannelsen. Nøgleringen `trusted_keys` holder gamle offentlige nøgler, så gamle beviser kan verificeres efter et nøgleskifte (`enkel -- ny-noegle`); gamle nøgler kan aldrig signere. Se docs/PROXMOX.md.
 
 **Injektion (A05)**
 - Al SQL er parametriseret; CSV-eksport beskytter mod formel-injektion; dashboardet bygger HTML uden `innerHTML` med elevdata.
@@ -66,7 +67,7 @@ Det opdateres løbende – se `git log -- docs/SIKKERHED.md`.
 - Elevens egne tal: mindst 100 ord, højst 15 tegn/sek. over 5 sek., højst 30 tegn inden for ét sekund, højst 25 % tastetryk hurtigere end 12 ms (fra 200 tastetryk), jævnhed (variationskoefficient) mindst 0,25 (fra 300 tastetryk) og højst 10 % dikteret tekst.
 - Serverens egne tjek: teksten må ikke vokse mere end 15 tegn/sek. mellem to gemninger, gennemsnittet over hele skrivetiden højst 10 tegn/sek. (over 600 tegn), et nyt dokument højst 150 tegn første gang, højst 10 % eller 3 min. grå tid, mens teksten voksede, og højst 15 % eller 10 min. grå tid uden vækst.
 - Rød lampe koster kun mærket ved AI, fjernstyring, virtuel maskine, proxy/VPN og rød uden kategori (fx en vagt-advarsel). Anden rød (video, spil, sociale medier …) er en note til læreren.
-- Hjælpemidler (`students.aids`: ordforslag, diktering) sættes af læreren i elevdialogen og logges i elevens logbog. Så bliver byger, hurtige tastetryk og jævnhed til noter, og beviset har den samme neutrale tempolinje som for alle andre ("Intet skrevet hurtigere, end et menneske kan"). Kun lærerens egen visning siger "Skrivetempo ikke vurderet". Serverens eget vækst-tjek gælder stadig. Listen over hjælpemidler står aldrig i beviset, mærket eller Word-filen.
+- Hjælpemidler (`students.aids`: ordforslag, diktering) sættes af læreren i elevskuffen ("Hjælpemidler" ved "+ tid"), står i revisionssporet, vises for eleven i skrivevinduet og udløber ved skoleårets slutning (`aids_until`). Med diktering bliver byger, hurtige tastetryk og jævnhed til noter; med ordforslag kun byger, så autotyper-tjekket (jævnhed, hurtige tastetryk, taster fra et program) stadig gælder, og beviset har den samme neutrale tempolinje som for alle andre ("Intet skrevet hurtigere, end et menneske kan"). Kun lærerens egen visning siger "Skrivetempo ikke vurderet". Serverens eget vækst-tjek gælder stadig. Listen over hjælpemidler står aldrig i beviset, mærket eller Word-filen.
 - Øvedokumentet i skrivevinduet ligger kun i vinduets hukommelse og sendes aldrig. Det vurderes lokalt med de samme regler (`evaluateStats`) – derfor er grænserne ikke en hemmelighed.
 
 ## Ændringer i sikkerhedsrunden 2026-11-24

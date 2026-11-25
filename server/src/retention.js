@@ -141,6 +141,8 @@ function purge(db, R, now = Date.now()) {
     const inactive = 'SELECT id FROM students WHERE COALESCE(last_seen, enrolled, created) < ?';
     out.extensions = db.prepare(`DELETE FROM lesson_extensions WHERE ends_at < ? OR student_id IN (${inactive})`).run(now - DAY, iCut).changes;
     out.inactive = db.prepare(`UPDATE students SET aids = NULL, device_info = NULL WHERE (aids IS NOT NULL OR device_info IS NOT NULL) AND id IN (${inactive})`).run(iCut).changes;
+    // Hjælpemidler udløber ved skoleårets slutning
+    out.aidsExpired = db.prepare('UPDATE students SET aids = NULL, aids_until = NULL WHERE aids IS NOT NULL AND aids_until IS NOT NULL AND aids_until <= ?').run(now).changes;
   } catch (e) { /* ældre skema */ }
   // 7) Revisionssporet efter auditDays. Tabellen kan kun slettes i før meta.audit_purge_before (trigger i db.js).
   try {
@@ -148,6 +150,8 @@ function purge(db, R, now = Date.now()) {
     db.prepare("INSERT INTO meta (key, value) VALUES ('audit_purge_before', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(aCut));
     out.audit = db.prepare('DELETE FROM audit_log WHERE ts < ?').run(aCut).changes;
   } catch (e) { /* ældre skema */ }
+  // 8) "Var det forkert?" (pilot.js – kun dag, art, årsag og bevistype) efter samme frist som revisionssporet
+  try { out.feedback = db.prepare('DELETE FROM feedback WHERE day < ?').run(new Date(now - R.auditDays * DAY).toISOString().slice(0, 10)).changes; } catch (e) { /* ingen tabel endnu */ }
   return out;
 }
 

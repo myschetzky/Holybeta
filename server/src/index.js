@@ -15,6 +15,8 @@ const G = require('./guardapi');
 const { UniLogin, configFromEnv } = require('./oidc');
 const { DocStore } = require('./docs');
 const RET = require('./retention');
+const CL = require('./configlock');
+const PILOT = require('./pilot');
 const { createMailer } = require('./mail');
 const { createAccounts } = require('./accounts');
 const { createProxyTrust } = require('./proxytrust');
@@ -40,8 +42,10 @@ const SIMPLE_OFF = /^\/api\/(school\/order|admin\/|account\/2fa\/(?!totp)|verify
  * Funktioner, der kan slås fra. Beta (enkel tilstand) er én profil: ingen live-skærm, ingen skærmbilleder (heller ikke
  * automatiske) og intet lighedstjek. Hånd op og skrivetime er med. BETA_FEATURES="liveScreen,screenshot" slår ting til,
  * "-hand" slår fra. Uden enkel tilstand er alt slået til.
+ * word: "Skriv i Word". Slået fra i enkel tilstand, indtil de 19 trin i docs/WORD.md er kørt på skolens egne Windows-maskiner
+ * (BETA_FEATURES=word). Når det er fra, skjuler elev-appen knappen, og serveren afviser Word-gemninger.
  */
-const FEATURE_KEYS = ['liveScreen', 'screenshot', 'autoEvidence', 'similar', 'hand', 'writeLesson'];
+const FEATURE_KEYS = ['liveScreen', 'screenshot', 'autoEvidence', 'similar', 'hand', 'writeLesson', 'word'];
 function featuresFor(simple, betaFeatures) {
   const f = Object.fromEntries(FEATURE_KEYS.map(k => [k, !simple]));
   if (simple) { f.hand = true; f.writeLesson = true; }
@@ -133,15 +137,23 @@ function createServer(opts = {}) {
   const approvalMissingFields = () => APPROVAL_FIELDS.filter(([k]) => !cfg.schoolApproval[k]).map(([, env]) => env);
   /** Er driften overdraget til skolen? SCHOOL_OPERATED=1 og overdragelsen er registreret (npm run enkel -- overdrag). */
   const handedOver = () => schoolOperated && !!(db.prepare("SELECT value FROM meta WHERE key = 'school_operated_since'").get() || {}).value;
-  /** 'approval' (skolens ja mangler), 'operator' (hverken overdragelse eller databehandleraftale) eller null. */
+  /**
+   * 'approval' (skolens ja mangler), 'operator' (hverken overdragelse eller databehandleraftale), 'config' (en
+   * overvågningsfunktion er slået til siden skolens ja – configlock.js) eller null.
+   */
   const lessonBlockedReason = () => {
     if (!cfg.simple) return null;
     if (approvalMissingFields().length) return 'approval';
     if (!cfg.dbaDate && !handedOver()) return 'operator';
+    if (configBlocking().length) return 'config';
     return null;
   };
   /** Enkel tilstand: ingen lektioner eller skriveøkter, før skolens ja og driften er på plads. Returnerer beskeden eller null. */
-  const lessonBlocked = () => ({ approval: APPROVAL_MISSING, operator: OPERATOR_MISSING })[lessonBlockedReason()] || null;
+  const lessonBlocked = () => {
+    const r = lessonBlockedReason();
+    if (r === 'config') return `Konfigurationen er ændret siden skolens ja (DPIA): ${configBlocking().join(', ')} er slået til. Få skolens ja til ændringen, og kør "npm run enkel -- bekraeft-ja" på serveren.`;
+    return ({ approval: APPROVAL_MISSING, operator: OPERATOR_MISSING })[r] || null;
+  };
   const approvalInfo = () => (approvalMissingFields().length ? null : Object.assign({}, cfg.schoolApproval));
   const log = (...a) => { if (!cfg.quiet) console.log(new Date().toISOString(), ...a); };
   const db = dbm.open(cfg.dataDir);
@@ -209,10 +221,21 @@ function createServer(opts = {}) {
   // Funktioner, der kan slås fra (se featuresFor). Håndhæves i serveren, ikke kun i dashboardet.
   const features = featuresFor(cfg.simple, cfg.betaFeatures);
   const docs = new DocStore(db, cfg.dataDir, { testServer: cfg.simple && !schoolOperated, minWords: opts.minProofWords });
+  // Låst konfiguration (configlock.js): fingeraftrykket af det, skolen sagde ja til, og hashen bag elevernes accept
+  const configSnap = CL.snapshot({ features, retention: cfg.retention, requireGuard: cfg.requireGuard, keyId: docs.keyId });
+  const termsHash = cfg.simple ? CL.featuresHash(features) : null;
+  if (cfg.simple && !approvalMissingFields().length) CL.sync(db, cfg.schoolApproval, configSnap, log);
+  // Elever, der accepterede, før hashen fandtes, har accepteret den konfiguration, serveren kørte med
+  if (termsHash) db.prepare('UPDATE students SET terms_features = ? WHERE terms_accepted IS NOT NULL AND terms_features IS NULL').run(termsHash);
+  /** Hvad er ændret siden skolens ja (tom liste: intet, eller skolens ja mangler)? */
+  function configChanges() { return cfg.simple && !approvalMissingFields().length ? CL.changes(CL.read(db), configSnap) : []; }
+  function configBlocking() { return cfg.simple && !approvalMissingFields().length ? CL.blocking(CL.read(db), configSnap) : []; }
+  /** Eleven har accepteret vilkårene (med de funktioner, der er slået til nu). first: behold det første tidspunkt. */
+  const acceptTerms = (sid, first) => db.prepare(`UPDATE students SET terms_accepted = ${first ? 'COALESCE(terms_accepted, ?)' : '?'}, terms_features = ? WHERE id = ?`).run(Date.now(), termsHash, sid);
   const hub = new Hub({ db, dataDir: cfg.dataDir, docs, publicUrl: cfg.publicUrl, getRules: () => rules, classConfig, log, staleMs: opts.staleMs,
     minAgentVersion: cfg.minAgentVersion, minExtensionVersion: cfg.minExtensionVersion, downloadUrl: cfg.downloadUrl,
     requireGuard: cfg.requireGuard, compileFor: (classId, config) => ACRules.compile(rules, config || classConfig(classId)), lessonBlocked: () => lessonBlocked(), features,
-    soloGraceMs: opts.soloGraceMs });
+    soloGraceMs: opts.soloGraceMs, termsHash });
 
   /* ---------------------------- auth ---------------------------- */
   const SESSION_MS = 12 * 3600_000; // uden aktivitet
@@ -515,7 +538,7 @@ function createServer(opts = {}) {
     return db.prepare('SELECT s.* FROM students s JOIN classes c ON c.id = s.class_id WHERE s.id = ? AND c.teacher_id = ?').get(Number(studentId), teacher.id);
   }
   function aidsOf(s) {
-    try { return D.cleanAids(s.aids ? JSON.parse(s.aids) : []); } catch (e) { return []; }
+    return D.cleanAids(dbm.activeAids(s)); // udløbne hjælpemidler (skoleårets slutning) tæller ikke
   }
   function studentOut(s) {
     let device = null;
@@ -529,6 +552,8 @@ function createServer(opts = {}) {
       pinReset: !s.pin_hash && !!s.pin_reset_hash, // nulstillet (engangskoden kan være udløbet)
       pinLocked: (s.pin_fails || 0) >= PIN_MAX_FAILS,
       aids: aidsOf(s), // hjælpemidler (kun til elevens egen lærer)
+      aidsUntil: aidsOf(s).length ? s.aids_until || null : null, // de udløber ved skoleårets slutning
+      otherDevice: !!s.other_device, // "Uden HolyMoly (andet udstyr)"
     };
   }
   function newInvite(studentId) {
@@ -566,7 +591,8 @@ function createServer(opts = {}) {
     const kinds = db.prepare('SELECT kind, COUNT(*) AS n FROM events WHERE lesson_id = ? AND student_id = ? GROUP BY kind');
     const docsQ = db.prepare('SELECT COUNT(*) AS n, COUNT(cert_id) AS c FROM documents WHERE student_id = ? AND submitted BETWEEN ? AND ?');
     const out = students.map((s) => {
-      const t = { green: 0, red: 0, grey: 0 };
+      // other: "Uden HolyMoly (andet udstyr)" – hverken grøn, rød eller grå
+      const t = { green: 0, red: 0, grey: 0, other: 0 };
       const redReasons = new Set();
       let at = l.started, color = 'grey';   // før første melding: ikke forbundet
       for (const r of colors.all(l.id, s.id)) {
@@ -579,7 +605,7 @@ function createServer(opts = {}) {
       const k = Object.fromEntries(kinds.all(l.id, s.id).map(r => [r.kind, r.n]));
       const d = docsQ.get(s.id, l.started, end + 60_000);
       return {
-        id: s.id, name: s.name, green: t.green, red: t.red, grey: t.grey, redReasons: [...redReasons],
+        id: s.id, name: s.name, green: t.green, red: t.red, grey: t.grey, other: t.other, redReasons: [...redReasons],
         violations: (k.violation || 0) + (k.tamper || 0), attempts: k.blocked || 0, killed: k.killed || 0,
         hands: k.hand || 0, submitted: d.n, certified: d.c,
       };
@@ -678,7 +704,7 @@ function createServer(opts = {}) {
 
     // --- offentlige ---
     if (p === '/api/info' && m === 'GET') {
-      return send(res, 200, { simple: cfg.simple, uniLogin: uni.enabled, signupRequiresCode: !!accounts.signupCodeNow(), firstTeacher: !!accounts.setupCode(), approval: approvalInfo(), approvalMissing: approvalMissingFields(), lessonBlocked: !!lessonBlocked(), lessonBlockedReason: lessonBlockedReason(),
+      return send(res, 200, { simple: cfg.simple, uniLogin: uni.enabled, signupRequiresCode: !!accounts.signupCodeNow(), firstTeacher: !!accounts.setupCode(), approval: approvalInfo(), approvalMissing: approvalMissingFields(), lessonBlocked: !!lessonBlocked(), lessonBlockedReason: lessonBlockedReason(), configChanged: configChanges(),
         operator: cfg.simple ? { role: cfg.operator, dba: !!cfg.dbaDate, handedOver: handedOver(), testServer: docs.testServer } : null, signupOpen: cfg.signupOpen, licensing: cfg.licensing, trialDays: cfg.trialDays, verifyEmail: cfg.verifyEmail, require2fa: cfg.require2fa, company: cfg.company, downloads: downloadsInfo(), downloadUrl: cfg.downloadUrl, extensionUrls: cfg.extensionUrls, categories: ACRules.CATEGORIES, rulesVersion: rules.version,
         retention: RET.publicInfo(cfg.retention), features });
     }
@@ -873,7 +899,7 @@ function createServer(opts = {}) {
               .find(r => normName(r.name) === normName(name) && hashes.has(r.device_token_hash));
             if (me) {
               // Samme nøgle som før – computeren er allerede elevens, så intet skal tilbagekaldes
-              if (b.accept === true) db.prepare('UPDATE students SET terms_accepted = COALESCE(terms_accepted, ?) WHERE id = ?').run(Date.now(), me.id);
+              if (b.accept === true) acceptTerms(me.id, true);
               return send(res, 200, { token: hashes.get(me.device_token_hash), studentId: me.id, studentName: me.name, className: cls.name, teacherName: cls.teacher_name });
             }
           }
@@ -920,6 +946,7 @@ function createServer(opts = {}) {
             // Ved nulstilling bliver engangskoden elevens kode (den er allerede gemt som hash)
             db.prepare('UPDATE students SET device_token_hash = ?, invite_code = NULL, invite_expires = NULL, guard_pubkey = NULL, guard_seq = 0, guard_pair_hash = NULL, terms_accepted = COALESCE(?, terms_accepted), pin_hash = COALESCE(pin_hash, pin_reset_hash), pin_reset_hash = NULL, pin_reset_until = NULL, pin_fails = 0 WHERE id = ?')
               .run(U.sha256(token), b.accept === true ? Date.now() : null, owner.id);
+            if (b.accept === true) acceptTerms(owner.id, false);
             hub.revokeStudent(owner.id);
             hub.studentJoined(owner.id, cls.id, resetting ? `${owner.name} loggede ind med koden fra læreren` : `${owner.name} loggede ind med sin kode på en ny computer`);
             return send(res, 200, { token, studentId: owner.id, studentName: owner.name, className: cls.name, teacherName: cls.teacher_name });
@@ -951,7 +978,7 @@ function createServer(opts = {}) {
           sid = Number(db.prepare('INSERT INTO students (class_id, name, x, y, device_token_hash, enrolled, created, uni_id) VALUES (?,?,?,?,?,?,?,?)').run(cls.id, name, spot.x, spot.y, U.sha256(token), Date.now(), Date.now(), uniId).lastInsertRowid);
         }
         if (pin) db.prepare('UPDATE students SET pin_hash = ? WHERE id = ?').run(U.hashPassword(pin), sid);
-        if (b.accept === true) db.prepare('UPDATE students SET terms_accepted = ? WHERE id = ?').run(Date.now(), sid);
+        if (b.accept === true) acceptTerms(sid, false);
         placeJoined(cls.id);
         const how = uniId ? 'med UNI-Login' : 'med klassekoden';
         hub.studentJoined(sid, cls.id, dup && !uniId ? `${name} tilmeldte sig ${how} – der er allerede en elev med det navn. Er det den samme elev på en ny computer, så slet den gamle.` : `${name} tilmeldte sig ${how}`);
@@ -1070,8 +1097,8 @@ function createServer(opts = {}) {
       if (!rep) return fail(res, 404, 'Lektionen findes ikke');
       if (!mm[3]) return send(res, 200, rep);
       const min = (ms) => (ms / 60000).toFixed(1).replace('.', ',');
-      const lines = [['Elev', 'Grøn (min)', 'Rød (min)', 'Grå (min)', 'Fund', 'Blokerede forsøg', 'Hånd op', 'Afleveret', 'Skrive-beviser', 'Røde årsager'].join(';')];
-      for (const s of rep.students) lines.push([s.name, min(s.green), min(s.red), min(s.grey), s.violations, s.attempts, s.hands, s.submitted, s.certified, s.redReasons.join(' / ')].map(csvCell).join(';'));
+      const lines = [['Elev', 'Grøn (min)', 'Rød (min)', 'Grå (min)', 'Uden HolyMoly (min)', 'Fund', 'Blokerede forsøg', 'Hånd op', 'Afleveret', 'Skrive-beviser', 'Røde årsager'].join(';')];
+      for (const s of rep.students) lines.push([s.name, min(s.green), min(s.red), min(s.grey), min(s.other), s.violations, s.attempts, s.hands, s.submitted, s.certified, s.redReasons.join(' / ')].map(csvCell).join(';'));
       res.writeHead(200, Object.assign({}, SEC_HEADERS, {
         'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store',
         'Content-Disposition': `attachment; filename="lektionsrapport-${rep.lesson.id}.csv"`,
@@ -1237,8 +1264,25 @@ function createServer(opts = {}) {
         return send(res, 200, { ok: true });
       }
     }
-    // Hjælpemidler (ordforslag, diktering): læreren slår dem til for eleven. Skrivevinduet tillader dem, og skrivetempoet
-    // vurderes ikke. Valget logges i lærer-logbogen og står aldrig i beviset.
+    // "Uden HolyMoly (andet udstyr)": eleven vises neutralt (ikke gråt) og tæller ikke med i grå minutter – kun mens eleven
+    // ikke er forbundet (hub.studentView), så markeringen aldrig kan vaske en rød lampe. Der udstedes intet bevis fra browseren.
+    if ((mm = p.match(/^\/api\/students\/(\d+)\/other-device$/)) && m === 'PUT') {
+      const s = ownStudent(teacher, mm[1]);
+      if (!s) return fail(res, 404, 'Eleven findes ikke');
+      const b = await readJson(req);
+      if (typeof b.on !== 'boolean') return fail(res, 400, 'Vælg til eller fra');
+      if (b.on !== !!s.other_device) hub.setOtherDevice(s.id, b.on, teacher);
+      return send(res, 200, studentOut(db.prepare('SELECT * FROM students WHERE id = ?').get(s.id)));
+    }
+    // "Var det forkert?" ved rød lampe og ved afslag: kun årsagskode og bevistype (i timen, hjemme, Word) – ingen elev,
+    // ingen lærer, intet klokkeslæt (pilot.js). Bruges kun til pilottallene (npm run enkel -- pilottal).
+    if (p === '/api/feedback' && m === 'POST') {
+      const r = PILOT.record(db, await readJson(req));
+      return r.ok ? send(res, 200, { ok: true }) : fail(res, 400, r.error);
+    }
+    // Hjælpemidler (ordforslag, diktering): læreren slår dem til for eleven i elevskuffen. Skrivevinduet tillader og viser dem.
+    // Kun diktering lemper tempo-tjekket (shared/doc.js). Valget står i revisionssporet, udløber ved skoleårets slutning
+    // og står aldrig i beviset.
     if ((mm = p.match(/^\/api\/students\/(\d+)\/aids$/)) && m === 'PUT') {
       const s = ownStudent(teacher, mm[1]);
       if (!s) return fail(res, 404, 'Eleven findes ikke');
@@ -1246,7 +1290,8 @@ function createServer(opts = {}) {
       if (!Array.isArray(b.aids)) return fail(res, 400, 'Vælg hjælpemidler');
       const aids = D.cleanAids(b.aids);
       const before = aidsOf(s);
-      db.prepare('UPDATE students SET aids = ? WHERE id = ?').run(aids.length ? JSON.stringify(aids) : null, s.id);
+      // Gælder til skoleårets slutning – derefter skal læreren sætte dem igen
+      db.prepare('UPDATE students SET aids = ?, aids_until = ? WHERE id = ?').run(aids.length ? JSON.stringify(aids) : null, aids.length ? dbm.schoolYearEnd() : null, s.id);
       if (aids.join() !== before.join()) {
         const NAME = { ordforslag: 'ordforslag', diktering: 'diktering' };
         hub._audit(s.id, aids.length ? `${teacher.name} satte hjælpemidler: ${aids.map(a => NAME[a]).join(' og ')}` : `${teacher.name} fjernede hjælpemidlerne`, teacher.id, 'ændrede hjælpemidler');
@@ -1384,6 +1429,7 @@ function createServer(opts = {}) {
       missing.length ? `Skolens ja mangler: ${missing.join(', ')}` : 'Skolens ja: udfyldt',
       `Vagt: ${cfg.requireGuard ? 'til' : 'fra'}`,
       `Nøgle: ${docs.keyId}`,
+      ...(configChanges().length ? [`ændret siden DPIA: ${configChanges().join(', ')}`] : []),
     ].join(' · ');
   }
 
@@ -1402,6 +1448,9 @@ function createServer(opts = {}) {
     }
     if (!docs.privateKey || !docs.keyId || !fs.existsSync(path.join(cfg.dataDir, 'proof-key.pem'))) bad.push('nøgle');
     if (deep) {
+      // Konfigurationen er ændret siden skolens ja (configlock.js)
+      const changed = configChanges();
+      if (changed.length) bad.push('ændret siden DPIA: ' + changed.join(', '));
       if (cfg.backupDays) {
         let newest = 0;
         try {
@@ -1499,9 +1548,9 @@ function createServer(opts = {}) {
     const file = path.join(dir, `holymoly-${day}.db`);
     if (force || !fs.existsSync(file)) {
       try { fs.rmSync(file, { force: true }); db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`); log('Backup af databasen:', file); } catch (e) { log('Backup fejlede:', e.message); return null; }
-      // Signeringsnøglen følger med: uden den kan gamle beviser ikke tjekkes efter en gendannelse
-      const key = path.join(cfg.dataDir, 'proof-key.pem');
-      try { if (fs.existsSync(key)) fs.copyFileSync(key, path.join(dir, 'proof-key.pem')); } catch (e) { log('Backup af nøglen fejlede:', e.message); }
+      // Signeringsnøglen ligger ALDRIG i klartekst i backup/: et læk af én kopi ville gøre alle mærker værdiløse.
+      // Nøglen tages med krypteret i "npm run enkel -- backup-ud" (server/src/keyring.js). En gammel klartekst-kopi slettes.
+      try { fs.rmSync(path.join(dir, 'proof-key.pem'), { force: true }); } catch (e) { log('Kunne ikke slette den gamle nøglekopi i backup/:', e.message); }
     }
     const keep = fs.readdirSync(dir).filter(n => /^holymoly-\d{4}-\d{2}-\d{2}\.db$/.test(n)).sort().reverse();
     for (const old of keep.slice(cfg.backupDays)) fs.rmSync(path.join(dir, old), { force: true });
@@ -1549,6 +1598,7 @@ function createServer(opts = {}) {
     docs, // (til tests)
     retention, // (til tests)
     backup, // (til tests)
+    startupLine, // (til tests)
     /** Enkel tilstand: engangs-opsætningskoden til den første lærer (null, når der findes en lærer). */
     setupCode: () => accounts.setupCode(),
     /** Enkel tilstand: de felter i skolens ja, der mangler (miljøvariablernes navne). */
@@ -1563,6 +1613,7 @@ function createServer(opts = {}) {
         if (setup) log('Opsætningskode til første lærer: ' + setup);
         if (cfg.simple && approvalMissingFields().length) log('ADVARSEL: ' + APPROVAL_MISSING + ' Mangler: ' + approvalMissingFields().join(', '));
         else if (lessonBlockedReason() === 'operator') log('ADVARSEL: ' + OPERATOR_MISSING + ' (DBA_DATO, eller SCHOOL_OPERATED=1 og npm run enkel -- overdrag)');
+        else if (lessonBlockedReason() === 'config') log('ADVARSEL: ' + lessonBlocked());
         log(startupLine());
         resolve(server.address().port);
       }));
@@ -1589,7 +1640,7 @@ function createServer(opts = {}) {
   };
 }
 
-module.exports = { createServer, weakPin, APPROVAL_FIELDS };
+module.exports = { createServer, weakPin, APPROVAL_FIELDS, featuresFor, schoolApprovalFrom };
 
 if (require.main === module) {
   // OWASP A10: en glemt fejl i et løfte må ikke vælte serveren midt i en lektion (alle elever ville blive grå).

@@ -752,7 +752,13 @@
   if (window.hmw.onPrefs) window.hmw.onPrefs(applyPrefs);
   // Skærmlæsere får gemt-status og prøve-vurdering at vide (uden at flytte fokus)
   for (const id of ['saved', 'preview']) { $(id).setAttribute('role', 'status'); $(id).setAttribute('aria-live', 'polite'); }
-  if (window.hmw.onAids) window.hmw.onAids((list) => { aids = Array.isArray(list) ? list : []; if (doc && doc.practice) practicePreview(); });
+  // Eleven kan se, hvilke hjælpemidler læreren har slået til (de står aldrig på mærket)
+  function showAids() {
+    const names = ['ordforslag', 'diktering'].filter(a => (aids || []).includes(a));
+    $('aids').hidden = !names.length;
+    $('aids').textContent = names.length ? 'Hjælpemidler: ' + names.join(' og ') : '';
+  }
+  if (window.hmw.onAids) window.hmw.onAids((list) => { aids = Array.isArray(list) ? list : []; showAids(); if (doc && doc.practice) practicePreview(); });
 
   window.hmw.onLesson((live) => { lessonLive = !!live; applyMode(); });
   (async () => {
@@ -760,6 +766,7 @@
     lessonLive = s.lesson;
     if (s.labels) labels = s.labels;
     if (Array.isArray(s.aids)) aids = s.aids;
+    showAids();
     applyPrefs(s.prefs);
     setWriteLesson(s.writeLesson);
     const first = (s.openId && s.docs.find(d => d.id === s.openId)) || s.docs[0];

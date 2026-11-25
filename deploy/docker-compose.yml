@@ -21,7 +21,8 @@ services:
       DBA_DATO: ${DBA_DATO:-}
       # Hvem driver serveren – en rolle, ikke et navn (står på forsiden), fx "en lærer på skolen"
       DRIFTSANSVARLIG: ${DRIFTSANSVARLIG:-}
-      # Beta-funktioner, der er slået fra som standard: liveScreen, screenshot, autoEvidence, similar (fx "liveScreen,screenshot")
+      # Beta-funktioner, der er slået fra som standard: liveScreen, screenshot, autoEvidence, similar, word (fx "liveScreen,screenshot").
+      # En ny overvågningsfunktion efter skolens ja blokerer nye lektioner, til "enkel.js bekraeft-ja" er kørt (docs/ENKEL.md)
       BETA_FEATURES: ${BETA_FEATURES:-}
       # 1 = Windows/Mac-elever skal have HolyMoly-vagten for at være grønne. Fra i beta
       REQUIRE_GUARD: ${REQUIRE_GUARD:-0}
@@ -52,6 +53,8 @@ services:
       LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
       # Frister (se server/src/retention.js). Tomme værdier = standarden i retention.js
       BACKUP_DAYS: ${BACKUP_DAYS:-}
+      # Adgangsfrase til den krypterede backup ud af huset (enkel.js backup-ud / gendan-test). Se docs/PROXMOX.md
+      BACKUP_PASSPHRASE: ${BACKUP_PASSPHRASE:-}
       DRAFT_DAYS: ${DRAFT_DAYS:-}
       VERSIONS_DAYS: ${VERSIONS_DAYS:-}
       DOC_RETENTION_DAYS: ${DOC_RETENTION_DAYS:-}

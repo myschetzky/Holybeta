@@ -235,7 +235,9 @@ async function until(fn, ms = 10_000, every = 200) {
   await until(() => t.evaluate(() => document.querySelectorAll('#d-body .list li').length > 3), 8000);
   const webLog = await t.textContent('#d-body');
   check(/chatgpt\.com/.test(webLog) && /Blokeret/.test(webLog), 'web-loggen viser blokerede forsøg');
-  check(/Dansk stil/.test(webLog), 'web-loggen viser besøgte sider');
+  // Dataminimering: for tilladte sider gemmes kun værtsnavnet – ikke titlen
+  check(/127\.0\.0\.1/.test(webLog), 'web-loggen viser besøgte sider (kun værtsnavn)');
+  check(!/Dansk stil/.test(webLog), 'web-loggen gemmer ikke titlen på en tilladt side');
   await t.screenshot({ path: path.join(OUT, '05-weblog.png') });
   await t.click('.tabs button[data-tab="alerts"]');
   await sleep(1500);

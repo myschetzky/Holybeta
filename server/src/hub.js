@@ -17,7 +17,7 @@ const MAX_TABS = 60;
 const MAX_APPS = 120;
 const STALE_MS = 20_000; // ingen status i 20 sek -> grå
 const HOME_NO_SCREEN = 'Skriveøkt hjemme: skærmen kan ikke ses';
-const FEATURE_OFF = { liveScreen: 'Live-skærm er slået fra på denne server', screenshot: 'Skærmbilleder er slået fra på denne server' };
+const FEATURE_OFF = { liveScreen: 'Live-skærm er slået fra på denne server', screenshot: 'Skærmbilleder er slået fra på denne server', word: 'Skriv i Word er slået fra på skolens server. Brug skrivevinduet.' };
 const MAX_EXTRA_MS = 2 * 3600_000; // ekstra tid: højst 2 timer efter klassens lektion
 const SOLO_GRACE_MS = 120_000; // en afbrudt skriveøkt venter 2 min. på eleven – og kan derefter fortsættes i 2 min. mere
 const MY_LAMP_MS = 10_000;     // elevens egen lampe (my-lamp) sendes højst hvert 10. sek.
@@ -67,9 +67,11 @@ function preferLesson(l, cur) {
 }
 
 class Hub {
-  constructor({ db, dataDir, getRules, classConfig, log, staleMs, minAgentVersion, minExtensionVersion, downloadUrl, requireGuard, compileFor, docs, publicUrl, lessonBlocked, features, soloGraceMs }) {
+  constructor({ db, dataDir, getRules, classConfig, log, staleMs, minAgentVersion, minExtensionVersion, downloadUrl, requireGuard, compileFor, docs, publicUrl, lessonBlocked, features, soloGraceMs, termsHash }) {
     // Funktioner, der er slået fra (beta): håndhæves her – ikke kun i dashboardet
-    this.features = Object.assign({ liveScreen: true, screenshot: true, autoEvidence: true, hand: true, writeLesson: true }, features || {});
+    this.features = Object.assign({ liveScreen: true, screenshot: true, autoEvidence: true, hand: true, writeLesson: true, word: true }, features || {});
+    // Enkel tilstand: hash af funktionerne bag elevernes accept (configlock.js). Ændres de, skal eleven acceptere igen.
+    this.termsHash = termsHash || null;
     // Enkel tilstand: skolens ja mangler -> ingen lektioner og ingen skriveøkter (returnerer en besked eller null)
     this.lessonBlocked = lessonBlocked || (() => null);
     this.docs = docs || null;           // "Skriv i HolyMoly" (server/src/docs.js)
@@ -85,6 +87,7 @@ class Hub {
     this.soloQuota = new Map(); // studentId -> { day, n, last } – mod oversvømmelse af skriveøkter
     this.hands = new Map(); // studentId -> tidspunkt eleven rakte hånden op (kun under lektionen)
     this.lastColor = new Map(); // studentId -> { lessonId, color } (til lektionsrapporten)
+    this.seenOnline = new Map(); // studentId -> lessonId, hvor eleven har været forbundet ("Uden HolyMoly" gælder så ikke)
     this.staleMs = staleMs || STALE_MS;
     this.minAgentVersion = minAgentVersion || '';
     this.minExtensionVersion = minExtensionVersion || '';
@@ -104,6 +107,9 @@ class Hub {
     this.watchers = new Map(); // studentId -> Set<tconn>
     this.frozen = new Map(); // studentId -> { message, mode: 'freeze' | 'review' }
     this.closed = new Map(); // studentId -> {ts, reason}
+    // "Uden HolyMoly (andet udstyr)": elever, læreren har markeret (students.other_device). Kun uden forbindelse.
+    this.otherDevice = new Set();
+    try { for (const r of db.prepare('SELECT id FROM students WHERE other_device IS NOT NULL').all()) this.otherDevice.add(r.id); } catch (e) { /* ældre skema */ }
     this.lessons = new Map(); // classId -> {id, endsAt, started, writeAssignment: {id, title} | null}
     this.extended = new Map(); // classId -> klassens afsluttede lektion, mens nogle elever har ekstra tid
     this.ext = new Map(); // lessonId -> Map(studentId -> endsAt) (ekstra tid, lesson_extensions)
@@ -216,9 +222,8 @@ class Hub {
   /** Elevens hjælpemidler (students.aids, JSON-liste). Findes kolonnen ikke endnu, er listen tom. */
   _aidsOf(sid) {
     try {
-      const row = this.db.prepare('SELECT * FROM students WHERE id = ?').get(sid);
-      const v = row && row.aids ? JSON.parse(row.aids) : [];
-      return Array.isArray(v) ? v.map(String).slice(0, 10) : [];
+      // Udløbne hjælpemidler (skoleårets slutning) tæller ikke
+      return require('./db').activeAids(this.db.prepare('SELECT * FROM students WHERE id = ?').get(sid));
     } catch (e) { return []; }
   }
 
@@ -338,6 +343,8 @@ class Hub {
       }
     }
     this._lessonChanged(classId);
+    // "Uden HolyMoly (andet udstyr)": lektionsrapporten får 'other' fra start (ellers tæller tiden som grå)
+    if (!existing) for (const { id } of this._q.studentsOfClass.all(classId)) if (this.otherDevice.has(id)) this._logColor(id, classId, this.studentView(id));
     return this.lessons.get(classId);
   }
 
@@ -578,12 +585,14 @@ class Hub {
     }
     this._send(conn, {
       type: 'welcome', guardPair,
-      enrollments: [...conn.students.values()].map(s => ({ studentId: s.id, studentName: s.name, className: s.class_name, teacherName: s.teacher_name })),
+      enrollments: [...conn.students.values()].map(s => ({ studentId: s.id, studentName: s.name, className: s.class_name, teacherName: s.teacher_name, termsChanged: this._termsChanged(s.id) })),
       invalidTokens: invalid,
       rules: this.getRules(),
       serverTime: Date.now(),
       updateRequired: conn.outdated, minAgentVersion: this.minAgentVersion,
       minExtensionVersion: this.minExtensionVersion, downloadUrl: this.downloadUrl,
+      // Elev-appen viser kun "Skriv i Word", når serveren tillader det (BETA_FEATURES=word i enkel tilstand)
+      features: { word: !!this.features.word },
     });
     // Nogen har prøvet elevens kode, mens appen ikke var forbundet: den faste besked kommer nu
     for (const sid of conn.students.keys()) if (this.pinNotices.delete(sid)) this._send(conn, { type: 'notice', kind: 'pin-attempt' });
@@ -601,6 +610,31 @@ class Hub {
     this._assignActive(conn);
     for (const s of conn.students.values()) this._pushStudent(s.id);
     this._sendAssignments(conn);
+  }
+
+  /** Læreren markerer eleven som "Uden HolyMoly (andet udstyr)" (eller fjerner markeringen). Står i revisionssporet. */
+  setOtherDevice(sid, on, teacher) {
+    this.db.prepare('UPDATE students SET other_device = ? WHERE id = ?').run(on ? Date.now() : null, sid);
+    if (on) this.otherDevice.add(sid); else this.otherDevice.delete(sid);
+    this._audit(sid, on ? `${teacher.name} markerede eleven som uden HolyMoly (andet udstyr)` : `${teacher.name} fjernede "uden HolyMoly"`, teacher.id, on ? 'markerede uden HolyMoly' : 'fjernede uden HolyMoly');
+    this._pushStudent(sid);
+  }
+
+  /** Har eleven accepteret vilkårene med andre funktioner end dem, der er slået til nu? (Kun enkel tilstand.) */
+  _termsChanged(sid) {
+    if (!this.termsHash) return false;
+    try {
+      const r = this.db.prepare('SELECT terms_accepted, terms_features FROM students WHERE id = ?').get(sid);
+      return !!(r && r.terms_accepted && r.terms_features !== this.termsHash);
+    } catch (e) { return false; }
+  }
+
+  /** 'word' for et dokument skrevet i Word gennem HolyMoly, ellers ''. */
+  _docSource(id) {
+    try {
+      const r = this.db.prepare('SELECT monitor FROM documents WHERE id = ?').get(String(id || ''));
+      return r && JSON.parse(r.monitor || '{}').source === 'word' ? 'word' : '';
+    } catch (e) { return ''; }
   }
 
   /* ---------- Afleveringer ---------- */
@@ -744,6 +778,7 @@ class Hub {
       case 'doc': {
         if (!this.docs) return;
         const id = str(msg.id, 64);
+        if (msg.source === 'word' && !this.features.word) return this._send(conn, { type: 'doc-saved', id, ok: false, error: FEATURE_OFF.word });
         if (!a) return this._send(conn, { type: 'doc-saved', id, ok: false, error: 'Du kan kun skrive i HolyMoly, mens en lektion er i gang' });
         const now = Date.now();
         if (now - (conn.lastDocSave || 0) < 1500) return this._send(conn, { type: 'doc-saved', id, ok: false, error: 'busy' });
@@ -761,6 +796,7 @@ class Hub {
       case 'doc-submit': {
         if (!this.docs) return;
         const id = str(msg.id, 64);
+        if (!this.features.word && (msg.source === 'word' || this._docSource(id) === 'word')) return this._send(conn, { type: 'doc-result', id, ok: false, error: FEATURE_OFF.word });
         if (!a) return this._send(conn, { type: 'doc-result', id, ok: false, error: 'Aflevering kræver at lektionen er i gang' });
         const meta = this.db.prepare('SELECT s.id, s.class_id, s.name AS student, c.name AS class, t.name AS teacher FROM students s JOIN classes c ON c.id = s.class_id JOIN teachers t ON t.id = c.teacher_id WHERE s.id = ?').get(a.studentId);
         // Den endelige version kommer med afleveringen (så der aldrig udstedes bevis for en ældre version)
@@ -784,6 +820,15 @@ class Hub {
           this._broadcastToWatchers(a.studentId, { type: 'docs', studentId: a.studentId });
         }
         break;
+      }
+      // Eleven har læst de ændrede vilkår og bekræfter dem i appen (configlock.js). Gælder alle elever på computeren.
+      case 'accept-terms': {
+        if (!this.termsHash) return;
+        const now = Date.now();
+        for (const sid of conn.students.keys()) {
+          if (this._termsChanged(sid)) this.db.prepare('UPDATE students SET terms_accepted = ?, terms_features = ? WHERE id = ?').run(now, this.termsHash, sid);
+        }
+        return this._send(conn, { type: 'terms-accepted', ok: true });
       }
       case 'doc-delete': {
         // Eleven sletter en kladde i skrivevinduet (også uden for lektionen). Afleverede dokumenter kan ikke slettes.
@@ -1376,6 +1421,12 @@ class Hub {
     // (det står i afleveringen bagefter). home bruges kun til at slå skærm og skærmbillede fra i dashboardet.
     const solo = this.soloOf(sid);
     if (solo && !this.lessonOf(classId)) v.home = true;
+    // Uden HolyMoly (andet udstyr): neutral i stedet for grå – men kun uden forbindelse, så en rød lampe aldrig kan vaskes.
+    // Har eleven været forbundet i denne lektion (eller lukket appen), er eleven grå som alle andre.
+    if (!conn && this.otherDevice.has(sid)) {
+      const seen = this.closed.has(sid) || (lesson && this.seenOnline.get(sid) === lesson.id);
+      if (!seen) { v.color = 'other'; v.activity = 'Uden HolyMoly (andet udstyr)'; v.otherDevice = true; return v; }
+    }
     if (!conn) return v;
     if (conn.outdated && lesson) {
       v.color = 'grey';
@@ -1462,7 +1513,9 @@ class Hub {
   _logColor(sid, classId, view) {
     const l = this.lessonOf(classId);
     if (!l || this.shuttingDown) return;
-    const color = view.color === 'green' || view.color === 'red' ? view.color : 'grey';
+    if (view.online) this.seenOnline.set(sid, l.id);
+    // 'other' (uden HolyMoly, andet udstyr) er hverken grå eller rød i rapporten og pilottallene
+    const color = view.color === 'green' || view.color === 'red' || view.color === 'other' ? view.color : 'grey';
     const prev = this.lastColor.get(sid);
     if (prev && prev.lessonId === l.id && prev.color === color) return;
     this.lastColor.set(sid, { lessonId: l.id, color });

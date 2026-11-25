@@ -102,12 +102,18 @@
     $('limit-text').textContent = HMDoc.LIMIT_TEXT;
     if (v3) {
       const obs = (Array.isArray(p.observed) ? p.observed : []).map(String);
-      $('observed').textContent = obs.join(' og ') || '–';
+      const OBS = { skrivevindue: 'skrivevinduet', word: 'Word', taster: 'tastetryk i Word (kun antal)', vagt: 'vagten' };
+      $('observed').textContent = obs.map(x => OBS[x] || x).join(' og ') || '–';
       $('observed-text').hidden = false;
-      const where = obs.includes('word') ? 'Word-dokumentet (skrevet i Word gennem HolyMoly)' : 'HolyMolys skrivevindue';
-      $('observed-text').textContent = obs.includes('vagt')
+      const word = obs.includes('word');
+      const where = word ? 'Word-dokumentet (skrevet i Word gennem HolyMoly)' : 'HolyMolys skrivevindue';
+      // Word er et lavere niveau end skrivevinduet: uden talte tastetryk så HolyMoly kun, hvordan teksten voksede
+      const level = !word ? '' : obs.includes('taster')
+        ? ' Tastetrykkene i Word blev talt og forklarer teksten. Word er stadig et lavere niveau end skrivevinduet.'
+        : ' Tastetrykkene blev ikke talt – HolyMoly så kun, hvordan teksten voksede. Det er et lavere niveau end skrivevinduet.';
+      $('observed-text').textContent = (obs.includes('vagt')
         ? `${where} og HolyMoly-vagten på computeren blev fulgt.`
-        : `Kun ${where} blev fulgt. Resten af computeren blev ikke overvåget af HolyMoly-vagten.`;
+        : `Kun ${where} blev fulgt. Resten af computeren blev ikke overvåget af HolyMoly-vagten.`) + level;
       const d = fmtDate(p.assignmentCreated);
       if (d) { $('asg-created').hidden = false; $('asg-created').textContent = `Skrevet til en aflevering oprettet ${d}.`; }
       $('limits').hidden = true;

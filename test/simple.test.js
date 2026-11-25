@@ -423,7 +423,7 @@ test('beta: forside uden priser, spærrede ruter, features og driften (databehan
     }
     // Én profil: ingen live-skærm, ingen skærmbilleder og intet lighedstjek – hånd op og skrivetime er med
     let info = await client(base).call('GET', '/api/info');
-    assert.deepStrictEqual(info.features, { liveScreen: false, screenshot: false, autoEvidence: false, similar: false, hand: true, writeLesson: true });
+    assert.deepStrictEqual(info.features, { liveScreen: false, screenshot: false, autoEvidence: false, similar: false, hand: true, writeLesson: true, word: false });
     assert.deepStrictEqual(info.approvalMissing, []);
     assert.strictEqual(info.operator.role, 'en lærer på skolen');
     assert.strictEqual(info.operator.testServer, true);
@@ -495,7 +495,7 @@ test('beta: forside uden priser, spærrede ruter, features og driften (databehan
     // BETA_FEATURES kan slå ting til (og fra)
     srv = mk({ dbaDate: '2026-11-20', betaFeatures: 'liveScreen, screenshot,-hand' });
     base = 'http://127.0.0.1:' + await srv.listen();
-    assert.deepStrictEqual((await client(base).call('GET', '/api/info')).features, { liveScreen: true, screenshot: true, autoEvidence: false, similar: false, hand: false, writeLesson: true });
+    assert.deepStrictEqual((await client(base).call('GET', '/api/info')).features, { liveScreen: true, screenshot: true, autoEvidence: false, similar: false, hand: false, writeLesson: true, word: false });
   } finally {
     await srv.close();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -508,7 +508,7 @@ test('almindelig tilstand: alle funktioner, den almindelige forside og /tilbud',
   const base = 'http://127.0.0.1:' + await srv.listen();
   try {
     const info = await client(base).call('GET', '/api/info');
-    assert.deepStrictEqual(info.features, { liveScreen: true, screenshot: true, autoEvidence: true, similar: true, hand: true, writeLesson: true }, 'BETA_FEATURES gælder kun i beta');
+    assert.deepStrictEqual(info.features, { liveScreen: true, screenshot: true, autoEvidence: true, similar: true, hand: true, writeLesson: true, word: true }, 'BETA_FEATURES gælder kun i beta');
     assert.strictEqual(info.operator, null);
     assert.match(await (await fetch(base + '/')).text(), /prøveperiode/);
     assert.strictEqual((await fetch(base + '/tilbud')).status, 200);

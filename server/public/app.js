@@ -424,6 +424,29 @@
       else freezeOne(state.open);
     });
     $('#d-hand').addEventListener('click', () => { if (state.open != null) send({ type: 'hand', studentId: state.open, up: false }); });
+    $('#d-aids').addEventListener('click', () => { if (state.open != null) editAids(state.open); });
+    $('#d-other').addEventListener('click', async () => {
+      const id = state.open;
+      const s = state.students.get(id);
+      if (!s) return;
+      const on = !s.otherDevice;
+      const r = await dialog({
+        title: on ? `Marker ${s.name} som uden HolyMoly?` : `Fjern "Uden HolyMoly" fra ${s.name}?`,
+        body: on ? [
+          h('p', { text: 'Til elever med Mac, Chromebook, iPad eller Linux. Eleven vises neutralt, ikke gråt, og tæller ikke med i grå minutter.' }),
+          h('p', { text: 'Aftal en anden skriveform med eleven. Der udstedes intet bevis.' }),
+          h('p', { class: 'muted small', text: 'Markeringen virker kun, mens eleven ikke er forbundet til HolyMoly. Den står i revisionssporet.' }),
+        ] : [h('p', { text: 'Eleven vises gråt igen, når HolyMoly ikke er forbundet.' })],
+        actions: [{ label: 'Annuller' }, { label: on ? 'Marker' : 'Fjern', kind: 'primary', submit: true, run: () => api(`/api/students/${id}/other-device`, { method: 'PUT', body: { on } }) }],
+      });
+      if (r) { state.students.set(id, Object.assign({}, s, { otherDevice: r.otherDevice })); updateDrawerHead(); }
+    });
+    $('#d-wrong').addEventListener('click', () => {
+      const v = state.views.get(state.open);
+      if (!v || v.color !== 'red') return;
+      const first = (v.violations || [])[0] || {};
+      wasWrong('lampe', [first.category || 'andet'], v.home ? 'hjemme' : 'klasse');
+    });
     $('#d-shot').addEventListener('click', () => {
       if (isHome(state.open)) return toast(HOME_MSG);
       send({ type: 'screenshot', studentId: state.open });
@@ -588,6 +611,8 @@
       if (v.color === 'red' && v.violations.length) {
         act = v.violations[0].text;
         flag = v.activity && v.activity !== act ? v.activity : '';
+      } else if (v.color === 'other') {
+        act = 'Uden HolyMoly (andet udstyr)';
       } else if (v.color === 'grey') {
         act = v.closed ? v.closed.reason + ' ' + fmtTime(v.closed.ts)
           : (v.online ? (v.greyReason || v.activity) : notConnected(s));
@@ -677,7 +702,7 @@
         btn.textContent = 'Start lektion';
         btn.className = 'btn primary';
         btn.disabled = !!state.info.lessonBlocked;
-        if (state.info.lessonBlocked) btn.title = 'Venter på skolens ja'; else btn.removeAttribute('title');
+        if (state.info.lessonBlocked) btn.title = state.info.lessonBlockedReason === 'config' ? 'Konfigurationen er ændret siden skolens ja' : 'Venter på skolens ja'; else btn.removeAttribute('title');
         $('#toolbar-live').hidden = true;
       }
       if (rw) rw.updateUi();
@@ -856,16 +881,18 @@
         const summary = h('p', { class: 'small' }, `${rep.lesson.minutes} min. · ${rep.students.length} elever · `,
           h('b', { text: tot.red }), ' med rød lampe · ', h('b', { text: tot.hands }), ' gange hånd op · ', h('b', { text: tot.sub }), ' afleveringer (', h('b', { text: tot.cert }), ' med skrive-bevis)');
         const rows = rep.students.map(s => {
-          const all = Math.max(1, s.green + s.red + s.grey);
+          const other = s.other || 0;
+          const all = Math.max(1, s.green + s.red + s.grey + other);
           const seg = (cls, ms) => h('span', { class: 'seg-' + cls, style: `width:${(ms / all) * 100}%`, title: `${minutes(ms)} min.` });
           const notes = [];
           if (s.violations) notes.push(`${s.violations} fund`);
           if (s.attempts) notes.push(`${s.attempts} blokerede forsøg`);
           if (s.hands) notes.push(`✋ ${s.hands}`);
+          if (other) notes.push('Uden HolyMoly (andet udstyr)');
           if (s.submitted) notes.push(`${s.submitted} afleveret${s.certified ? ` (${s.certified} med bevis)` : ''}`);
           return h('tr', {},
             h('td', { class: 'r-name', text: s.name }),
-            h('td', { class: 'r-bar' }, h('div', { class: 'timebar', 'aria-label': `Grøn ${minutes(s.green)} min., rød ${minutes(s.red)} min., grå ${minutes(s.grey)} min.` }, seg('green', s.green), seg('red', s.red), seg('grey', s.grey)),
+            h('td', { class: 'r-bar' }, h('div', { class: 'timebar', 'aria-label': `Grøn ${minutes(s.green)} min., rød ${minutes(s.red)} min., grå ${minutes(s.grey)} min.` + (other ? `, uden HolyMoly ${minutes(other)} min.` : '') }, seg('green', s.green), seg('red', s.red), seg('grey', s.grey), seg('other', other)),
               s.redReasons.length ? h('div', { class: 'r-why', text: s.redReasons.join(' · ') }) : null),
             h('td', { class: 'r-num', text: `${minutes(s.green)} / ${minutes(s.red)} / ${minutes(s.grey)}` }),
             h('td', { class: 'r-notes muted small', text: notes.join(' · ') || '–' }));
@@ -1058,17 +1085,10 @@
           ? h('p', { class: 'small' }, `Koden er nulstillet. Engangskoden virker indtil kl. ${fmtTime(s.pinResetUntil)}. Har ${s.name} ikke nået det, så nulstil igen.`)
           : s.pinReset ? h('p', { class: 'small' }, 'Engangskoden er udløbet. Nulstil igen for at få en ny.')
             : s.pin ? h('p', { class: 'muted small', text: 'Eleven har sin egen kode. Har eleven glemt den, så nulstil den. Du får en engangskode, som eleven skriver i appen.' }) : null;
-      // Hjælpemidler (ordblinde m.fl.): skrivevinduet tillader dem, og skrivetempoet vurderes ikke.
-      // Vises kun her og i lærer-logbogen – aldrig i mærket, beviset eller Word-filen.
-      const aidsNow = Array.isArray(s.aids) ? s.aids : [];
-      const aidBox = (key, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'aid', value: key, checked: aidsNow.includes(key) }), label);
-      const aids = h('fieldset', { class: 'aids' },
-        h('legend', { text: 'Hjælpemidler' }),
-        aidBox('ordforslag', 'Ordforslag'), aidBox('diktering', 'Diktering'),
-        h('p', { class: 'muted small', text: 'Til elever med fx ordblindhed. Skrivetempoet bliver ikke vurderet. Over 10 % dikteret tekst giver ikke mærket, men eleven får ingen ulempe. Valget står i logbogen.' }));
+      // Hjælpemidler sættes i elevskuffen ved siden af "+ tid" (editAids)
       const r = await dialog({
         title: s.name,
-        body: [h('label', {}, 'Navn', name), info, pinInfo, aids],
+        body: [h('label', {}, 'Navn', name), info, pinInfo],
         actions: [
           s.pin || s.pinReset ? { label: 'Nulstil kode', run: async () => {
             const r = await api(`/api/students/${id}/reset-pin`, { method: 'POST', body: {} });
@@ -1082,8 +1102,6 @@
           { label: 'Ny computer', run: async () => api(`/api/students/${id}/invite`, { method: 'POST', body: {} }).then(r => ({ code: r.inviteCode })) },
           { label: 'Gem', kind: 'primary', submit: true, run: async () => {
             await api('/api/students/' + id, { method: 'PATCH', body: { name: name.value } });
-            const picked = [...aids.querySelectorAll('input[name=aid]:checked')].map(x => x.value);
-            if (picked.join() !== aidsNow.join()) await api(`/api/students/${id}/aids`, { method: 'PUT', body: { aids: picked } });
             return 'saved';
           } },
         ],
@@ -1176,6 +1194,53 @@
       route('/');
     }
 
+    /* ---- "Var det forkert?" (pilottal: kun årsag og bevistype – ingen navne) ---- */
+    const WRONG_REASON = Object.assign({ andet: 'Andet', graa: 'Grå lampe' }, Object.fromEntries(Object.entries(HMDoc.CATEGORY_TEXT).map(([k, t]) => [k, t])));
+    async function wasWrong(kind, reasons, source) {
+      const pick = h('select', {}, ...reasons.map(r => h('option', { value: r, text: (state.info.categories && state.info.categories[r] && state.info.categories[r].label) || WRONG_REASON[r] || r })));
+      const r = await dialog({
+        title: kind === 'lampe' ? 'Var den røde lampe forkert?' : 'Var afslaget forkert?',
+        body: [
+          h('p', { text: 'HolyMoly gemmer kun årsagen og om det var i timen, hjemme eller i Word. Ikke hvem eller hvornår.' }),
+          reasons.length > 1 ? h('label', {}, 'Hvilken årsag var forkert?', pick) : null,
+          h('p', { class: 'muted small', text: 'Tallene bruges kun til at måle falske røde lamper og afslag i piloten.' }),
+        ],
+        actions: [{ label: 'Annuller' }, { label: 'Ja, det var forkert', kind: 'primary', submit: true, run: () => api('/api/feedback', { method: 'POST', body: { kind, reason: pick.value || reasons[0], source } }) }],
+      });
+      if (r) toast('Tak. Det er noteret uden navn.');
+    }
+
+    /* ---- hjælpemidler (i elevskuffen ved siden af "+ tid") ---- */
+    const AID_NAME = { ordforslag: 'ordforslag', diktering: 'diktering' };
+    /**
+     * Ordforslag og diktering til elever med fx ordblindhed. Vises for eleven i skrivevinduet, står i revisionssporet
+     * og udløber ved skoleårets slutning – aldrig i mærket, beviset eller Word-filen.
+     */
+    async function editAids(id) {
+      const s = state.students.get(id);
+      if (!s) return;
+      const aidsNow = Array.isArray(s.aids) ? s.aids : [];
+      const aidBox = (key, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'aid', value: key, checked: aidsNow.includes(key) }), label);
+      const aids = h('fieldset', { class: 'aids' },
+        h('legend', { text: 'Hjælpemidler' }),
+        aidBox('ordforslag', 'Ordforslag'), aidBox('diktering', 'Diktering'),
+        h('p', { class: 'muted small', text: 'Til elever med fx ordblindhed. Eleven kan se dem i skrivevinduet. Ordforslag: hele ord tæller som skrevet. Diktering: skrivetempoet bliver ikke vurderet, og over 10 % dikteret tekst giver ikke mærket, men eleven får ingen ulempe. Valget står i revisionssporet og gælder til skoleårets slutning.' }));
+      const r = await dialog({
+        title: 'Hjælpemidler til ' + s.name,
+        body: [aids],
+        actions: [{ label: 'Annuller' }, { label: 'Gem', kind: 'primary', submit: true, run: async () => {
+          const picked = [...aids.querySelectorAll('input[name=aid]:checked')].map(x => x.value);
+          if (picked.join() === aidsNow.join()) return 'same';
+          return api(`/api/students/${id}/aids`, { method: 'PUT', body: { aids: picked } });
+        } }],
+      });
+      if (r && r !== 'same') { state.students.set(id, Object.assign({}, s, { aids: r.aids, aidsUntil: r.aidsUntil })); updateDrawerHead(); toast(r.aids.length ? 'Hjælpemidlerne er gemt' : 'Hjælpemidlerne er fjernet'); }
+    }
+    function aidsLabel(s) {
+      const a = s && Array.isArray(s.aids) ? s.aids : [];
+      return a.length ? 'Hjælpemidler: ' + a.map(x => AID_NAME[x] || x).join(' og ') : 'Hjælpemidler';
+    }
+
     /* ---- elev-skuffen ---- */
     function openDrawer(id) {
       if (state.watching != null && state.watching !== id) send({ type: 'unwatch' });
@@ -1235,6 +1300,12 @@
       $('#d-sub').textContent = t.act + (v.device && v.device.os ? ' · ' + v.device.os : '');
       $('#d-freeze').textContent = v.frozen ? 'Optø' : 'Frys';
       $('#d-hand').hidden = !v.hand;
+      $('#d-wrong').hidden = v.color !== 'red';
+      // Uden HolyMoly: kun for elever uden forbindelse (markeringen kan aldrig vaske en rød lampe)
+      $('#d-other').hidden = !s.otherDevice && !!v.online;
+      $('#d-other').textContent = s.otherDevice ? 'Fjern "Uden HolyMoly"' : 'Uden HolyMoly';
+      $('#d-aids').textContent = aidsLabel(s);
+      $('#d-aids').title = s.aidsUntil ? `Gælder til ${new Date(s.aidsUntil).toLocaleDateString('da-DK')}` : 'Ordforslag og diktering til elever med fx ordblindhed';
       $('#d-freeze').disabled = !(state.lesson && state.lesson.live);
       if (rw) rw.updateDrawer(id);
       const home = !!v.home;
@@ -1402,7 +1473,8 @@
           h('p', { class: 'small' }, HMDoc.label(d.place, { observed: d.observed, test: d.test }) + '. ' + HMDoc.LIMIT_TEXT + ' ', h('a', { href: '/bevis/' + d.certId, target: '_blank', rel: 'noopener', text: 'Se beviset' })))
         : h('div', { class: 'sec' }, h('div', { class: 'proof-head', text: d.submitted ? 'Afleveret uden bevis' : 'Ikke afleveret endnu – sådan ser det ud lige nu:' }),
           d.reasons.length ? h('ul', { class: 'small' }, ...d.reasons.map(x => h('li', { class: 'violation grey', text: x }))) : h('p', { class: 'small muted', text: 'Indtil videre er der intet, der forhindrer et bevis.' }),
-          d.submitted ? h('p', { class: 'muted small', text: 'Manglende flueben er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt.' }) : null);
+          d.submitted ? h('p', { class: 'muted small', text: 'Manglende flueben er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt.' }) : null,
+          d.submitted ? h('button', { class: 'btn small', text: 'Var afslaget forkert?', onclick: () => wasWrong('afslag', d.categories && d.categories.length ? d.categories : ['andet'], d.source === 'word' ? 'word' : /hjemme/.test(String(d.place || '')) ? 'hjemme' : 'klasse') }) : null);
       const facts = d.facts ? h('p', { class: 'muted small', text: `${d.facts.words} ord · ${d.facts.writingMinutes} min. skrivetid · ${d.source === 'word' ? 'skrevet i Word (ingen tastestatistik)' : `${d.facts.typed} tegn tastet, ${d.facts.deleted} slettet`} ·${d.facts.monitoredShare} % med fuld overvågning` }) : null;
       const notes = d.notes && d.notes.length ? h('ul', { class: 'muted small' }, ...d.notes.map(x => h('li', { text: x }))) : null;
       const replay = h('div', { class: 'sec' });
