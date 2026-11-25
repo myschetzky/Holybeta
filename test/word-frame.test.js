@@ -144,6 +144,8 @@ test('rammen tegnes: kant, bjælke, muldvarp med grøn/rød/grå, boble og bokse
     await push(Object.assign({}, base, { status: { color: 'red', symbol: '✗', text: 'Rød: tekst indsat fra et andet program kl. 10.14', notes: [] }, panel: { kind: 'confirm', title: 'Teksten kan ikke få mærket', text: 'Beviset vil mangle, fordi:', items: ['Der er tekst, som ikke er tastet i HolyMoly.'], note: 'Skriver du videre, kan du stadig nå at få mærket.', actions: [{ id: 'continue', label: 'Skriv videre', primary: true }, { id: 'nomark', label: 'Gem uden mærke' }] } }));
     assert.ok(await page.locator('#panel').isVisible());
     assert.deepStrictEqual(await page.locator('#p-actions button').allInnerTexts(), ['Skriv videre', 'Gem uden mærke']);
+    // Rammen flytter fokus lige efter tegningen: vent på det i stedet for at tjekke med det samme (testen var ustabil)
+    await page.waitForFunction(() => document.activeElement && document.activeElement.textContent === 'Skriv videre', null, { timeout: 3000 }).catch(() => {});
     assert.strictEqual(await page.evaluate(() => document.activeElement && document.activeElement.textContent), 'Skriv videre', 'fokus på det primære valg');
     await page.screenshot({ path: path.join(OUT, 'word-frame-valg.png') });
     await page.locator('#p-actions button', { hasText: 'Gem uden mærke' }).click();

@@ -166,3 +166,170 @@ test('word.ps1 (statisk – kan ikke køres her): kommandoerne, Copilot-politikk
   // Word lukkes kun, når der ikke er andre dokumenter åbne
   assert.match(ps, /if \(\$script:word\.Documents\.Count -eq 0\) \{ \$script:word\.Quit\(\)/);
 });
+
+/* ---------------------------------------------------------------- tastetælleren ---------------------------------------------------------------- */
+const { KeysHelper, cleanKeys } = require('../agent/src/word/keys.js');
+const fakeKeys = (env = {}) => () => new KeysHelper({ command: process.execPath, args: [FAKE, '--keys'], env: Object.assign({}, process.env, env), readyMs: 3000 });
+const until = async (f, ms = 3000) => { const end = Date.now() + ms; for (;;) { const v = await f(); if (v || Date.now() > end) return v; await new Promise(r => setTimeout(r, 30)); } };
+
+test('falsk Word: state har tastetællerne – tegn, Ctrl+V, tekst uden tastetryk, injicerede taster, slet – og kun i forgrunden', async () => {
+  const dir = tmp();
+  const b = fakeBridge();
+  try {
+    const o = await b.open(path.join(dir, 'Taster.docx'), true);
+    assert.strictEqual(o.ok, true);
+    assert.ok(!('hwnd' in o), 'hwnd sendes ikke videre');
+    let s = await b.state();
+    assert.ok(!('hwnd' in s));
+    assert.deepStrictEqual(s.keys, { typed: 0, deleted: 0, pasteKeys: 0, injected: 0, undo: 0, keystrokes: 0, maxCps: 0, burst: 0, fastShare: 0, regularity: null });
+    await b.request('fake:type', { text: 'Hej æble' });
+    await b.request('fake:paste', { text: ' indsat' });
+    await b.request('fake:insert', { text: ' fra Copilot' });
+    await b.request('fake:inject', { text: 'abc' });
+    await b.request('fake:delete', { chars: 3 });
+    s = await b.state();
+    assert.strictEqual(s.text, 'Hej æble indsat fra Copilot\r');
+    assert.deepStrictEqual([s.keys.typed, s.keys.keystrokes, s.keys.pasteKeys, s.keys.injected, s.keys.deleted], [8, 8, 1, 3, 3]);
+    // Word i baggrunden: intet tælles
+    await b.request('fake:set', { foreground: false });
+    await b.request('fake:type', { text: 'skjult' });
+    await b.request('fake:set', { foreground: true });
+    assert.strictEqual((await b.state()).keys.typed, 8);
+    await b.request('fake:keys', { maxCps: 6.4, burst: 9, undo: 2, regularity: 0.5 });
+    s = await b.state();
+    assert.deepStrictEqual([s.keys.maxCps, s.keys.burst, s.keys.undo, s.keys.regularity], [6.4, 9, 2, 0.5]);
+    // Ny økt: nye tællere
+    await b.close(true);
+    await b.open(path.join(dir, 'Taster.docx'), false);
+    assert.strictEqual((await b.state()).keys.typed, 0);
+    // Tastetryk kan ikke tælles: keys: null
+    await b.request('fake:set', { keys: false });
+    assert.strictEqual((await b.state()).keys, null);
+  } finally { b.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('tastetælleren som egen proces: startes med økten, får Word-vinduets hwnd, kun tal kommer videre, stoppes med økten', async () => {
+  const dir = tmp();
+  const helpers = [];
+  const make = fakeKeys();
+  const b = fakeBridge({ env: Object.assign({}, process.env, { HM_FAKE_KEYS: 'none' }), keys: () => { const h = make(); helpers.push(h); return h; } });
+  try {
+    assert.strictEqual((await b.open(path.join(dir, 'A.docx'), true)).ok, true);
+    assert.strictEqual(helpers.length, 1, 'tælleren startes, når økten åbner');
+    const s = await until(async () => { const x = await b.state(); return 'keys' in x ? x : null; });
+    assert.ok(s, 'tællerne kommer, når tælleren er klar');
+    assert.strictEqual(s.keys.typed, 0);
+    // Den falske tæller giver kun tal, når den har fået et hwnd – og sender et ekstra felt, som skal smides væk
+    helpers[0].child.stdin.write(JSON.stringify({ id: 9999, cmd: 'fake:keys', typed: 42, deleted: 3, pasteKeys: 1, regularity: 0.4 }) + '\n');
+    const k = await until(async () => { const x = await b.state(); return x.keys && x.keys.typed === 42 ? x.keys : null; });
+    assert.deepStrictEqual(k, { typed: 42, deleted: 3, pasteKeys: 1, injected: 0, undo: 0, keystrokes: 0, maxCps: 0, burst: 0, fastShare: 0, regularity: 0.4 });
+    assert.ok(!('vkCode' in k), 'ukendte felter (fx en tast) kommer aldrig videre');
+    // Økten slutter: tælleren stopper
+    const child = helpers[0].child;
+    await b.close(true);
+    assert.strictEqual(b.keys, null);
+    assert.strictEqual(helpers[0].state, 'off');
+    await until(() => child.exitCode !== null || child.signalCode !== null);
+    assert.ok(child.exitCode !== null || child.signalCode !== null, 'processen er stoppet');
+    // Ny økt: en ny tæller (nye tal)
+    await b.open(path.join(dir, 'A.docx'), false);
+    assert.strictEqual(helpers.length, 2);
+    const s2 = await until(async () => { const x = await b.state(); return 'keys' in x ? x : null; });
+    assert.strictEqual(s2.keys.typed, 0);
+    // Dokumentet lukkes i Word: tælleren stopper
+    await b.request('fake:set', { open: false });
+    assert.strictEqual((await b.state()).open, false);
+    assert.strictEqual(b.keys, null);
+  } finally { b.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('tastetælleren: hooken kan ikke installeres -> keys: null; starter stadig -> intet keys-felt; stopper midt i -> null', async () => {
+  const dir = tmp();
+  let b = fakeBridge({ env: Object.assign({}, process.env, { HM_FAKE_KEYS: 'none' }), keys: fakeKeys({ HM_FAKE_NO_HOOK: '1' }) });
+  try {
+    await b.open(path.join(dir, 'B.docx'), true);
+    const s = await until(async () => { const x = await b.state(); return 'keys' in x ? x : null; });
+    assert.strictEqual(s.keys, null, 'Tastetryk kan ikke tælles på denne computer');
+  } finally { b.stop(); }
+  b = fakeBridge({ env: Object.assign({}, process.env, { HM_FAKE_KEYS: 'none' }), keys: fakeKeys({ HM_FAKE_KEYS_DELAY: '1500' }) });
+  try {
+    await b.open(path.join(dir, 'C.docx'), true);
+    const s = await b.state();
+    assert.strictEqual(s.ok, true);
+    assert.ok(!('keys' in s), 'mens tælleren starter, ved broen det ikke endnu');
+    const k = await until(async () => { const x = await b.state(); return 'keys' in x ? x : null; });
+    assert.ok(k && k.keys && k.keys.typed === 0);
+    // Tælleren stopper midt i økten (fx stoppet af antivirus): null
+    b.keys.child.stdin.write(JSON.stringify({ id: 1, cmd: 'fake:exit' }) + '\n');
+    const gone = await until(async () => { const x = await b.state(); return x.keys === null ? x : null; });
+    assert.ok(gone, 'keys: null, når tælleren er væk');
+  } finally { b.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('tastetælleren: kun på Windows som standard, aldrig med en anden Word-proces, og cleanKeys tager kun tal', () => {
+  assert.strictEqual(typeof new WordBridge({ platform: 'win32' }).makeKeys, 'function');
+  assert.strictEqual(new WordBridge({ platform: 'win32', keys: false }).makeKeys, null);
+  assert.strictEqual(fakeBridge().makeKeys, null, 'en anden Word-proces (fx den falske) leverer selv keys');
+  assert.deepStrictEqual(cleanKeys({ typed: '5', deleted: -2, vkCode: 65, key: 'a', regularity: -1, maxCps: 'x' }), { typed: 5, deleted: 0, pasteKeys: 0, injected: 0, undo: 0, keystrokes: 0, maxCps: 0, burst: 0, fastShare: 0, regularity: null });
+  assert.strictEqual(cleanKeys(null), null);
+});
+
+test('keys.ps1 (statisk – kan ikke køres her): hooken sender altid tasten videre, tæller kun i Word-vinduet og gemmer aldrig hvilke taster', () => {
+  const ps = fs.readFileSync(path.join(__dirname, '..', 'agent', 'src', 'word', 'keys.ps1'), 'utf8');
+  const cs = ps.slice(ps.indexOf("@'"), ps.indexOf("'@"));
+  assert.ok(cs.length > 1000, 'C#-koden findes');
+  // Lavniveau-tastaturhook med egen beskedløkke på sin egen tråd
+  assert.match(cs, /SetWindowsHookEx\(WH_KEYBOARD_LL, proc, /);
+  assert.match(cs, /const int WH_KEYBOARD_LL = 13;/);
+  assert.match(cs, /while \(GetMessage\(out m, IntPtr\.Zero, 0, 0\) > 0\)/);
+  assert.match(cs, /UnhookWindowsHookEx\(hook\)/);
+  assert.match(cs, /static readonly HookProc proc = Hook;/, 'delegaten holdes i live');
+  // Hook-funktionen: én return, og den kalder CallNextHookEx (også når tællingen fejler)
+  const hook = cs.slice(cs.indexOf('static IntPtr Hook('), cs.indexOf('static bool Held('));
+  assert.deepStrictEqual(hook.match(/return [^;]*;/g), ['return CallNextHookEx(hook, nCode, wParam, lParam);']);
+  assert.match(hook, /try \{ if \(nCode >= 0\) Count\(wParam\.ToInt64\(\), lParam\); \} catch \{ \}/);
+  // Kun det Word-vindue, broen styrer, og kun i forgrunden – før der læses noget om tasten
+  const count = cs.slice(cs.indexOf('static void Count('), cs.indexOf('static int Category('));
+  const gateAt = count.indexOf('if (tg == 0 || GetForegroundWindow().ToInt64() != tg) return;');
+  assert.ok(gateAt > 0, 'forgrunds-tjekket');
+  assert.ok(gateAt < count.indexOf('Marshal.ReadInt32'), 'intet læses om tasten, før forgrunden er tjekket');
+  assert.match(ps, /\[HMKeys\]::SetTarget\(\[long\]\$req\.hwnd\)/);
+  // Injicerede taster tælles for sig – ikke som tastet
+  assert.match(count, /if \(\(flags & LLKHF_INJECTED\) != 0\) \{ injected\+\+; return; \}/);
+  // Tasten (vkCode) læses kun som argument til Category() og gemmes aldrig
+  assert.deepStrictEqual(count.match(/Marshal\.ReadInt32\(lParam, \d+\)/g), ['Marshal.ReadInt32(lParam, 8)', 'Marshal.ReadInt32(lParam, 12)', 'Marshal.ReadInt32(lParam, 0)']);
+  assert.match(count, /int cat = Category\(unchecked\(\(uint\)Marshal\.ReadInt32\(lParam, 0\)\)/);
+  assert.ok(!/Marshal\.ReadInt32\(lParam, 4\)/.test(cs), 'scanCode læses ikke');
+  assert.ok(!/ToUnicode|GetKeyNameText|MapVirtualKey|GetKeyboardState|KeyInterop|Clipboard/.test(cs), 'ingen oversættelse af taster til tegn eller navne');
+  // Ingen felter (static) med en tast, et tegn eller et navn
+  const fields = cs.split('\n').filter(l => /^\s*static\b/.test(l) && !/\(/.test(l.replace(/=.*$/, '')));
+  assert.ok(fields.length >= 8, fields.join('\n'));
+  for (const f of fields) assert.ok(!/\b(vk|key|keys|code|char|chars|name|text|last(Vk|Char|Code))\b/i.test(f.replace(/=.*$/, '')), 'felt: ' + f);
+  // Category() er en ren funktion: tager tasten som argument og svarer en kategori
+  const cat = cs.slice(cs.indexOf('static int Category('), cs.indexOf('static void Tempo('));
+  assert.ok(!/=[^=]/.test(cat.replace(/\/\/.*$/gm, '').replace(/[!<>=]=/g, '')), 'Category() tildeler intet');
+  // Det, der sendes, er kun tællerne
+  const snap = cs.slice(cs.indexOf('public static Hashtable Snapshot('));
+  const sent = (snap.match(/h\["(\w+)"\]/g) || []).map(x => x.slice(3, -2));
+  assert.deepStrictEqual(sent.sort(), ['burst', 'deleted', 'fastShare', 'injected', 'keystrokes', 'maxCps', 'pasteKeys', 'regularity', 'typed', 'undo']);
+  const sends = ps.match(/Send @\{[^\n]*/g);
+  assert.deepStrictEqual(sends, ['Send @{ ready = $true; hook = $ok }', 'Send @{ id = $id; ok = $true; keys = [HMKeys]::Snapshot() }', 'Send @{ id = $id; ok = $false; error = [string]$_.Exception.Message }']);
+  // Kategorierne
+  assert.match(cat, /if \(vk == 0x56\) return PASTE;/);
+  assert.match(cat, /if \(shift && vk == 0x2D\) return PASTE;/);
+  assert.match(cat, /if \(vk == 0x5A \|\| vk == 0x59\) return UNDO;/);
+  assert.match(cat, /if \(vk == 0x08 \|\| vk == 0x2E\) return DEL;/);
+  // Tempo som skrivevinduet (write.js): 5 sek. vindue, byger på 1 sek., < 12 ms, 200 afstande til jævnhed
+  const tempo = cs.slice(cs.indexOf('static void Tempo('));
+  for (const re of [/if \(g < 12\) fast\+\+;/, /g >= 12 && g < 2000/, /> 5000\) times\.Dequeue\(\)/, /times\.Count > 20/, /<= 1000\) inSec\+\+/, /gaps\.Count >= 200/, /timed >= 100/]) assert.match(tempo, re);
+  // Hooken fjernes, når økten slutter (stdin lukkes)
+  assert.match(ps, /\[HMKeys\]::Stop\(\)/);
+  // Ascii ud og balancerede klammer
+  assert.ok(ps.includes("'[^\\x00-\\x7F]'"));
+  const code = ps.replace(/'[^'\n]*'/g, "''").replace(/#.*$/gm, '').replace(/\/\/.*$/gm, '');
+  for (const [a, b2] of [['{', '}'], ['(', ')'], ['[', ']']]) assert.strictEqual(code.split(a).length, code.split(b2).length, a + b2);
+  // word.ps1 har ingen hook (så antivirus, der stopper hooks, ikke stopper Word-broen) – men giver hwnd
+  const word = fs.readFileSync(path.join(__dirname, '..', 'agent', 'src', 'word', 'word.ps1'), 'utf8');
+  assert.ok(!/SetWindowsHookEx|WH_KEYBOARD_LL/.test(word));
+  assert.match(word, /hwnd = \$h\.ToInt64\(\)/);
+});

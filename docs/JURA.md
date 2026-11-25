@@ -24,6 +24,7 @@ HolyMoly behandler personoplysninger om elever – ofte under 18 år: hvilke sid
 - **Skærmen ses kun ved klik**: ingen billeder på bordene. Eleven får besked, når læreren kigger med eller tager et skærmbillede. Automatiske skærmbilleder ved forbudt brug er slået fra som standard; slår læreren dem til for klassen, får eleven besked hver gang.
 - **Lærer-logbog**: hvem så skærmen, tog skærmbillede eller frøs – med navn og tid.
 - **Ingen keylogger, ingen filer, ingen mikrofon/kamera.** I HolyMolys eget skrivevindue tælles kun skrivestatistik til mærket "✓ Tastet i HolyMoly – intet indsat" (antal anslag, tastede/slettede tegn, tempo og rytme, forsøg på at indsætte, tid uden for vinduet) – ikke hvilke taster. Rytme og tempo minder om tastedynamik og bør nævnes i konsekvensanalysen.
+- **Tastetryk i Word ("Skriv i Word").** Skriver eleven i Word gennem HolyMoly, tæller elev-appen tastetryk med en lavniveau-tastaturhook i Windows – den samme teknik, en keylogger bruger. Den kører kun, mens Word-økten er åben, tæller kun, mens netop det Word-dokument er i forgrunden, og sender alle taster videre til Word. Den gemmer aldrig hvilke taster – kun kategorier (tegn, slet, indsæt, fortryd, sendt af et program) og tider til tempo og rytme, som i skrivevinduet. Formålet er at kunne se, at teksten er tastet (fx ikke skrevet af Copilot eller dikteret). Det skal stå i konsekvensanalysen og i informationen til elever og forældre (vilkår og privatlivspolitik er opdateret). Skolens antivirus/EDR kan opfatte tællingen som en keylogger; så stopper kun tællingen, og Word-dokumentet vurderes uden tastestatistik.
 - **Mac-netværksfilteret** kender kun listen over AI- og forbudte værtsnavne og melder kun forbindelser til dem – ikke elevens øvrige trafik – og kun i lektionen.
 - **Eksport af elevens log** (CSV) til brug ved indsigtsanmodninger og klagesager; eksporten står i lærer-logbogen.
 - **Automatisk sletning** efter opbevaringsfristen. Sletter man en elev eller klasse, slettes al dens log og alle skærmbilleder.
@@ -39,7 +40,7 @@ HolyMoly behandler personoplysninger om elever – ofte under 18 år: hvilke sid
 >
 > **Hvad registreres?** Navnet på det program og den hjemmeside, der er fremme, åbne faner, kørende programmer, og om forbudte sider eller programmer bliver brugt eller blokeret. Læreren kan se skærmen live og tage skærmbilleder – eleven får besked hver gang.
 >
-> **Hvad registreres ikke?** Hvad eleven taster i andre programmer, filer, mikrofon, kamera og private beskeder uden for lektionen. Når eleven skriver i HolyMolys eget skrivevindue, tælles kun tempo, rytme og antal anslag (ikke hvilke taster) – det bruges til fluebenet "Tastet i HolyMoly – intet indsat".
+> **Hvad registreres ikke?** Hvad eleven taster i andre programmer, filer, mikrofon, kamera og private beskeder uden for lektionen. Når eleven skriver i HolyMolys eget skrivevindue – eller i Word gennem HolyMoly – tælles kun tempo, rytme og antal anslag (ikke hvilke taster) – det bruges til fluebenet "Tastet i HolyMoly – intet indsat".
 >
 > **Hvor længe?** Oplysningerne slettes automatisk efter [30] dage.
 >

@@ -58,6 +58,16 @@ class WordManager {
   list() {
     return this.docs.map(d => ({ id: d.id, title: d.title, path: d.path, sealedPath: d.sealedPath || '', assignmentId: d.assignmentId || 0, created: d.created, updated: d.updated, submitted: d.submitted || 0, certId: (d.result && d.result.certId) || null, label: d.result && d.result.certId ? D.label(d.result.place, WordManager.markInfo(d.result)) : '', verified: !!d.verified, sealError: d.sealError || '', words: d.words || 0, open: !!(this.s && this.s.id === d.id) }));
   }
+  /**
+   * Dokumentets tal fra tidligere økter (WordCheck lægger denne økts tal oveni). Et påbegyndt dokument uden tal for
+   * tastetryk (fx fra en ældre version af appen) kan ikke længere vurderes med tastetryk: keys: false.
+   */
+  static baseStats(d, created) {
+    if (created || !d) return null;
+    const b = d.stats && typeof d.stats === 'object' ? Object.assign({}, d.stats) : {};
+    if (!('keys' in b) && d.lastText) b.keys = false;
+    return Object.keys(b).length ? b : null;
+  }
   static markInfo(r) {
     const out = {};
     if (r && Array.isArray(r.observed)) out.observed = r.observed.map(String).filter(x => x === 'word' || x === 'vagt');
@@ -103,7 +113,8 @@ class WordManager {
       if (msg.ok) {
         this.s.synced = this.s.sending;
         const d = this.get(this.s.id);
-        if (d) { d.lastText = this.s.synced; d.updated = this.now(); d.words = D.wordCount(this.s.synced); this._persist(); }
+        // stats: dokumentets tal (kun tal) til næste økt, så serveren altid får tallene for hele dokumentet
+        if (d) { d.lastText = this.s.synced; d.stats = this.s.sendingStats || d.stats; d.updated = this.now(); d.words = D.wordCount(this.s.synced); this._persist(); }
         if (msg.preview && typeof msg.preview === 'object') this.s.check.server({ preview: { ok: !!msg.preview.ok, categories: (Array.isArray(msg.preview.categories) ? msg.preview.categories : []).slice(0, 10).map(c => ({ key: String((c && c.key) || ''), text: String((c && c.text) || '') })) } });
       } else if (msg.error && msg.error !== 'busy') this.s.saveError = String(msg.error).slice(0, 200);
       this.s.sending = null;
@@ -156,7 +167,7 @@ class WordManager {
     const op = await this.bridge.open(d.path, created);
     if (!op.ok) return fail('Word kunne ikke åbne dokumentet: ' + (op.error || 'ukendt fejl'));
     if (created) { this.docs.unshift(d); this._persist(); }
-    const check = new WordCheck();
+    const check = new WordCheck({ base: WordManager.baseStats(d, created) });
     check.server({ live: !!this.o.lessonActive() || !!solo, online: this.o.online ? !!this.o.online() : true, lamp: this.lamp || null });
     this.s = { id: d.id, check, solo, sending: null, synced: created ? null : d.lastText, lastSend: 0, lastWordSave: this.now(), savedAt: this.now(), lastState: null, started: false };
     this.s.clip = new ClipboardGuard({ clipboard: this.o.clipboard || { readText: () => '', availableFormats: () => [], clear() {} }, knows: (t) => check.knows(t), onClear: () => { check.clipboardCleared(); this._render(); } });
@@ -177,7 +188,8 @@ class WordManager {
     const blocks = raw != null ? wordTextToBlocks(raw) : [];
     this.s.sending = text;
     this.s.lastSend = this.now();
-    return this.o.send({ type: 'doc', id: d.id, title: d.title, blocks, stats: this.s.check.stats(), source: 'word' });
+    this.s.sendingStats = this.s.check.stats();
+    return this.o.send({ type: 'doc', id: d.id, title: d.title, blocks, stats: this.s.sendingStats, source: 'word' });
   }
 
   /** Én måling (hvert sekund). */
@@ -194,7 +206,7 @@ class WordManager {
     if (!st.open) { this._ended('Word-dokumentet er lukket. Det står i Min HolyMoly, hvor du kan fortsætte.'); return; }
     s.lastState = st;
     if (!s.started) { s.started = true; s.check.start(st.text, now, s.synced == null ? null : s.synced); }
-    s.check.snapshot({ t: now, text: st.text, copilot: st.copilot, foreground: st.foreground });
+    s.check.snapshot(Object.assign({ t: now, text: st.text, copilot: st.copilot, foreground: st.foreground }, 'keys' in st ? { keys: st.keys } : {}));
     if (st.saved && s.wasSaved === false) s.savedAt = now;
     s.wasSaved = !!st.saved;
     // Til serveren: ændret tekst højst hver 2,5 sek. (serveren har sit eget vækstbudget)
@@ -246,10 +258,17 @@ class WordManager {
     if (!s) return;
     clearInterval(s.timer); clearInterval(s.clipTimer);
     this.s = null;
+    this._keepStats(s);
     if (s.solo) this.o.send({ type: 'write-session', assignmentId: s.solo, on: false });
     if (note && !this.panel) this.panel = { kind: 'info', title: 'Word-økten er slut', text: note, actions: [{ id: 'mine', label: 'Min HolyMoly' }, { id: 'close', label: 'Luk', primary: true }] };
     if (!this.panel) this.overlay.hide(); else this._render();
     if (this.o.onChange) this.o.onChange();
+  }
+
+  /** Dokumentets tal (også tastetryk efter sidste gemning) til næste økt. */
+  _keepStats(s) {
+    const d = this.get(s.id);
+    if (d && !d.submitted) { d.stats = s.check.stats(); this._persist(); }
   }
 
   /* ---------------------------------------------------------------- Tekst færdig ---------------------------------------------------------------- */
@@ -369,7 +388,7 @@ class WordManager {
 
   /** Appen lukker: stop målingen (Word og elevens dokument forbliver åbne). */
   stop() {
-    if (this.s) { clearInterval(this.s.timer); clearInterval(this.s.clipTimer); if (this.s.solo) this.o.send({ type: 'write-session', assignmentId: this.s.solo, on: false }); }
+    if (this.s) { clearInterval(this.s.timer); clearInterval(this.s.clipTimer); this._keepStats(this.s); if (this.s.solo) this.o.send({ type: 'write-session', assignmentId: this.s.solo, on: false }); }
     this.s = null;
     try { this.bridge.stop(); } catch (e) { /* */ }
     this.overlay.destroy();

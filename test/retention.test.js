@@ -68,7 +68,7 @@ test('frister: oprydning med falsk tid – kladder, afspilning, detaljer, dokume
   const count = (sql, ...a) => db.prepare(sql).get(...a).n;
 
   // Dag 59: intet slettes
-  assert.deepStrictEqual(RET.purge(db, R, t0 + 59 * DAY), { drafts: 0, versions: 0, reduced: 0, documents: 0, expired: 0 });
+  assert.deepStrictEqual(RET.purge(db, R, t0 + 59 * DAY), { drafts: 0, versions: 0, events: 0, reduced: 0, documents: 0, expired: 0 });
   // Dag 61: den gamle kladde og afspilningen er væk; skrivedetaljerne er kun minuttal
   const p61 = RET.purge(db, R, t0 + 61 * DAY);
   assert.strictEqual(p61.drafts, 1);

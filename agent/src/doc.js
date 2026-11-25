@@ -108,7 +108,18 @@
     MAX_FAST_SHARE: 0.25,     // andel tastetryk hurtigere end en finger kan (< 12 ms)
     MIN_REGULARITY: 0.25,     // variationskoefficient for tastetryk – lavere = maskinelt jævnt
     MAX_DICTATED_SHARE: 0.10, // mere dikteret tekst end dette kan ikke bevises som tastet
+    WORD_KEY_MARGIN: 20,      // Word: så mange tegn må teksten have ud over tastetrykkene (autokorrektur) …
+    WORD_KEY_SHARE: 0.03,     // … eller 3 % af teksten, hvis det er mere
+    MAX_INJECTED: 20,         // Word: flere taster sendt af et program (autotyper, makro) end dette giver 'tempo'
   };
+  /** Word: hvor meget tekst ud over tastetrykkene der godtages (autokorrektur, autoformat). */
+  function wordKeyMargin(len) {
+    return Math.max(PROOF.WORD_KEY_MARGIN, Math.ceil(PROOF.WORD_KEY_SHARE * (Number(len) > 0 ? Number(len) : 0)));
+  }
+  /* Word med tastestatistik: tekst, der ikke kan forklares af tastetryk (samme tekst i muldvarpen, hos læreren og eleven) */
+  const WORD_UNTYPED = 'Der er kommet tekst i Word, som ikke er tastet (fx indsat, Copilot, diktering eller autotekst)';
+  const WORD_NO_KEYS = 'Tastetryk kan ikke tælles på denne computer';
+  const WORD_COPILOT_ON = 'Words AI (Copilot) er slået til – bruger du den, får teksten ikke mærket';
   /* Hvorfor beviset mangler – i elevens sprog og uden tal (kort: se categoryText). Rækkefølgen er den, eleven ser. */
   const CATEGORY_TEXT = {
     kort: `Teksten er for kort. Et bevis kræver mindst ${PROOF.MIN_WORDS} ord.`,
@@ -119,6 +130,8 @@
     ai: 'Teksten indeholder en ordret sætning fra en AI-chat.',
     hjaelpemiddel: 'Diktering kan ikke bevises som tastet. Aflever alligevel – du får ingen ulempe.',
   };
+  /* Samme kategorier for et dokument skrevet i Word (kun dem, der lyder anderledes) */
+  const CATEGORY_TEXT_WORD = { indsat: WORD_UNTYPED + '.' };
   const AIDS = ['ordforslag', 'diktering'];
   /** Elevens hjælpemidler: kun de kendte, i fast rækkefølge. */
   function cleanAids(v) {
@@ -130,7 +143,9 @@
    * Den del af vurderingen, der kun bygger på teksten og elevens egne tal fra skrivevinduet.
    * Bruges af serveren (docs.evaluate) og lokalt af øvedokumentet i skrivevinduet.
    * Lampen, forbindelsen og serverens eget vækst-tjek ligger kun hos serveren.
-   * opts: { minWords, aids: ['ordforslag', 'diktering'] }. Med hjælpemidler bliver jævnhed, byger og hurtige tastetryk til noter.
+   * opts: { minWords, aids: ['ordforslag', 'diktering'], word }. Med hjælpemidler bliver jævnhed, byger og hurtige tastetryk til noter.
+   * word: dokumentet er skrevet i Word gennem HolyMoly. Med stats.keys === true (appen talte tastetryk i Word-vinduet)
+   * gælder tastetjekkene med en margin til autokorrektur (wordKeyMargin); ellers kun vækst, indsat tekst og Copilot-reglen.
    * Returnerer { reasons, notes, cats: [nøgle, …], found: [{ cat, why }] } – reasons/notes er til læreren, cats til eleven.
    */
   function evaluateStats(text, stats, opts) {
@@ -140,25 +155,42 @@
     const t = String(text || '');
     const minWords = Number(o.minWords) > 0 ? Number(o.minWords) : PROOF.MIN_WORDS;
     const aids = cleanAids(o.aids).length > 0;
-    const word = !!o.word; // Word via HolyMoly: der findes ingen tastestatistik – kun hvordan teksten voksede
+    const word = !!o.word; // Word via HolyMoly
+    // Word: tastetryk tælles kun, når elev-appen kunne tælle dem i hele dokumentet (stats.keys === true).
+    // Ellers findes der ingen tastestatistik – kun hvordan teksten voksede – og de gamle regler gælder.
+    const keys = !word || s.keys === true;
     const reasons = [], notes = [], cats = [], found = [];
     const no = (cat, why) => { reasons.push(why); found.push({ cat, why }); if (!cats.includes(cat)) cats.push(cat); };
     // Med hjælpemidler er tempo-fund kun en oplysning (ordforslag og diktering giver ujævne byger)
     const tempo = (why) => { if (aids) notes.push(why + ' – eleven har hjælpemidler, så skrivetempoet vurderes ikke'); else no('tempo', why); };
     if (wordCount(t) < minWords) no('kort', `Teksten er for kort til et bevis (mindst ${minWords} ord)`);
     if (n(s.pasteInserted) > 0) no('indsat', word ? 'Der er indsat tekst fra et andet program i Word' : 'Der er indsat tekst, som ikke er tastet');
-    // Tastet minus slettet (plus fortrudt) skal kunne forklare teksten (ikke i Word)
-    if (!word && n(s.typed) - n(s.deleted) + n(s.restored) + 20 < t.length) no('indsat', 'Der er mere tekst, end der er tastet');
-    if (!word && n(s.maxCps) > PROOF.MAX_HUMAN_CPS) no('tempo', `Skrevet hurtigere end et menneske kan (${Math.round(n(s.maxCps))} tegn/sek.)`);
-    if (!word && n(s.burst) > PROOF.MAX_BURST) tempo(`${Math.round(n(s.burst))} tegn kom på under ét sekund (et program, ikke et menneske)`);
-    if (!word && n(s.keystrokes) >= 200 && n(s.fastShare) > PROOF.MAX_FAST_SHARE) tempo('Mange tastetryk kom hurtigere, end en finger kan trykke');
-    if (!word && s.regularity != null && n(s.keystrokes) >= 300 && n(s.regularity) < PROOF.MIN_REGULARITY) tempo('Tastetrykkene kom i et maskinelt jævnt tempo');
+    if (!word) {
+      // Tastet minus slettet (plus fortrudt) skal kunne forklare teksten
+      if (n(s.typed) - n(s.deleted) + n(s.restored) + 20 < t.length) no('indsat', 'Der er mere tekst, end der er tastet');
+    } else if (keys) {
+      // Word: tastet minus slettet (plus tekst, der har stået i dokumentet før: fortryd, kopi og flyt af egen tekst)
+      // skal kunne forklare teksten – med plads til autokorrektur. untyped: appen så det undervejs (muldvarpen blev rød).
+      const short = n(s.typed) - n(s.deleted) + n(s.restored) + wordKeyMargin(t.length) < t.length;
+      if (short || n(s.untyped) > 0) {
+        no('indsat', WORD_UNTYPED);
+        if (n(s.pasteKeys) > 0) no('indsat', `Der er brugt Ctrl+V (${Math.round(n(s.pasteKeys))} gange), og teksten voksede mere, end tastetrykkene kan forklare`);
+      }
+      if (n(s.injected) > PROOF.MAX_INJECTED) tempo(`Taster sendt af et program (${Math.round(n(s.injected))} taster, fx en autotyper eller makro)`);
+    } else notes.push(WORD_NO_KEYS + ' – teksten er vurderet uden tastestatistik');
+    if (keys && n(s.maxCps) > PROOF.MAX_HUMAN_CPS) no('tempo', `Skrevet hurtigere end et menneske kan (${Math.round(n(s.maxCps))} tegn/sek.)`);
+    if (keys && n(s.burst) > PROOF.MAX_BURST) tempo(`${Math.round(n(s.burst))} tegn kom på under ét sekund (et program, ikke et menneske)`);
+    if (keys && n(s.keystrokes) >= 200 && n(s.fastShare) > PROOF.MAX_FAST_SHARE) tempo('Mange tastetryk kom hurtigere, end en finger kan trykke');
+    if (keys && s.regularity != null && n(s.keystrokes) >= 300 && n(s.regularity) < PROOF.MIN_REGULARITY) tempo('Tastetrykkene kom i et maskinelt jævnt tempo');
     // Diktering kan ikke bevises som tastet: over 10 % dikteret tekst giver den neutrale kategori 'hjaelpemiddel'
     if (t.length > 0 && n(s.dictated) / t.length > PROOF.MAX_DICTATED_SHARE) no('hjaelpemiddel', `Over ${Math.round(PROOF.MAX_DICTATED_SHARE * 100)} % af teksten er dikteret (hjælpemiddel)`);
     else if (n(s.dictated) > 0) notes.push(`${Math.round(n(s.dictated))} tegn er dikteret (hjælpemiddel)`);
     if (n(s.predicted) > 0) notes.push(`${Math.round(n(s.predicted))} tegn kom fra ordforslag (hjælpemiddel)`);
     for (const x of aiTraces(t)) no('ai', x);
-    if (word && s.copilot === 'on') no('ai', "Word's AI (Copilot) var slået til, mens teksten blev skrevet");
+    // Copilot slået til: med tastetryk fanges BRUG af Copilot af tastetjekket (tekst uden tastetryk) – kun en note.
+    // Uden tastetryk kan HolyMoly ikke se, om Copilot er brugt: afslag.
+    if (word && s.copilot === 'on' && keys) notes.push(WORD_COPILOT_ON + ' (tjekket med tastetryk) – kun en oplysning, ikke et afslag');
+    if (word && s.copilot === 'on' && !keys) no('ai', "Word's AI (Copilot) var slået til, mens teksten blev skrevet");
     if (word && s.copilot === 'unknown') notes.push("HolyMoly kunne ikke se, om Word's AI (Copilot) var slået fra – kun en oplysning, ikke et afslag");
     for (const x of aiHints(t)) notes.push(x + ' – kun en oplysning, ikke et afslag');
     if (n(s.pasteBlocked) + n(s.dropBlocked) > 0) notes.push(word ? `Udklipsholderen blev tømt ${n(s.pasteBlocked) + n(s.dropBlocked)} gange (tekst fra et andet program)` : `${n(s.pasteBlocked) + n(s.dropBlocked)} forsøg på at indsætte tekst blev blokeret`);
@@ -408,5 +440,5 @@
     return { title: titleP ? titleP.line : '', text: variants[0], variants };
   }
 
-  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, label, markGreen, footerLines, MARK, WORD_MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
+  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, CATEGORY_TEXT_WORD, wordKeyMargin, WORD_UNTYPED, WORD_NO_KEYS, WORD_COPILOT_ON, label, markGreen, footerLines, MARK, WORD_MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
 });

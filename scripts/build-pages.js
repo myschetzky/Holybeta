@@ -104,6 +104,8 @@ ${esc(js)}</script>
 <script>
 ${esc(fs.readFileSync(P + 'room-write.js', 'utf8'))}</script>
 <script>
+${esc(fs.readFileSync(P + 'skrivelog.js', 'utf8'))}</script>
+<script>
 ${esc(acc)}</script>`;
 
 fs.mkdirSync(OUT, { recursive: true });

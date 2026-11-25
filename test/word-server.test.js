@@ -218,3 +218,108 @@ test('mærket og sidefoden: Word-mærket, "kun Word" og de samme sidefodslinjer 
   const footer = Buffer.from(D.toDocx([{ t: 'p', r: [{ x: 'Hej verden' }] }], { mark })).toString('utf8');
   for (const l of lines) assert.ok(footer.includes(l.replace(/&/g, '&amp;')), l);
 });
+
+/* ---------------------------------------------------------------- Word med tastetryk (stats.keys) ---------------------------------------------------------------- */
+// Tal fra Word-appens tastetæller: kun kategorier og tider – aldrig hvilke taster
+const keyStats = (len, extra = {}) => Object.assign({ keys: true, typed: len, deleted: 0, restored: 0, pasteKeys: 0, injected: 0, undo: 0, keystrokes: len, maxCps: 7.2, burst: 11, fastShare: 0.01, regularity: 0.62, untyped: 0 }, extra);
+
+test('Word med tastetryk: ærlig skrivning med autokorrektur består, og beviset siger, at teksten passer med tastetrykkene', () => {
+  const { dir, docs, anna } = setup();
+  try {
+    const text = D.normalizeText(SENT.repeat(9).trim());
+    // Autokorrektur og autoformat: 2 % mere tekst end tastetryk (inden for margenen på 3 %), og en del slettet og fortrudt
+    const stats = keyStats(Math.round(text.length * 0.98) - 40, { deleted: 60, restored: 100, undo: 3, pasteKeys: 2 });
+    const { id, t } = writeWord(docs, anna, text, { stats });
+    const ev = docs.evaluate(docs.q.get.get(id));
+    assert.deepStrictEqual(ev.reasons, []);
+    assert.strictEqual(ev.facts.keys, true);
+    assert.ok(!ev.notes.some(n => /Tastetryk kan ikke tælles/.test(n)), ev.notes.join());
+    const r = docs.submit(anna, id, Object.assign({ observed: ['skrivevindue'] }, meta), t + 1000);
+    assert.ok(r.ok && r.certId, JSON.stringify(r.reasons));
+    const c = docs.certificate(r.certId);
+    assert.ok(c.payload.checks.includes('Teksten passer med tastetrykkene i Word'), c.payload.checks.join());
+    assert.ok(c.payload.checks.includes('Menneskeligt skrivetempo'));
+    assert.ok(!c.payload.checks.includes('Teksten voksede i et menneskeligt tempo'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Word med tastetryk: tekst uden tastetryk (Copilot, diktering) giver "indsat" med Word-teksten', () => {
+  const { dir, docs, anna } = setup();
+  try {
+    const text = SENT.repeat(9).trim();
+    // Eleven tastede en kort prompt – resten kom i menneskeligt tempo, men uden tastetryk (serverens vækstbudget ser intet)
+    const w = writeWord(docs, anna, text, { stats: keyStats(120) });
+    const ev = docs.evaluate(docs.q.get.get(w.id));
+    assert.deepStrictEqual(ev.categories.map(c => c.key), ['indsat']);
+    assert.ok(ev.reasons.includes(D.WORD_UNTYPED), ev.reasons.join());
+    assert.strictEqual(ev.categories[0].text, 'Der er kommet tekst i Word, som ikke er tastet (fx indsat, Copilot, diktering eller autotekst).');
+    // Lige over margenen (3 % eller 20 tegn) fejler, lige under består
+    const len = D.normalizeText(text).length;
+    const margin = D.wordKeyMargin(len);
+    assert.strictEqual(margin, Math.ceil(len * 0.03));
+    assert.strictEqual(D.evaluateStats(text, keyStats(len - margin), { word: true, minWords: 5 }).found.length, 0);
+    assert.deepStrictEqual(D.evaluateStats(text, keyStats(len - margin - 1), { word: true, minWords: 5 }).cats, ['indsat']);
+    assert.strictEqual(D.wordKeyMargin(100), 20, 'korte tekster: mindst 20 tegn');
+    // Appen så det undervejs (muldvarpen blev rød), selv om tallene til sidst passer
+    assert.deepStrictEqual(D.evaluateStats(text, keyStats(len, { untyped: 1 }), { word: true, minWords: 5 }).cats, ['indsat']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Word med tastetryk: Ctrl+V og et spring, der ikke er tastet, giver "indsat"; Ctrl+V af egen tekst gør ikke', () => {
+  const text = SENT.repeat(9).trim();
+  const len = D.normalizeText(text).length;
+  let r = D.evaluateStats(text, keyStats(len - 300, { pasteKeys: 1 }), { word: true, minWords: 5 });
+  assert.deepStrictEqual(r.cats, ['indsat']);
+  assert.ok(r.reasons.some(x => /Ctrl\+V \(1 gange\)/.test(x)), r.reasons.join());
+  // Eleven kopierede sit eget afsnit (restored): Ctrl+V er ingen sag
+  r = D.evaluateStats(text, keyStats(len - 300, { pasteKeys: 3, restored: 300 }), { word: true, minWords: 5 });
+  assert.deepStrictEqual(r.found, []);
+});
+
+test('Word med tastetryk: taster sendt af et program (injected) giver "tempo" – med hjælpemidler kun en note', () => {
+  const text = SENT.repeat(9).trim();
+  const len = D.normalizeText(text).length;
+  let r = D.evaluateStats(text, keyStats(len, { injected: 21 }), { word: true, minWords: 5 });
+  assert.deepStrictEqual(r.cats, ['tempo']);
+  assert.ok(r.reasons.some(x => /^Taster sendt af et program/.test(x)));
+  assert.deepStrictEqual(D.evaluateStats(text, keyStats(len, { injected: 20 }), { word: true, minWords: 5 }).found, []);
+  r = D.evaluateStats(text, keyStats(len, { injected: 400 }), { word: true, minWords: 5, aids: ['ordforslag'] });
+  assert.deepStrictEqual(r.found, []);
+  assert.ok(r.notes.some(x => /Taster sendt af et program.*hjælpemidler/.test(x)), r.notes.join());
+  // Samme tempo-tjek som skrivevinduet
+  r = D.evaluateStats(text, keyStats(len, { maxCps: 40, keystrokes: 500, fastShare: 0.5, regularity: 0.05 }), { word: true, minWords: 5 });
+  assert.deepStrictEqual(r.cats, ['tempo']);
+  assert.strictEqual(r.found.length, 3);
+});
+
+test('Word med tastetryk: Copilot slået til er kun en note – uden tastetryk er det stadig et afslag', () => {
+  const { dir, docs, anna } = setup();
+  try {
+    const text = SENT.repeat(9).trim();
+    let w = writeWord(docs, anna, text, { stats: keyStats(D.normalizeText(text).length, { copilot: 'on' }) });
+    let ev = docs.evaluate(docs.q.get.get(w.id));
+    assert.strictEqual(ev.ok, true, ev.reasons.join());
+    assert.ok(ev.notes.some(n => /Words AI \(Copilot\) er slået til – bruger du den, får teksten ikke mærket/.test(n)), ev.notes.join());
+    // keys: false (appen kunne ikke tælle) følger de gamle regler: Copilot 'on' = afslag, og en note om tastetryk
+    w = writeWord(docs, anna, text, { stats: { keys: false, typed: 0, copilot: 'on' } });
+    ev = docs.evaluate(docs.q.get.get(w.id));
+    assert.deepStrictEqual(ev.categories.map(c => c.key), ['ai']);
+    assert.ok(ev.notes.some(n => /^Tastetryk kan ikke tælles på denne computer/.test(n)), ev.notes.join());
+    assert.strictEqual(ev.facts.keys, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Word uden tastetryk (keys: null/false): de gamle regler – ingen tastetjek, typed 0 er ingen sag', () => {
+  const { dir, docs, anna } = setup();
+  try {
+    const w = writeWord(docs, anna, SENT.repeat(9).trim(), { stats: { keys: false, typed: 0, maxCps: 80, injected: 500, untyped: 3 } });
+    const ev = docs.evaluate(docs.q.get.get(w.id));
+    assert.deepStrictEqual(ev.reasons, []);
+    // cleanStats: keys er kun sand, når appen siger true
+    assert.strictEqual(DocStore.cleanStats({ keys: 'ja' }).keys, false);
+    assert.strictEqual(DocStore.cleanStats({ keys: true, pasteKeys: -1, injected: 'x' }).keys, true);
+    assert.deepStrictEqual([DocStore.cleanStats({ pasteKeys: -1 }).pasteKeys, DocStore.cleanStats({ injected: 'x' }).injected], [0, 0]);
+    // Skrivevinduet er uændret: typed 0 giver stadig afslag
+    assert.deepStrictEqual(D.evaluateStats(SENT.repeat(9), { typed: 0 }, { minWords: 5 }).cats, ['indsat']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

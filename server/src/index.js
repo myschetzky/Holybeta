@@ -1226,12 +1226,13 @@ function createServer(opts = {}) {
       if (!s) return fail(res, 404, 'Eleven findes ikke');
       return send(res, 200, { docs: docs.list(s.id) });
     }
-    // Afspil skriveforløbet og lighed med andre afleveringer i klassen (kun lærerens egne elever og kun afleverede dokumenter)
-    if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})\/(versions|similar)$/)) && m === 'GET') {
+    // Afspil skriveforløbet, skrivelogen og lighed med andre afleveringer i klassen (kun lærerens egne elever og kun afleverede dokumenter)
+    if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})\/(versions|similar|log)$/)) && m === 'GET') {
       const d = docs.full(mm[1]);
       if (!d || !ownStudent(teacher, d.studentId)) return fail(res, 404, 'Dokumentet findes ikke');
       if (!d.submitted) return fail(res, 409, 'Kan ses, når dokumentet er afleveret');
       if (mm[2] === 'versions') return send(res, 200, { versions: docs.versions(mm[1]) });
+      if (mm[2] === 'log') return send(res, 200, docs.log(mm[1]));
       if (!features.similar) return fail(res, 404, 'Ikke slået til på denne server');
       return send(res, 200, { similar: docs.similar(mm[1]) });
     }

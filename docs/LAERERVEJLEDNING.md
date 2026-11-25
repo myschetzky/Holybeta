@@ -30,6 +30,9 @@
 2. Eleverne skriver i HolyMolys editor. Indsæt (Ctrl+V) og træk-og-slip er slået fra.
 3. Eleven trykker **Afslut dokument**. HolyMoly udsteder et **skrive-bevis**, hvis teksten er tastet under overvågning, uden rød lampe, i et menneskeligt tempo og uden spor af AI. Ellers står det præcist hvorfor.
 4. Du ser dokumenterne under eleven → **Dokumenter** (og kan hente dem som Word). Under hvert dokument kan du **afspille skriveforløbet**, og står der **Ligner andre afleveringer**, deler teksten mange sætningsdele med en klassekammerats – tal med eleverne, før du konkluderer noget. Beviset kan tjekkes af alle på adressen, der står nederst i Word-filen – også om teksten er ændret bagefter.
+
+   **Skrivelog:** Når eleven har afleveret, viser knappen **Skrivelog** (under eleven → Dokumenter og ved hver aflevering under **Afleveringer**), hvordan teksten blev skrevet: skriveøkter og tid, skrivning pr. minut, rettelser (med det fjernede), flytninger, lampeskift – og **indsatte udsnit** med klokkeslæt og selve teksten. **Vis i afspilningen** springer til stedet i afspilningen. Et indsat udsnit er tekst, der ikke kan forklares som tastning (for meget på én gang, meldt af appen, eller sat ind i Word). Det er ikke i sig selv bevis for snyd – tal med eleven. Kladder har ingen synlig skrivelog, og loggen slettes sammen med afspilningen.
+
 5. Vær ærlig over for eleverne om grænsen: beviset kan ikke se, om en tekst er skrevet af efter en telefon eller et papir.
 6. **Mærket er hverken en anklage eller et frikort.** Manglende mærke er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt. Er du i tvivl, så tag en kort samtale om teksten.
 7. **Tjek beviset via Afleveringer eller ved at uploade Word-filen på tjek-siden** – aldrig kun via linket i filen. Linket viser, at beviset findes; først uploaden viser, at teksten passer.

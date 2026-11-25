@@ -5,7 +5,8 @@
  *
  * Standarder (kan ændres med miljøvariabler):
  *   kladder (ikke afleveret)        60 dage efter seneste ændring        DRAFT_DAYS
- *   afspilning og skrivedetaljer    60 dage efter aflevering             VERSIONS_DAYS
+ *   afspilning, skrivelog og        60 dage efter aflevering             VERSIONS_DAYS
+ *   skrivedetaljer
  *   afleverede dokumenter           365 dage efter aflevering            DOC_RETENTION_DAYS
  *   beviser (gravsten)              3 år efter udstedelse, derefter 410  CERT_YEARS
  *   hændelser, skærmbilleder, lamper 30 dage                             LOG_RETENTION_DAYS
@@ -38,7 +39,7 @@ function describe(R) {
   const years = R.certYears === 1 ? '1 år' : `${R.certYears} år`;
   return [
     { key: 'draftDays', what: 'Kladder (ikke afleveret)', text: `Slettes ${R.draftDays} dage efter seneste ændring.` },
-    { key: 'versionsDays', what: 'Afspilning og skrivedetaljer', text: `Slettes ${R.versionsDays} dage efter aflevering. Kun minuttal og vurderingen bliver.` },
+    { key: 'versionsDays', what: 'Afspilning, skrivelog og skrivedetaljer', text: `Slettes ${R.versionsDays} dage efter aflevering. Kun minuttal og vurderingen bliver.` },
     { key: 'docDays', what: 'Afleverede dokumenter', text: `Slettes ${R.docDays} dage efter aflevering.` },
     { key: 'certYears', what: 'Beviser', text: `Kan tjekkes i ${years} efter aflevering. Når teksten er slettet, er der intet navn på beviset.` },
     { key: 'logDays', what: 'Hændelser, skærmbilleder og lampernes tidslinje', text: `Slettes efter ${R.logDays} dage.` },
@@ -80,12 +81,14 @@ function reduceMonitor(json) {
  * Returnerer antal for hver slags.
  */
 function purge(db, R, now = Date.now()) {
-  const out = { drafts: 0, versions: 0, reduced: 0, documents: 0, expired: 0 };
+  const out = { drafts: 0, versions: 0, events: 0, reduced: 0, documents: 0, expired: 0 };
   // 1) Kladder, der ikke er rørt i draftDays
   out.drafts = db.prepare('DELETE FROM documents WHERE submitted IS NULL AND updated < ?').run(now - R.draftDays * DAY).changes;
   // 2) Afspilning og skrivedetaljer for afleverede dokumenter efter versionsDays
   const vCut = now - R.versionsDays * DAY;
   out.versions = db.prepare('DELETE FROM doc_versions WHERE doc_id IN (SELECT id FROM documents WHERE submitted IS NOT NULL AND submitted < ?)').run(vCut).changes;
+  // Skrivelogen (indsatte udsnit, rettelser …) følger afspilningen
+  try { out.events = db.prepare('DELETE FROM doc_events WHERE doc_id IN (SELECT id FROM documents WHERE submitted IS NOT NULL AND submitted < ?)').run(vCut).changes; } catch (e) { /* ingen tabel */ }
   const upd = db.prepare("UPDATE documents SET stats = '{}', monitor = ? WHERE id = ?");
   for (const d of db.prepare("SELECT id, monitor FROM documents WHERE submitted IS NOT NULL AND submitted < ? AND json_extract(monitor, '$.reduced') IS NULL").all(vCut)) {
     out.reduced += upd.run(reduceMonitor(d.monitor), d.id).changes;

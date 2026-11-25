@@ -10,13 +10,18 @@
  *
  * Kommandoer:
  *   probe                     -> { word: bool, version }                     (findes Word – uden at starte det)
- *   open { path, create }     -> { path }                                    (opretter og gemmer en ny .docx, eller åbner en)
- *   state                     -> { open, path, text, saved, minimized, rect: { x, y, w, h }, foreground, copilot }
+ *   open { path, create }     -> { path, hwnd }                              (opretter og gemmer en ny .docx, eller åbner en)
+ *   state                     -> { open, path, text, saved, minimized, rect: { x, y, w, h }, foreground, copilot, hwnd }
  *   save                      -> { path, saved }
  *   seal { footerLines, green, password, path } -> { path }                  (sidefod + læsebeskyttelse + SaveAs2, lukker dokumentet)
  *   close { save }            -> {}
  * Første linje fra processen er { ready: true, word, version }. Al tekst er ASCII (\uXXXX) i begge retninger,
  * så tegnsæt i konsollen er ligegyldige.
+ *
+ * Tastetryk: mens en Word-økt er åben, kører tastetælleren (keys.ps1, keys.js) i sin egen proces. Den tæller kun i
+ * Word-vinduet (hwnd fra open/state) og kun mens det er i forgrunden – aldrig hvilke taster. state() svarer derfor også
+ *   keys: { typed, deleted, pasteKeys, injected, undo, keystrokes, maxCps, burst, fastShare, regularity }
+ * eller keys: null (tastetryk kan ikke tælles på denne computer). Mens tælleren starter, mangler keys. hwnd sendes ikke videre.
  *
  * På andre platforme end Windows svarer broen { supported: false }. Testene og demoen bruger bridge-fake.js,
  * der taler den samme protokol (command/args).
@@ -25,6 +30,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
+const { powershellKeys } = require('./keys.js');
 
 /** JSON uden andre tegn end ASCII. */
 function asciiJson(o) {
@@ -36,8 +42,9 @@ const BOOT = "$l=[Console]::In.ReadLine();& ([ScriptBlock]::Create([Text.Encodin
 
 class WordBridge extends EventEmitter {
   /**
-   * opts: { platform, command, args, script (sti til .ps1 eller false), timeoutMs, env }
+   * opts: { platform, command, args, script (sti til .ps1 eller false), timeoutMs, env, keys }
    * Uden command bruges PowerShell med word.ps1 (kun Windows).
+   * keys: () => KeysHelper (tastetælleren) eller false. Standard: PowerShell med keys.ps1 – kun uden command.
    */
   constructor(opts = {}) {
     super();
@@ -54,6 +61,8 @@ class WordBridge extends EventEmitter {
     this.nextId = 1;
     this.pending = new Map();
     this._starting = null;
+    this.makeKeys = opts.keys === false ? null : typeof opts.keys === 'function' ? opts.keys : this.custom ? null : () => powershellKeys(path.join(__dirname, 'keys.ps1'));
+    this.keys = null; // tastetælleren for den åbne Word-økt
   }
 
   /** Starter processen (én gang). Returnerer { supported, word, version }. */
@@ -136,13 +145,46 @@ class WordBridge extends EventEmitter {
     const h = await this.start();
     return { supported: true, word: !!h.word, version: h.version || '' };
   }
-  open(p, create) { return this.request('open', { path: String(p || ''), create: !!create }, 60_000); }
-  state() { return this.request('state', {}, 5000); }
+  /** Åbner dokumentet. Tastetælleren startes samtidig (den er klar et par sekunder senere). */
+  async open(p, create) {
+    this._keysStop();
+    if (this.makeKeys) { try { this.keys = this.makeKeys(); this.keys.start(); } catch (e) { this.keys = null; } }
+    const r = await this.request('open', { path: String(p || ''), create: !!create }, 60_000);
+    if (!r.ok) this._keysStop();
+    delete r.hwnd;
+    return r;
+  }
+  /** Word-dokumentets tilstand + tastetællerne (se øverst). */
+  async state() {
+    const r = await this.request('state', {}, 5000);
+    if (r.ok && !r.open) this._keysStop();
+    else if (r.ok && !('keys' in r)) {
+      // Tællerne læses EFTER teksten: hooken tæller en tast, før Word får den, så teksten kan aldrig være foran tællerne
+      const k = this.keys ? await this.keys.get(r.hwnd) : null;
+      if (k !== undefined) r.keys = k;
+    }
+    delete r.hwnd;
+    return r;
+  }
   save() { return this.request('save', {}, 30_000); }
-  seal(o) { return this.request('seal', { footerLines: (o.footerLines || []).map(String), green: !!o.green, password: String(o.password || ''), path: String(o.path || '') }, 60_000); }
-  close(save) { return this.request('close', { save: !!save }, 30_000); }
+  async seal(o) {
+    const r = await this.request('seal', { footerLines: (o.footerLines || []).map(String), green: !!o.green, password: String(o.password || ''), path: String(o.path || '') }, 60_000);
+    if (r.ok) this._keysStop();
+    return r;
+  }
+  async close(save) {
+    const r = await this.request('close', { save: !!save }, 30_000);
+    if (r.ok) this._keysStop();
+    return r;
+  }
+  _keysStop() {
+    const k = this.keys;
+    this.keys = null;
+    if (k) { try { k.stop(); } catch (e) { /* */ } }
+  }
 
   stop() {
+    this._keysStop();
     const c = this.child;
     this.child = null;
     this.hello = null;

@@ -224,13 +224,20 @@
       if (m === 'PATCH') { Object.assign(a, { title: String(body.title || a.title), description: String(body.description ?? a.description), due: body.due ?? a.due }); return json(200, { ok: true }); }
       if (m === 'DELETE') { ASG.splice(ASG.indexOf(a), 1); return json(200, { ok: true }); }
     }
-    const dv = p.match(/^\/api\/docs\/([\w-]+)\/(versions|similar)$/);
+    const dv = p.match(/^\/api\/docs\/([\w-]+)\/(versions|similar|log)$/);
     if (dv) {
       const s = cls.students.find(x => DOCS[x.name] && DOCS[x.name].id === dv[1]);
       if (!s) return json(404, { error: 'Dokumentet findes ikke' });
       const d = DOCS[s.name];
       const full = d.blocks.map(b => b.r.map(r => r.x).join('')).join('\n');
       if (dv[2] === 'similar') return json(200, { similar: [] });
+      if (dv[2] === 'log') {
+        // Skrivelogen i demoen: én skriveøkt med jævn skrivning (ingen indsatte udsnit)
+        const start = NOW0 - 30 * 60_000, events = [{ ts: start, kind: 'start', chars: 0, detail: { place: 'lektion' } }];
+        for (let i = 0; i < 28; i++) { const added = Math.round(full.length / 28); events.push({ ts: start + i * 60_000, kind: 'skrivning', chars: added, detail: { added, removed: Math.round(added / 8) } }); }
+        events.push({ ts: start + 27 * 60_000, kind: 'slut', chars: 0 }, { ts: NOW0 - 2 * 60_000, kind: 'afleveret', chars: 0 });
+        return json(200, { summary: { started: start, submitted: NOW0 - 2 * 60_000, minutesWriting: 28, sessions: 1, words: d.facts.words, typed: d.facts.typed, deleted: d.facts.deleted, pastes: 0, pastedChars: 0, corrections: 0, moves: 0, source: 'holymoly' }, events, pastes: [] });
+      }
       const steps = 8, out = [];
       for (let i = 1; i <= steps; i++) out.push({ ts: NOW0 - (steps - i) * 4 * 60_000, text: full.slice(0, Math.round(full.length * i / steps)) });
       return json(200, { versions: out });

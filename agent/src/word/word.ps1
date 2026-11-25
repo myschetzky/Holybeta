@@ -2,6 +2,7 @@
 # Startes af agent/src/word/bridge.js. Læser én JSON-linje pr. forespørgsel på stdin og svarer med én JSON-linje.
 # Protokollen står i bridge.js. Al tekst ud er ASCII (\uXXXX), så konsollens tegnsæt er ligegyldigt.
 # HolyMoly læser kun teksten i det dokument, eleven har åbnet gennem HolyMoly – aldrig andre dokumenter.
+# Tastetryk tælles IKKE her, men af keys.ps1 i sin egen proces (bridge.js giver den Word-vinduets hwnd fra open/state).
 # Lukker HolyMoly, lukkes Word IKKE (elevens tekst må aldrig gå tabt).
 # BEMÆRK: Skrevet og gennemlæst, men ikke kørt på Windows med Word endnu (se docs/WORD.md, manuel testplan).
 
@@ -167,7 +168,7 @@ function Invoke-Cmd($req) {
       try { $w.Activate() } catch { }
       $h = Get-Hwnd
       if ($h -ne [IntPtr]::Zero) { [void][HMWord]::SetForegroundWindow($h) }
-      return @{ path = [string]$d.FullName }
+      return @{ path = [string]$d.FullName; hwnd = $h.ToInt64() } # hwnd: det vindue, tastetælleren (keys.ps1) tæller i
     }
     'state' {
       if (-not (Test-Doc)) { return @{ open = $false } }
@@ -178,6 +179,7 @@ function Invoke-Cmd($req) {
       return @{
         open = $true; path = [string]$d.FullName; text = [string]$d.Content.Text; saved = [bool]$d.Saved
         minimized = $min; rect = $(if ($min) { $null } else { Get-Rect $h }); foreground = (-not $min -and (Test-Foreground $h)); copilot = (Get-Copilot)
+        hwnd = $h.ToInt64()
       }
     }
     'save' {

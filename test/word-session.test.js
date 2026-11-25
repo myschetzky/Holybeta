@@ -234,3 +234,189 @@ test('udklipsholderen: fremmed indhold fra før økten og billeder fra andre pro
   assert.strictEqual(g.tick({ wordForeground: true }), true);
   assert.strictEqual(cb.clears, 2);
 });
+
+/* ---------------------------------------------------------------- tastetryk i Word (snapshot.keys) ---------------------------------------------------------------- */
+const D = require('../shared/doc.js');
+const K0 = () => ({ typed: 0, deleted: 0, pasteKeys: 0, injected: 0, undo: 0, keystrokes: 0, maxCps: 6.8, burst: 10, fastShare: 0.01, regularity: 0.6 });
+/** En økt med tastetælleren. k: tællerne (som broen leverer dem) – ændres af hjælperne nedenfor. */
+function withKeys(opts) {
+  const c = ready(opts);
+  const k = K0();
+  let t = 0, text = '';
+  const o = { copilot: 'off' };
+  const snap = (extra = {}) => c.snapshot(Object.assign({ t, text, copilot: o.copilot, foreground: true, keys: Object.assign({}, k) }, extra));
+  c.snapshot({ t, text, copilot: 'off', keys: Object.assign({}, k) });
+  return {
+    c, k, o,
+    /** Eleven taster: 8 tegn pr. sekund, én tast pr. tegn. */
+    type(add, step = 8) { for (let n = 0; n < add.length; n += step) { const x = add.slice(n, n + step); k.typed += x.length; k.keystrokes += x.length; text += x; t += 1000; snap(); } return snap(); },
+    /** Tekst uden tastetryk i et menneskeligt tempo (fx Copilot eller diktering i små bidder – vækst-tjekket ser intet). */
+    insert(add, step = 8) { let s; for (let n = 0; n < add.length; n += step) { text += add.slice(n, n + step); t += 1000; s = snap(); } return s; },
+    paste(add) { k.pasteKeys++; text += add; t += 1000; return snap(); },
+    set(x, keys = {}) { Object.assign(k, keys); text = x; t += 1000; return snap(); },
+    snap, get text() { return text; }, get t() { return t; },
+  };
+}
+
+test('tastetryk: ærlig skrivning med autokorrektur er grøn, og serveren siger det samme', () => {
+  const w = withKeys();
+  w.type(OWN.repeat(4));
+  // Autokorrektur/autoformat: et par tegn mere end tastet (inden for margenen)
+  let s = w.set(w.text + ' (c) 2026 – fx, dvs. osv.', { typed: w.k.typed + 6 });
+  assert.deepStrictEqual([s.color, s.text], ['green', 'Grøn – teksten tæller med']);
+  const st = w.c.stats();
+  assert.deepStrictEqual([st.keys, st.untyped, st.typed], [true, 0, w.k.typed]);
+  assert.deepStrictEqual(D.evaluateStats(w.text, st, { word: true, minWords: 5 }).found, [], 'serveren: ingen afslag');
+  assert.ok(!s.notes.some(n => /Tastetryk/.test(n)));
+});
+
+test('tastetryk: tekst uden tastetryk i et menneskeligt tempo (Copilot, diktering) gør muldvarpen rød – vækst-tjekket alene ser det ikke', () => {
+  const w = withKeys();
+  w.type(OWN);
+  const s = w.insert(FOREIGN.repeat(2));
+  assert.strictEqual(w.c.inserts.length, 0, 'intet spring: teksten kom i små bidder');
+  assert.deepStrictEqual([s.color, s.symbol], ['red', '✗']);
+  assert.strictEqual(s.text, 'Rød: der er kommet tekst, som ikke er tastet, kl. 10.14');
+  assert.ok(s.notes.includes('Fx indsat, Copilot, diktering eller autotekst.'));
+  assert.ok(s.notes.some(n => /kan ikke få mærket/.test(n)));
+  // Permanent: også når teksten slettes igen
+  assert.strictEqual(w.set(OWN).color, 'red');
+  const st = w.c.stats();
+  assert.ok(st.untyped >= 1);
+  assert.deepStrictEqual(D.evaluateStats(OWN.repeat(3), st, { word: true, minWords: 5 }).cats, ['indsat']);
+  // Uden tastetryk (gammel app eller keys: null) ville den samme økt være grøn
+  const old = ready();
+  old.start('', 0);
+  type(old, '', OWN + FOREIGN.repeat(2), 0);
+  assert.strictEqual(old.status().color, 'green');
+});
+
+test('tastetryk: margenen er max(20 tegn, 3 %) – som serveren', () => {
+  const novel = (n) => 'x'.repeat(n);
+  let w = withKeys();
+  w.type('Kort start ');
+  assert.strictEqual(w.insert(novel(20), 40).color, 'green', '20 tegn uden tastetryk: autokorrektur');
+  w = withKeys();
+  w.type('Kort start ');
+  assert.strictEqual(w.insert(novel(22), 40).color, 'red', 'mellemrummet efter "start" er tastet, men ikke nyt: 21 tegn kan ikke forklares');
+  // En lang tekst: 3 % af teksten
+  w = withKeys();
+  w.type(OWN.repeat(10)); // ca. 1230 tegn -> margen 37
+  const m = D.wordKeyMargin(w.text.length + 36);
+  assert.ok(m >= 37, String(m));
+  assert.strictEqual(w.insert(' ' + novel(35), 40).color, 'green');
+});
+
+test('tastetryk: Ctrl+V af fremmed tekst er rød med Ctrl+V – Ctrl+V af egen tekst, flyt og fortryd er grøn', () => {
+  let w = withKeys();
+  w.type(OWN);
+  let s = w.paste(' Fremmed tekst om noget helt andet');
+  assert.strictEqual(s.text, 'Rød: tekst indsat med Ctrl+V, som ikke er tastet, kl. 10.14');
+  const st = w.c.stats();
+  assert.strictEqual(st.pasteKeys, 1);
+  assert.ok(D.evaluateStats(w.text, st, { word: true, minWords: 5 }).reasons.some(r => /Ctrl\+V/.test(r)));
+
+  const A = 'Første afsnit handler om naturen og om bjergene i Tyskland som digterne elskede at beskrive. ';
+  const B = 'Andet afsnit handler om byen og om de mennesker der flyttede fra landet ind til fabrikkerne. ';
+  w = withKeys();
+  w.type(A + '\r' + B);
+  // Kopi af eget afsnit med Ctrl+V
+  assert.strictEqual(w.paste('\r' + A).color, 'green');
+  // Flyt (klip og sæt ind)
+  assert.strictEqual(w.set(B + '\r' + A + '\r' + A, { pasteKeys: w.k.pasteKeys + 1 }).color, 'green');
+  // Slet med Backspace (mange tryk) og fortryd (Ctrl+Z) – teksten kommer igen uden tastetryk
+  const full = w.text;
+  w.set(B, { deleted: w.k.deleted + 2 * A.length });
+  s = w.set(full, { undo: w.k.undo + 1 });
+  assert.strictEqual(s.color, 'green');
+  const st2 = w.c.stats();
+  assert.strictEqual(st2.untyped, 0);
+  assert.ok(st2.restored > 2 * A.length, 'tekst, der kom igen, tæller som restored');
+  assert.deepStrictEqual(D.evaluateStats(D.normalizeText(full), st2, { word: true, minWords: 5 }).found, [], 'serveren: typed - deleted + restored forklarer teksten');
+});
+
+test('tastetryk: taster sendt af et program (injected) tæller ikke som tastet – og serveren giver "tempo"', () => {
+  const w = withKeys();
+  w.type(OWN);
+  // En autotyper "taster" teksten: tasterne er injicerede, så de forklarer ikke teksten
+  let s;
+  for (let n = 0; n < FOREIGN.length; n += 8) { w.k.injected += Math.min(8, FOREIGN.length - n); s = w.insert(FOREIGN.slice(n, n + 8)); }
+  assert.strictEqual(s.color, 'red');
+  const st = w.c.stats();
+  assert.ok(st.injected > 20);
+  const ev = D.evaluateStats(w.text, st, { word: true, minWords: 5 });
+  assert.ok(ev.cats.includes('tempo') && ev.cats.includes('indsat'), ev.cats.join());
+});
+
+test('tastetryk: Copilot slået til er gråt ? med en note – ikke rødt; uden tastetryk er det stadig rødt', () => {
+  const w = withKeys();
+  w.type(OWN);
+  let s = w.snap({ copilot: 'on' });
+  assert.deepStrictEqual([s.color, s.symbol, s.text], ['grey', '?', 'Grå: Words AI (Copilot) er slået til – bruger du den, får teksten ikke mærket.']);
+  assert.ok(!s.notes.some(n => /Copilot/.test(n)), 'noten står ikke to gange');
+  // Er skiltet rødt af en anden grund, står Copilot-noten under
+  w.o.copilot = 'on';
+  s = w.insert(FOREIGN.repeat(2));
+  assert.strictEqual(s.color, 'red');
+  assert.ok(s.notes.includes('Words AI (Copilot) er slået til – bruger du den, får teksten ikke mærket.'));
+  assert.strictEqual(w.c.stats().copilot, 'on');
+  assert.deepStrictEqual(D.evaluateStats(OWN.repeat(3), Object.assign(w.c.stats(), { untyped: 0, restored: 1000 }), { word: true, minWords: 5 }).cats, [], 'serveren: Copilot slået til er kun en note');
+  // keys: null -> de gamle regler
+  const n = ready();
+  n.start(OWN, 0);
+  s = n.snapshot({ t: 1000, text: OWN, copilot: 'on', keys: null });
+  assert.deepStrictEqual([s.color, s.text], ['red', "Rød: Word's AI (Copilot) er slået til"]);
+  assert.ok(s.notes.includes('Tastetryk kan ikke tælles på denne computer.'));
+});
+
+test('keys: null – tastetryk kan ikke tælles: note, ingen tastetjek, og stats siger keys: false', () => {
+  const c = ready();
+  c.start(OWN, 0);
+  let t = 0;
+  t += 1000; c.snapshot({ t, text: OWN, copilot: 'off', keys: null });
+  t += 1000; let s = c.snapshot({ t, text: OWN + FOREIGN.slice(0, 50), copilot: 'off', keys: null });
+  assert.strictEqual(s.color, 'green');
+  assert.deepStrictEqual(s.notes, ['Tastetryk kan ikke tælles på denne computer.']);
+  // Kommer tællerne igen senere i økten, er tællingen stadig ikke komplet
+  t += 1000; s = c.snapshot({ t, text: OWN + FOREIGN.slice(0, 50), copilot: 'off', keys: K0() });
+  assert.strictEqual(c.keysAvail, false);
+  assert.deepStrictEqual(c.stats(), { pasteInserted: 0, pasteBlocked: 0, focusLostMs: 0, activeMs: 3000, copilot: 'off', keys: false });
+  assert.deepStrictEqual(D.evaluateStats(OWN.repeat(3), c.stats(), { word: true, minWords: 5 }).found, []);
+});
+
+test('tastetryk: tælleren starter efter Word (intet keys-felt endnu) – teksten fra før tæller ikke imod eleven', () => {
+  const c = ready();
+  c.start('', 0);
+  type(c, '', OWN, 0);
+  assert.strictEqual(c.keysAvail, null);
+  let s = c.snapshot({ t: 20_000, text: OWN + ' videre', copilot: 'off', keys: Object.assign(K0(), { typed: 7 }) });
+  assert.strictEqual(s.color, 'green');
+  const st = c.stats();
+  assert.strictEqual(st.keys, true);
+  assert.deepStrictEqual(D.evaluateStats(OWN + ' videre', st, { word: true, minWords: 5 }).found, []);
+  s = c.snapshot({ t: 60_000, text: OWN + ' videre ' + FOREIGN.slice(0, 50), copilot: 'off', keys: Object.assign(K0(), { typed: 7 }) });
+  assert.strictEqual(c.inserts.length, 0);
+  assert.strictEqual(s.color, 'red', 'derefter tæller tastetrykkene');
+});
+
+test('tastetryk over flere økter: tallene lægges oveni (base) – og et dokument påbegyndt uden tastetryk vurderes uden', () => {
+  // Første økt
+  const w = withKeys();
+  w.type(OWN);
+  const first = w.c.stats();
+  // Anden økt: Word åbner det gemte dokument, tællerne starter forfra
+  const c = ready({ base: first });
+  c.start(OWN, 0, D.normalizeText(OWN));
+  c.snapshot({ t: 1000, text: OWN, copilot: 'unknown', keys: K0() });
+  c.snapshot({ t: 2000, text: OWN + 'Mere tekst', copilot: 'off', keys: Object.assign(K0(), { typed: 10, maxCps: 9, regularity: 0.3 }) });
+  const st = c.stats();
+  assert.deepStrictEqual([st.keys, st.typed, st.maxCps, st.regularity, st.copilot], [true, first.typed + 10, 9, 0.3, 'unknown']);
+  assert.deepStrictEqual(D.evaluateStats(D.normalizeText(OWN + 'Mere tekst'), st, { word: true, minWords: 5 }).found, []);
+  // Påbegyndt uden tastetryk: hele dokumentet vurderes uden
+  const old = ready({ base: { keys: false, pasteInserted: 1, copilot: 'on' } });
+  old.start(OWN, 0, D.normalizeText(OWN));
+  const s = old.snapshot({ t: 1000, text: OWN, copilot: 'off', keys: K0() });
+  assert.strictEqual(old.keysCounted(), false);
+  assert.ok(s.notes.includes('Tastetryk blev ikke talt, da dokumentet blev påbegyndt. Det vurderes uden tastetryk.'));
+  assert.deepStrictEqual(old.stats(), { pasteInserted: 1, pasteBlocked: 0, focusLostMs: 0, activeMs: 1000, copilot: 'on', keys: false });
+});

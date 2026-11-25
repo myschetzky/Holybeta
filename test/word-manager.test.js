@@ -165,7 +165,7 @@ test('Word-økt: tekst indsat fra et andet program -> rød muldvarp -> "Skriv vi
   assert.strictEqual(res.confirm, true);
   let p = r.overlay.last().panel;
   assert.strictEqual(p.kind, 'confirm');
-  assert.ok(p.items.includes('Der er tekst, som ikke er tastet i HolyMoly.'), p.items.join());
+  assert.ok(p.items.includes('Der er kommet tekst i Word, som ikke er tastet (fx indsat, Copilot, diktering eller autotekst).'), p.items.join());
   assert.deepStrictEqual(p.actions.map(a => a.label), ['Skriv videre', 'Gem uden mærke']);
   // Skriv videre: boksen lukker, økten kører
   await r.mgr.action('continue');
@@ -237,7 +237,10 @@ test('serveren får Word-teksten som afsnit med source: word og stats uden tekst
   await l.mgr.tick();
   const doc = l.sent.filter(m => m.type === 'doc').pop();
   assert.deepStrictEqual(doc.blocks, [{ t: 'p', r: [{ x: 'Første afsnit.' }] }, { t: 'p', r: [{ x: 'Andet afsnit' }] }]);
-  assert.deepStrictEqual(Object.keys(doc.stats).sort(), ['activeMs', 'copilot', 'focusLostMs', 'pasteBlocked', 'pasteInserted']);
+  // Kun tal (og Copilot-status) – med tastetryk også tastetællerne, aldrig hvilke taster
+  assert.deepStrictEqual(Object.keys(doc.stats).sort(), ['activeMs', 'burst', 'copilot', 'deleted', 'fastShare', 'focusLostMs', 'injected', 'keys', 'keystrokes', 'maxCps', 'pasteBlocked', 'pasteInserted', 'pasteKeys', 'regularity', 'restored', 'typed', 'undo', 'untyped']);
+  assert.deepStrictEqual([doc.stats.keys, doc.stats.typed, doc.stats.untyped], [true, 27, 0]);
+  assert.ok(Object.values(doc.stats).every(v => v === null || typeof v === 'number' || typeof v === 'boolean' || ['on', 'off', 'unknown'].includes(v)), JSON.stringify(doc.stats));
   // Uændret tekst sendes ikke igen; svar fra serveren gemmer "sidst set" lokalt
   l.mgr.onMessage({ type: 'doc-saved', id: st.id, ok: true, preview: { ok: false, categories: [{ key: 'kort', text: 'Teksten er for kort. Et bevis kræver mindst 100 ord.' }] } });
   assert.strictEqual(l.mgr.get(st.id).lastText, 'Første afsnit.\nAndet afsnit');
@@ -298,4 +301,80 @@ test('Tekst færdig uden lektion og uden forbindelse: tydelig besked, intet lås
   assert.ok(!l.mgr.get(st.id).submitted);
   await l.mgr.action('continue');
   assert.strictEqual(l.overlay.last().panel, null);
+});
+
+/* ---------------------------------------------------------------- tastetryk i Word ---------------------------------------------------------------- */
+test('Word-økt med tastetryk og Copilot slået til: gråt ? under skrivningen, men beviset udstedes (ingen afslag)', { timeout: 60_000 }, async (t) => {
+  const r = await rig(t);
+  r.fake.handle({ cmd: 'fake:set', copilot: 'on' });
+  const st = await r.mgr.start({});
+  assert.ok(st.ok, st.error);
+  await typeInWord(r, 'Romantikken var en periode med følelser og natur i kunsten.');
+  const v = r.overlay.last();
+  assert.deepStrictEqual([v.status.color, v.status.text], ['grey', 'Grå: Words AI (Copilot) er slået til – bruger du den, får teksten ikke mærket.']);
+  const full = await r.call('GET', '/api/docs/' + st.id);
+  assert.ok(full.notes.some(n => /Copilot/.test(n)), full.notes.join());
+  const res = await r.mgr.action('done');
+  assert.ok(res.ok && res.certId, JSON.stringify(res));
+  const cert = await r.call('GET', '/api/bevis/' + res.certId);
+  assert.ok(cert.payload.checks.includes('Teksten passer med tastetrykkene i Word'), cert.payload.checks.join());
+});
+
+test('Word-økt med tastetryk: tekst uden tastetryk (Copilot) i små bidder -> rød muldvarp -> serveren afviser med Word-teksten', { timeout: 60_000 }, async (t) => {
+  const r = await rig(t);
+  const st = await r.mgr.start({});
+  await typeInWord(r, 'Mit eget første afsnit om romantikken.');
+  assert.strictEqual(r.overlay.last().status.color, 'green');
+  // Copilot skriver i Word: 18 tegn ad gangen (ingen spring, intet for serverens vækstbudget) – men ingen tastetryk
+  for (const bid of [' Romantikken var en', ' kunstnerisk og', ' litterær bevægelse.']) {
+    r.fake.handle({ cmd: 'fake:insert', text: bid });
+    await sleep(1650);
+    await r.mgr.tick();
+  }
+  const v = r.overlay.last();
+  assert.match(v.status.text, /^Rød: der er kommet tekst, som ikke er tastet, kl\. \d\d\.\d\d$/);
+  assert.strictEqual(r.mgr.s.check.inserts.length, 0, 'vækst-tjekket alene ville ikke se det');
+  const res = await r.mgr.action('done');
+  assert.strictEqual(res.confirm, true);
+  assert.ok(res.categories.includes('Der er kommet tekst i Word, som ikke er tastet (fx indsat, Copilot, diktering eller autotekst).'), res.categories.join());
+  const full = await r.call('GET', '/api/docs/' + st.id);
+  assert.ok(full.reasons.includes(D.WORD_UNTYPED), full.reasons.join());
+});
+
+test('tastetryk: tallene gemmes til næste økt, og "Tastetryk kan ikke tælles" uden tæller', async (t) => {
+  const l = local(t);
+  const st = await l.mgr.start({});
+  l.mgr.onMessage({ type: 'doc-saved', id: st.id, ok: true });
+  l.fake.handle({ cmd: 'fake:type', text: 'Mit eget afsnit.' });
+  l.tick(3000); await l.mgr.tick();
+  l.mgr.onMessage({ type: 'doc-saved', id: st.id, ok: true });
+  assert.deepStrictEqual([l.mgr.get(st.id).stats.keys, l.mgr.get(st.id).stats.typed], [true, 16]);
+  // Efter sidste gemning taster eleven videre og lukker Word: tallene gemmes alligevel
+  l.fake.handle({ cmd: 'fake:type', text: ' Mere.' });
+  l.tick(1000); await l.mgr.tick();
+  await l.bridge.save();
+  l.fake.handle({ cmd: 'fake:set', open: false });
+  await l.mgr.tick();
+  assert.strictEqual(l.mgr.get(st.id).stats.typed, 22);
+  // Næste økt: tællerne starter forfra i Word, men serveren får hele dokumentets tal
+  assert.ok((await l.mgr.start({ docId: st.id })).ok);
+  assert.strictEqual(l.sent.filter(m => m.type === 'doc').pop().stats.typed, 22, 'første gemning i den nye økt: tallene fra før');
+  l.mgr.onMessage({ type: 'doc-saved', id: st.id, ok: true });
+  l.fake.handle({ cmd: 'fake:type', text: ' Og mere.' });
+  l.tick(3000); await l.mgr.tick();
+  const doc = l.sent.filter(m => m.type === 'doc').pop();
+  assert.deepStrictEqual([doc.stats.keys, doc.stats.typed, doc.stats.untyped], [true, 31, 0]);
+  assert.notStrictEqual(l.overlay.last().status.color, 'red', l.overlay.last().status.text);
+  // Ingen tastetæller på computeren: en note, og stats siger keys: false
+  const n = local(t, { bridge: new FakeWordBridge({ keys: false }) });
+  const ns = await n.mgr.start({});
+  n.mgr.onMessage({ type: 'doc-saved', id: ns.id, ok: true });
+  n.fake.handle({ cmd: 'fake:type', text: 'Hej' });
+  n.tick(3000); await n.mgr.tick();
+  assert.ok(n.overlay.last().status.notes.includes('Tastetryk kan ikke tælles på denne computer.'));
+  assert.strictEqual(n.sent.filter(m => m.type === 'doc').pop().stats.keys, false);
+  // Et påbegyndt dokument fra før tastetællingen (ingen tal) vurderes uden tastetryk
+  assert.deepStrictEqual(WordManager.baseStats({ lastText: 'Gammel tekst' }, false), { keys: false });
+  assert.strictEqual(WordManager.baseStats({ lastText: '' }, false), null);
+  assert.strictEqual(WordManager.baseStats({ lastText: 'x', stats: { keys: true, typed: 1 } }, true), null, 'et nyt dokument har ingen tidligere tal');
 });

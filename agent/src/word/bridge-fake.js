@@ -5,9 +5,16 @@
  *  - I samme proces: new FakeWord().handle(req) -> svar. FakeWordBridge har samme metoder som WordBridge.
  *  - Som proces: `node bridge-fake.js` læser JSON-linjer på stdin og skriver svar på stdout (som PowerShell-broen).
  *
- * Ekstra kommandoer (kun her): fake:type { text } (eleven skriver), fake:paste { text } (indsat på én gang),
- * fake:set { text, foreground, copilot, rect, minimized, open, busy }, fake:hang (svarer aldrig).
+ * Ekstra kommandoer (kun her): fake:type { text } (eleven taster), fake:paste { text } (Ctrl+V: indsat på én gang),
+ * fake:insert { text } (tekst uden tastetryk: Copilot, diktering, autotekst), fake:inject { text } (et program sender tasterne),
+ * fake:delete { chars, keys } (Backspace), fake:keys { typed, … } (sæt tastetællerne),
+ * fake:set { text, foreground, copilot, rect, minimized, open, busy, keys: false|true }, fake:hang (svarer aldrig).
+ * state svarer også keys (tastetællerne – som tastetælleren keys.ps1) eller keys: null, når tastetryk ikke kan tælles.
  * save og seal skriver rigtige .docx-filer, der ligner Words egne (deflate, sidefod, læsebeskyttelse).
+ *
+ * `node bridge-fake.js --keys` er en falsk tastetæller (samme protokol som keys.ps1): fake:keys sætter tællerne,
+ * HM_FAKE_NO_HOOK=1 svarer hook: false, HM_FAKE_KEYS_DELAY=ms venter med ready. Som Word-proces: HM_FAKE_KEYS=none
+ * (intet keys-felt i state, som word.ps1) eller HM_FAKE_KEYS=null (keys: null).
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -85,9 +92,25 @@ function wordLikeDocx(paragraphs, opts = {}) {
 }
 
 /* ------------------------------------------------------------ den falske Word ------------------------------------------------------------ */
+const KEY_FIELDS = ['typed', 'deleted', 'pasteKeys', 'injected', 'undo', 'keystrokes', 'maxCps', 'burst', 'fastShare', 'regularity'];
+const zeroKeys = () => ({ typed: 0, deleted: 0, pasteKeys: 0, injected: 0, undo: 0, keystrokes: 0, maxCps: 0, burst: 0, fastShare: 0, regularity: null });
+/** Sæt tællere fra en fake:keys-forespørgsel (kun de kendte felter, kun tal). */
+function setKeys(k, req) {
+  for (const f of KEY_FIELDS) if (f in req) k[f] = req[f] == null ? (f === 'regularity' ? null : 0) : Number(req[f]) || 0;
+  return k;
+}
+
 class FakeWord {
+  /**
+   * opts: { word, copilot, keys }
+   * keys: true (standard: state svarer tællerne), false (tastetryk kan ikke tælles – keys: null),
+   *       'helper' (state har intet keys-felt, som word.ps1 – tællerne kommer fra tastetælleren)
+   */
   constructor(opts = {}) {
     this.word = opts.word !== false;
+    this.keysOn = opts.keys !== false;
+    this.keysField = opts.keys !== 'helper';
+    this.keys = zeroKeys();
     this.doc = null; // { path, paras: [], saved, sealed }
     this.foreground = true;
     this.copilot = opts.copilot || 'off';
@@ -97,6 +120,14 @@ class FakeWord {
     this.log = [];
   }
   _text() { return this.doc ? this.doc.paras.join('\r') + '\r' : ''; }
+  _add(text) {
+    const add = String(text || '').split('\r');
+    this.doc.paras[this.doc.paras.length - 1] += add[0];
+    this.doc.paras.push(...add.slice(1));
+    this.doc.saved = false;
+  }
+  /** Tastetryk tælles kun, mens Word-vinduet er i forgrunden (som keys.ps1). */
+  _counts() { return this.keysOn && this.foreground && !this.minimized; }
   _write(file, opts) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, wordLikeDocx(this.doc.paras, opts)); }
 
   /** Én forespørgsel -> svar (uden id). Svarer null på fake:hang. */
@@ -119,11 +150,12 @@ class FakeWord {
           this.doc = { path: p, paras: this.doc && this.doc.path === p ? this.doc.paras : (this.stored && this.stored[p]) || [''], saved: true };
         }
         this.foreground = true;
-        return { ok: true, path: p };
+        this.keys = zeroKeys(); // ny økt: ny tastetæller
+        return { ok: true, path: p, hwnd: 4242 };
       }
       case 'state': {
         if (!this.doc) return { ok: true, open: false };
-        return { ok: true, open: true, path: this.doc.path, text: this._text(), saved: this.doc.saved, minimized: this.minimized, rect: this.minimized ? null : Object.assign({}, this.rect), foreground: this.foreground && !this.minimized, copilot: this.copilot };
+        return { ok: true, open: true, path: this.doc.path, text: this._text(), saved: this.doc.saved, minimized: this.minimized, rect: this.minimized ? null : Object.assign({}, this.rect), foreground: this.foreground && !this.minimized, copilot: this.copilot, hwnd: 4242, ...(this.keysField ? { keys: this.keysOn ? Object.assign({}, this.keys) : null } : {}) };
       }
       case 'save': {
         if (!this.doc) return { ok: false, error: 'Intet dokument er åbent' };
@@ -148,17 +180,36 @@ class FakeWord {
         return { ok: true };
       }
       // Kun den falske Word: eleven skriver/indsætter, og testen ændrer forholdene
-      case 'fake:type':
-      case 'fake:paste': {
+      case 'fake:type':     // eleven taster: én tast pr. tegn (Enter = \r)
+      case 'fake:paste':    // Ctrl+V: ét tastetryk, hele teksten på én gang
+      case 'fake:insert':   // tekst uden tastetryk (Copilot, diktering, autotekst, Indsæt > Objekt)
+      case 'fake:inject': { // et program sender tasterne (autotyper, makro): injicerede taster
         if (!this.doc) return { ok: false, error: 'Intet dokument er åbent' };
-        const add = String(req.text || '').split('\r');
-        this.doc.paras[this.doc.paras.length - 1] += add[0];
-        this.doc.paras.push(...add.slice(1));
+        const n = [...String(req.text || '')].length;
+        if (this._counts()) {
+          if (cmd === 'fake:type') { this.keys.typed += n; this.keys.keystrokes += n; }
+          else if (cmd === 'fake:paste') this.keys.pasteKeys++;
+          else if (cmd === 'fake:inject') this.keys.injected += n;
+        }
+        this._add(req.text);
+        return { ok: true };
+      }
+      case 'fake:delete': { // Backspace: fjerner tegn fra slutningen (keys: antal tastetryk, standard ét pr. tegn)
+        if (!this.doc) return { ok: false, error: 'Intet dokument er åbent' };
+        const n = Math.max(0, Number(req.chars) || 0);
+        const t = this._text().replace(/\r$/, '');
+        this.doc.paras = t.slice(0, Math.max(0, t.length - n)).split('\r');
         this.doc.saved = false;
+        if (this._counts()) this.keys.deleted += req.keys == null ? n : Math.max(0, Number(req.keys) || 0);
+        return { ok: true };
+      }
+      case 'fake:keys': { // sæt tællerne direkte (fx tempo eller fortryd)
+        setKeys(this.keys, req);
         return { ok: true };
       }
       case 'fake:set': {
         if ('text' in req && this.doc) { this.doc.paras = String(req.text).replace(/\r$/, '').split('\r'); this.doc.saved = false; }
+        if ('keys' in req) this.keysOn = !!req.keys;
         for (const k of ['foreground', 'copilot', 'minimized', 'busy']) if (k in req) this[k] = req[k];
         if (req.rect) this.rect = req.rect;
         if (req.open === false) this.doc = null;
@@ -176,8 +227,8 @@ class FakeWordBridge {
   async start() { return { supported: true, word: this.fake.word, version: '16.0' }; }
   async probe() { return { supported: true, word: this.fake.word, version: '16.0' }; }
   request(cmd, args) { return this._req(cmd, args); }
-  open(p, create) { return this._req('open', { path: p, create }); }
-  state() { return this._req('state'); }
+  async open(p, create) { const r = await this._req('open', { path: p, create }); delete r.hwnd; return r; }
+  async state() { const r = await this._req('state'); delete r.hwnd; return r; }
   save() { return this._req('save'); }
   seal(o) { return this._req('seal', o); }
   close(save) { return this._req('close', { save }); }
@@ -186,9 +237,39 @@ class FakeWordBridge {
 }
 
 /* ------------------------------------------------------------ som proces (samme protokol som word.ps1) ------------------------------------------------------------ */
-if (require.main === module) {
+if (require.main === module && process.argv.includes('--keys')) {
+  // Den falske tastetæller (samme protokol som keys.ps1)
   const { asciiJson } = require('./bridge.js');
-  const w = new FakeWord({ word: process.env.HM_FAKE_NO_WORD !== '1' });
+  const out = (o) => process.stdout.write(asciiJson(o) + '\n');
+  const hook = process.env.HM_FAKE_NO_HOOK !== '1';
+  const keys = zeroKeys();
+  let target = 0;
+  const delay = Number(process.env.HM_FAKE_KEYS_DELAY) || 0; // så længe "starter" tælleren
+  setTimeout(() => out({ ready: true, hook }), delay);
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line) continue;
+      let req;
+      try { req = JSON.parse(line); } catch (e) { continue; }
+      if (req.cmd === 'fake:keys') { setKeys(keys, req); out({ id: req.id, ok: true }); continue; }
+      if (req.cmd === 'fake:exit') process.exit(3);
+      if (req.cmd !== 'get') { out({ id: req.id, ok: false, error: 'Ukendt kommando' }); continue; }
+      if (!hook) { out({ id: req.id, ok: false, error: 'Tastetryk kan ikke tælles på denne computer' }); continue; }
+      target = Number(req.hwnd) || 0;
+      // Tæller kun i det vindue, broen har givet (som keys.ps1): uden hwnd er alt 0. Felter, der ikke er tal, smides væk af keys.js.
+      out({ id: req.id, ok: true, keys: target ? Object.assign({ vkCode: 65 }, keys) : zeroKeys() });
+    }
+  });
+  process.stdin.on('end', () => process.exit(0));
+} else if (require.main === module) {
+  const { asciiJson } = require('./bridge.js');
+  const w = new FakeWord({ word: process.env.HM_FAKE_NO_WORD !== '1', keys: { none: 'helper', null: false }[process.env.HM_FAKE_KEYS] ?? true });
   const out = (o) => process.stdout.write(asciiJson(o) + '\n');
   out({ ready: true, word: w.word, version: '16.0' });
   let buf = '';
@@ -211,4 +292,4 @@ if (require.main === module) {
   process.stdin.on('end', () => process.exit(0));
 }
 
-module.exports = { FakeWord, FakeWordBridge, wordLikeDocx, zipDeflate };
+module.exports = { FakeWord, FakeWordBridge, wordLikeDocx, zipDeflate, zeroKeys };

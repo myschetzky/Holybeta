@@ -19,8 +19,9 @@
  * Hvad beviset IKKE kan: se om eleven har skrevet en tekst af efter en anden skærm/telefon. Det står på beviset.
  *
  * "Skriv i Word" (source: 'word'): elev-appen sender Word-dokumentets tekst som almindelige gemninger. Vækstbudgettet,
- * lampen (rød/grå) og AI-fraserne gælder som i skrivevinduet. Der findes ingen tastestatistik fra Word, så de tjek, der
- * bygger på tastetryk, springes over; appen melder selv tekst indsat fra et andet program (pasteInserted).
+ * lampen (rød/grå) og AI-fraserne gælder som i skrivevinduet. Kan appen tælle tastetryk i Word-vinduet (stats.keys),
+ * gælder tastetjekkene også – med en margin til autokorrektur (shared/doc.js evaluateStats). Ellers springes de over,
+ * og Copilot slået til giver afslag. Appen melder selv tekst indsat fra et andet program (pasteInserted).
  * Beviset siger observed: ['word'] (+ 'vagt').
  */
 const fs = require('node:fs');
@@ -64,6 +65,94 @@ const RED_LABEL = { ai: 'AI-side', remote: 'fjernstyring', vm: 'virtuel maskine'
 
 const num = (v, max = 1e12) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.min(n, max) : 0; };
 
+/*
+ * Skrivelogen: hvad der skete mellem to gemninger. En simpel diff i to trin: først afsnit, så ord inden for de
+ * ændrede afsnit (fælles start/slut skæres fra, resten parres med LCS). Korte fælles stykker (under 20 tegn,
+ * fx et mellemrum eller "og") deler ikke et stykke i to, så et indsat afsnit forbliver ét stykke.
+ */
+const LOG_PASTE_MAX = 2000;     // indsat tekst gemmes med højst 2.000 tegn …
+const LOG_FIX_MAX = 500;        // … det fjernede ved en rettelse med højst 500
+const LOG_FIX_MIN = 20;         // rettelser under 20 tegn er almindelig skrivning
+const LOG_PIECE_MIN = 30;       // indsat stykke: mindst 30 tegn
+const LOG_WORD_BURST = 60;      // Word: mere end 60 nye tegn på én gemning (eller 15 tegn/sek.), som ikke stod der før
+const LOG_MOVE_MIN = 40;        // fortrudt (restored) egen tekst: mindst 40 tegn
+const LOG_SESSION_GAP = 20 * 60_000; // ny skriveøkt efter 20 min. uden gemning (eller en ny lektion/skriveøkt)
+const LOG_MAX_EVENTS = 3000;    // højst så mange rækker pr. dokument …
+const LOG_MAX_TEXT = 500_000;   // … og højst så mange tegn uddrag; derefter gemmes kun de første 200 tegn af hvert uddrag
+const LOG_MIN_RUN = 20;         // fælles stykker kortere end dette deler ikke et ændret stykke
+
+/** Par af indeks (i, j), hvor a[i] === b[j], i den længste fælles delsekvens. null, hvis listerne er for store. */
+function lcsPairs(a, b, maxCells = 250_000) {
+  const n = a.length, m = b.length;
+  if (!n || !m) return [];
+  if (n * m > maxCells) return null;
+  const w = m + 1;
+  const dp = new Uint32Array((n + 1) * w);
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) dp[i * w + j] = a[i] === b[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push([i, j]); i++; j++; } else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) i++; else j++;
+  }
+  return out;
+}
+
+/** Ændrede stykker mellem to lister af tekststykker: [{ del, ins }] (sammensat med sep). */
+function hunks(a, b, sep) {
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const A = a.slice(p, a.length - s), B = b.slice(p, b.length - s);
+  if (!A.length && !B.length) return [];
+  const pairs = lcsPairs(A, B);
+  if (!pairs) return [{ del: A.join(sep), ins: B.join(sep) }];
+  // Fælles løb: kun løb på mindst LOG_MIN_RUN tegn deler stykkerne
+  const runs = [];
+  for (const [i, j] of pairs) {
+    const r = runs[runs.length - 1];
+    if (r && r.i + r.n === i && r.j + r.n === j) { r.n++; r.len += A[i].length + sep.length; } else runs.push({ i, j, n: 1, len: A[i].length });
+  }
+  const keep = runs.filter(r => r.len >= LOG_MIN_RUN);
+  const out = [];
+  let i = 0, j = 0;
+  for (const r of keep.concat([{ i: A.length, j: B.length, n: 0 }])) {
+    if (r.i > i || r.j > j) out.push({ del: A.slice(i, r.i).join(sep), ins: B.slice(j, r.j).join(sep) });
+    i = r.i + r.n; j = r.j + r.n;
+  }
+  return out;
+}
+
+/**
+ * Hvad der er fjernet og indsat mellem to tekster: [{ del, ins, delW, insW }] (afsnit, så ord, så tegn).
+ * del/ins er skåret helt ned til tegn (til at tælle tastet og slettet); delW/insW stopper ved mellemrum (hele ord til uddrag).
+ */
+function diffPieces(oldText, newText) {
+  if (oldText === newText) return [];
+  const words = (t) => t.match(/\s+|[^\s]+/gu) || [];
+  const w = (c) => c != null && !/\s/u.test(c); // del af et ord (inkl. tegnsætning)
+  const out = [];
+  for (const h of hunks(oldText.split('\n'), newText.split('\n'), '\n')) {
+    for (const x of hunks(words(h.del), words(h.ins), '')) {
+      const { del, ins } = x;
+      let a = 0;
+      while (a < del.length && a < ins.length && del[a] === ins[a]) a++;
+      let z = 0;
+      while (z < del.length - a && z < ins.length - a && del[del.length - 1 - z] === ins[ins.length - 1 - z]) z++;
+      // Til hele ord: et fælles stykke, der slutter/starter midt i et ord, tæller ikke med i uddraget
+      let aw = a, zw = z;
+      if (aw > 0 && w(del[aw - 1]) && (w(del[aw]) || w(ins[aw]))) while (aw > 0 && w(del[aw - 1])) aw--;
+      if (zw > 0 && w(del[del.length - zw]) && (w(del[del.length - zw - 1]) || w(ins[ins.length - zw - 1]))) while (zw > 0 && w(del[del.length - zw])) zw--;
+      const p = { del: del.slice(a, del.length - z), ins: ins.slice(a, ins.length - z), delW: del.slice(aw, del.length - zw), insW: ins.slice(aw, ins.length - zw) };
+      if (p.del || p.ins) out.push(p);
+    }
+  }
+  return out;
+}
+const clip = (t, max) => (t.length > max ? t.slice(0, max) + '…' : t);
+
 class DocStore {
   /** opts: { testServer: issuer får "Testserver" (enkel tilstand uden skole), minWords } */
   constructor(db, dataDir, opts = {}) {
@@ -97,6 +186,16 @@ class DocStore {
         text TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS doc_versions_d ON doc_versions(doc_id, ts);
+      -- Skrivelogen (se _planLog): indsatte udsnit, rettelser, flytninger, skrivning pr. minut, lampeskift og skriveøkter
+      CREATE TABLE IF NOT EXISTS doc_events (
+        doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        ts INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        chars INTEGER NOT NULL DEFAULT 0,
+        excerpt TEXT,
+        detail TEXT
+      );
+      CREATE INDEX IF NOT EXISTS doc_events_d ON doc_events(doc_id, ts);
       CREATE TABLE IF NOT EXISTS certificates (
         id TEXT PRIMARY KEY,
         doc_id TEXT NOT NULL,
@@ -122,6 +221,10 @@ class DocStore {
       CREATE TRIGGER documents_cleanup AFTER DELETE ON documents BEGIN
         UPDATE certificates SET doc_id = '', student_name = '', class_name = '', doc_deleted = COALESCE(doc_deleted, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE doc_id = OLD.id;
         DELETE FROM assignment_submissions WHERE doc_id = OLD.id;
+      END;
+      -- Skrivelogen følger dokumentet (også hvis fremmednøglerne er slået fra)
+      CREATE TRIGGER IF NOT EXISTS documents_log_cleanup AFTER DELETE ON documents BEGIN
+        DELETE FROM doc_events WHERE doc_id = OLD.id;
       END;
     `);
     // Signeringsnøgle (kun serveren har den). Den offentlige nøgle står på tjek-siden.
@@ -178,6 +281,9 @@ class DocStore {
       predicted: num(s.predicted, 1e7), dictated: num(s.dictated, 1e7),
       // Word: Copilot-status, som elev-appen kunne se den i registret ('on' | 'off' | 'unknown')
       copilot: ['on', 'off', 'unknown'].includes(s.copilot) ? s.copilot : '',
+      // Word: kunne appen tælle tastetryk i hele dokumentet? Kun kategorier og tider – aldrig hvilke taster.
+      keys: s.keys === true,
+      pasteKeys: num(s.pasteKeys, 1e6), injected: num(s.injected, 1e7), undo: num(s.undo, 1e7), untyped: num(s.untyped, 1e6),
     };
   }
 
@@ -314,15 +420,25 @@ class DocStore {
     const downDt = m.downPending || 0;
     const eff = growth - (m.downAllow || 0);
     m.downPending = 0; m.downAllow = 0;
-    if (m.flags.length < 20 && growth > 30) {
+    // Vækst-flag: jump = hvorfor (til skrivelogen: 'start' | 'offline' | 'hurtigt'), flag = teksten til læreren
+    let jump = '', flag = '';
+    if (growth > 30) {
       if (!m.lastTs) {
         // Første gang serveren ser dokumentet: fast budget på 150 tegn (forberedt tekst, fx i en redigeret documents.json)
-        if (growth > FIRST_SAVE_BUDGET) m.flags.push(`Dokumentet havde allerede ${growth} tegn, første gang HolyMoly så det`);
-      } else if (downDt > 0 && eff > 80) m.flags.push(`${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (serveren var nede i ${Math.max(1, Math.round(downDt / 60000))} min.)`);
-      else if (dt - downDt > GAP_MS && eff > 80) m.flags.push(`${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (${Math.round(dt / 60000)} min. uden forbindelse)`);
-      else if (dt > 0 && eff / (dt / 1000) > SERVER_GROWTH_CPS) m.flags.push(`Tekst indsat for hurtigt: teksten voksede med ${growth} tegn på ${Math.max(1, Math.round(dt / 1000))} sek.`);
+        if (growth > FIRST_SAVE_BUDGET) { jump = 'start'; flag = `Dokumentet havde allerede ${growth} tegn, første gang HolyMoly så det`; }
+      } else if (downDt > 0 && eff > 80) { jump = 'offline'; flag = `${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (serveren var nede i ${Math.max(1, Math.round(downDt / 60000))} min.)`; }
+      else if (dt - downDt > GAP_MS && eff > 80) { jump = 'offline'; flag = `${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (${Math.round(dt / 60000)} min. uden forbindelse)`; }
+      else if (dt > 0 && eff / (dt / 1000) > SERVER_GROWTH_CPS) { jump = 'hurtigt'; flag = `Tekst indsat for hurtigt: teksten voksede med ${growth} tegn på ${Math.max(1, Math.round(dt / 1000))} sek.`; }
     }
+    if (flag && m.flags.length < 20) m.flags.push(flag);
     if (m.flags.length && !m.flagAt) m.flagAt = now; // hvornår (til "kan ikke længere få mærket (kl. …)")
+    // Skrivelogen: hvad der blev indsat, rettet og flyttet siden sidste gemning (skrives, når dokumentet er gemt)
+    let plan = null;
+    try {
+      plan = this._planLog(input.id, m, {
+        oldText: row ? row.text : '', text, oldStats: row ? JSON.parse(row.stats || '{}') : {}, stats, view, lessonId, now, dt, jump, word: !!source,
+      });
+    } catch (e) { plan = null; /* skrivelogen må aldrig stoppe en gemning */ }
     // Grå tid siden sidste gemning tæller mod beviset, hvis teksten voksede imens – ellers som grå tid uden vækst
     if (growth > 0) m.greyCounted += m.greyPending;
     else m.greyIdle = (m.greyIdle || 0) + m.greyPending;
@@ -331,6 +447,7 @@ class DocStore {
     m.lastTs = now; m.lastLen = text.length;
     if (row) this.q.upd.run(title, blocksJson, text, JSON.stringify(stats), JSON.stringify(m), now, input.id);
     else this.q.ins.run(input.id, student.id, student.class_id, title, blocksJson, text, JSON.stringify(stats), JSON.stringify(m), now, now);
+    if (plan) try { this._writeLog(input.id, plan); } catch (e) { /* som ovenfor */ }
     const added = this._version(input.id, text, now);
     const u = this.usage.get(student.id);
     if (u) u.bytes += newSize - oldSize + added;
@@ -363,6 +480,182 @@ class DocStore {
   }
   versions(id) {
     return this.db.prepare('SELECT ts, text FROM doc_versions WHERE doc_id = ? ORDER BY ts').all(String(id || ''));
+  }
+
+  /*
+   * Skrivelogen ("hvordan blev teksten skrevet"): kaldes af save() for hver gemning. Sammenligner forrige tekst med den nye
+   * og returnerer rækkerne til doc_events (skrives af _writeLog, når dokumentet er gemt). Ændrer m.logState.
+   *  - 'indsat':   et stykke, der ikke kan forklares som tastning: gemningen fik et vækst-flag, appen meldte indsat tekst
+   *                (pasteInserted, eller blokeret indsæt + et spring), eller (Word) over 60 nye tegn på én gemning.
+   *                excerpt = selve teksten (højst 2.000 tegn). detail.reason = start | offline | hurtigt | paste | word.
+   *  - 'flyttet':  et stykke (der ellers ville være 'indsat', eller som skrivevinduets "fortryd" bragte tilbage), der allerede
+   *                stod i dokumentet (kopi/flyt af egen tekst). Kun antal tegn.
+   *  - 'rettelse': et fjernet eller erstattet stykke over 20 tegn. excerpt = det fjernede (højst 500 tegn).
+   *  - 'skrivning': tastet og slettet pr. minut (én række pr. minut: chars = tilføjet, detail { added, removed, last }).
+   *  - 'blokeret': indsæt blev blokeret (eller Word-udklipsholderen tømt). detail.n.
+   *  - 'lampe':    lampen skiftede (detail { color, why }). Rød/grå mellem to gemninger: detail.between = [fra, til].
+   *  - 'start':    en ny skriveøkt (første gemning, ny lektion/skriveøkt eller 20 min. uden gemning). detail.lesson.
+   */
+  _planLog(id, m, o) {
+    const { oldText, text, oldStats, stats, view, lessonId, now, dt, jump, word } = o;
+    const ev = [];
+    const L = m.logState || (m.logState = { c: '', red: 0, note: 0, grey: 0, lesson: null });
+    const prevTs = m.lastTs || 0;
+    // Skriveøkt
+    if (!prevTs || now - prevTs > LOG_SESSION_GAP || (lessonId && L.lesson && lessonId !== L.lesson)) ev.push({ ts: now, kind: 'start', chars: 0, detail: { lesson: lessonId || null } });
+    if (lessonId) L.lesson = lessonId;
+    // Lampen (som serveren selv målte den: view ved gemningen og m.red/m.redNote/m.grey fra målingerne imellem)
+    const color = view && (view.color === 'green' || view.color === 'red') ? view.color : 'grey';
+    const vs = view && Array.isArray(view.violations) ? view.violations.map(v => String((v && v.text) || '')).filter(Boolean) : [];
+    const why = color === 'red' ? vs.slice(0, 3).join('; ') : color === 'grey' ? String((view && view.greyReason) || 'Overvågningen var ikke komplet') : '';
+    const red = m.red || [], note = m.redNote || [], grey = m.grey || [];
+    const newRed = red.slice(L.red).concat(note.slice(L.note));
+    const newGrey = grey.slice(L.grey);
+    if (prevTs && newRed.length && color !== 'red') {
+      const at = m.redHardAt > prevTs && m.redHardAt <= now ? m.redHardAt : prevTs;
+      ev.push({ ts: at, kind: 'lampe', chars: 0, detail: { color: 'red', why: newRed.join('; ').slice(0, 300), between: [prevTs, now] } });
+    }
+    if (prevTs && newGrey.length && color !== 'grey') ev.push({ ts: prevTs, kind: 'lampe', chars: 0, detail: { color: 'grey', why: newGrey.join('; ').slice(0, 300), between: [prevTs, now] } });
+    if (color !== L.c ? (L.c || color !== 'green') : color === 'red' && newRed.length) {
+      ev.push({ ts: now, kind: 'lampe', chars: 0, detail: { color, why: (color === 'red' && !why ? newRed.join('; ') : why).slice(0, 300) } });
+    }
+    L.c = color; L.red = red.length; L.note = note.length; L.grey = grey.length;
+    // Indsæt blokeret / tekst indsat fra et andet program (appens egne tal; kun stigninger)
+    const n = (s, k) => num(s && s[k]);
+    const blocked = Math.max(0, n(stats, 'pasteBlocked') + n(stats, 'dropBlocked') - n(oldStats, 'pasteBlocked') - n(oldStats, 'dropBlocked'));
+    const pasted = Math.max(0, n(stats, 'pasteInserted') - n(oldStats, 'pasteInserted'));
+    const restored = n(stats, 'restored') > n(oldStats, 'restored');
+    if (blocked) ev.push({ ts: now, kind: 'blokeret', chars: 0, detail: { n: blocked } });
+    // Teksten: hvad er indsat, flyttet og rettet
+    const pieces = diffPieces(oldText, text);
+    const wordLimit = Math.max(LOG_WORD_BURST, SERVER_GROWTH_CPS * (dt || 0) / 1000);
+    const dels = pieces.map(p => p.delW.trim());
+    const usedDel = new Set();
+    const typedPieces = [];
+    let added = 0, removed = 0, found = false;
+    for (const p of pieces) {
+      const ins = p.insW.trim();
+      if (!ins) { added += p.ins.length; continue; }
+      const len = ins.length;
+      const reason = jump && len > LOG_PIECE_MIN ? jump : pasted && len > LOG_PIECE_MIN ? 'paste' : blocked && len > LOG_WORD_BURST ? 'paste' : word && len > wordLimit ? 'word' : '';
+      // Flyttet/fortrudt egen tekst: kun når stykket ellers ville være indsat, eller skrivevinduet meldte "fortryd" (restored)
+      if ((reason || (restored && len >= LOG_MOVE_MIN)) && len >= LOG_FIX_MIN) {
+        const d = dels.findIndex((x, i) => !usedDel.has(i) && x === ins);
+        if (d >= 0) usedDel.add(d);
+        if (d >= 0 || this._knownText(id, oldText, ins, !!reason)) { ev.push({ ts: now, kind: 'flyttet', chars: len, detail: null }); found = true; continue; }
+      }
+      if (reason) { ev.push({ ts: now, kind: 'indsat', chars: len, excerpt: clip(ins, LOG_PASTE_MAX), detail: { reason } }); found = true; continue; }
+      added += p.ins.length;
+      typedPieces.push(p);
+    }
+    // Vækst-flag uden et enkelt stort stykke (fx flere mindre stykker): det største stykke er det indsatte
+    if (jump && !found && typedPieces.length) {
+      const big = typedPieces.reduce((a, b) => (b.insW.trim().length > a.insW.trim().length ? b : a));
+      const ins = big.insW.trim();
+      if (ins && !this._knownText(id, oldText, ins, true)) {
+        added -= big.ins.length;
+        ev.push({ ts: now, kind: 'indsat', chars: ins.length, excerpt: clip(ins, LOG_PASTE_MAX), detail: { reason: jump } });
+      }
+    }
+    pieces.forEach((p, i) => {
+      if (usedDel.has(i) || !p.del) return;
+      removed += p.del.length;
+      const d = p.delW.trim();
+      if (d.length > LOG_FIX_MIN) ev.push({ ts: now, kind: 'rettelse', chars: d.length, excerpt: clip(d, LOG_FIX_MAX), detail: { replaced: p.insW.trim().length } });
+    });
+    if (added > 0 || removed > 0) ev.push({ ts: now, kind: 'skrivning', chars: added, detail: { added, removed } });
+    return ev;
+  }
+
+  /**
+   * Har stykket stået i dokumentet før? Forrige tekst og det fjernede ved rettelser – og (deep, kun når stykket ellers
+   * ville blive logget som indsat) de seneste 60 versioner i afspilningen.
+   */
+  _knownText(id, oldText, piece, deep) {
+    if (oldText.includes(piece)) return true;
+    if (this.db.prepare("SELECT 1 AS x FROM doc_events WHERE doc_id = ? AND kind = 'rettelse' AND instr(excerpt, ?) > 0 LIMIT 1").get(id, piece)) return true;
+    return !!(deep && this.db.prepare('SELECT 1 AS x FROM (SELECT text FROM doc_versions WHERE doc_id = ? ORDER BY ts DESC LIMIT 60) WHERE instr(text, ?) > 0 LIMIT 1').get(id, piece));
+  }
+
+  /** Skriv skrivelogens rækker. Skrivning samles i én række pr. minut; højst LOG_MAX_EVENTS rækker pr. dokument. */
+  _writeLog(id, ev) {
+    if (!ev || !ev.length) return;
+    const used = this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(length(excerpt)), 0) AS chars FROM doc_events WHERE doc_id = ?').get(id);
+    let count = used.n, chars = used.chars;
+    const ins = this.db.prepare('INSERT INTO doc_events (doc_id, ts, kind, chars, excerpt, detail) VALUES (?,?,?,?,?,?)');
+    for (const e of ev) {
+      if (e.kind === 'skrivning') {
+        const min = Math.floor(e.ts / 60_000) * 60_000;
+        const r = this.db.prepare("SELECT rowid AS r, detail FROM doc_events WHERE doc_id = ? AND kind = 'skrivning' AND ts >= ? AND ts < ? ORDER BY ts LIMIT 1").get(id, min, min + 60_000);
+        if (r) {
+          let d = {};
+          try { d = JSON.parse(r.detail || '{}'); } catch (x) { /* */ }
+          const added = (Number(d.added) || 0) + e.detail.added, removed = (Number(d.removed) || 0) + e.detail.removed;
+          this.db.prepare('UPDATE doc_events SET chars = ?, detail = ? WHERE rowid = ?').run(added, JSON.stringify({ added, removed, last: e.ts }), r.r);
+          continue;
+        }
+      }
+      if (count >= LOG_MAX_EVENTS) continue;
+      let excerpt = e.excerpt == null ? null : e.excerpt;
+      if (excerpt && chars + excerpt.length > LOG_MAX_TEXT) excerpt = clip(excerpt, 200); // pladsen til uddrag er brugt
+      ins.run(id, e.ts, e.kind, Math.round(e.chars || 0), excerpt, e.detail ? JSON.stringify(e.detail) : null);
+      count++; chars += excerpt ? excerpt.length : 0;
+    }
+  }
+
+  /**
+   * Skrivelogen til læreren (kun afleverede dokumenter – index.js tjekker det).
+   * { summary: { started, submitted, minutesWriting, sessions, words, typed?, deleted?, pastes, pastedChars, corrections, moves, source, expired? },
+   *   events: [{ ts, kind, chars, excerpt?, detail? }] (ældste først, nyeste sidst; 'slut' og 'afleveret' beregnes her),
+   *   pastes: [{ ts, chars, excerpt, reason }] }
+   */
+  log(id) {
+    const row = this.q.get.get(String(id || ''));
+    if (!row) return null;
+    let m = {}, s = {};
+    try { m = JSON.parse(row.monitor || '{}'); s = JSON.parse(row.stats || '{}'); } catch (e) { /* */ }
+    const word = m.source === 'word';
+    const rows = this.db.prepare('SELECT ts, kind, chars, excerpt, detail FROM doc_events WHERE doc_id = ? ORDER BY ts, rowid').all(row.id);
+    let lessonOf = null;
+    try { lessonOf = this.db.prepare('SELECT kind, student_id FROM lessons WHERE id = ?'); } catch (e) { /* ingen tabel */ }
+    const events = [];
+    let sessions = 0, last = 0;
+    const close = () => { if (sessions && last) events.push({ ts: last, kind: 'slut', chars: 0 }); };
+    for (const r of rows) {
+      let d = null;
+      try { d = r.detail ? JSON.parse(r.detail) : null; } catch (e) { d = null; }
+      if (r.kind === 'start') {
+        close();
+        sessions++;
+        // Hvor økten foregik (lektionens id sendes ikke til dashboardet)
+        let place = '';
+        const l = d && d.lesson && lessonOf ? lessonOf.get(Number(d.lesson)) : null;
+        if (l) place = l.kind === 'hjemme' || l.student_id != null ? 'hjemme' : 'lektion';
+        d = place ? { place } : null;
+      }
+      const e = { ts: r.ts, kind: r.kind, chars: r.chars };
+      if (r.excerpt != null) e.excerpt = r.excerpt;
+      if (d) e.detail = d;
+      events.push(e);
+      last = Math.max(last, r.ts, (d && Number(d.last)) || 0);
+    }
+    if (!sessions && rows.length) sessions = 1; // dokumenter fra før økterne blev logget
+    close();
+    if (row.submitted) events.push({ ts: row.submitted, kind: 'afleveret', chars: 0 });
+    events.sort((a, b) => a.ts - b.ts);
+    const totalMs = (Number(m.greenMs) || 0) + (Number(m.redMs) || 0) + (Number(m.greyMs) || 0);
+    const pastes = events.filter(e => e.kind === 'indsat');
+    const summary = {
+      started: Number(m.first) || row.created, submitted: row.submitted || null,
+      minutesWriting: totalMs > 0 ? Math.max(1, Math.round(totalMs / 60_000)) : 0, sessions, words: D.wordCount(row.text),
+      pastes: pastes.length, pastedChars: pastes.reduce((a, e) => a + e.chars, 0),
+      corrections: events.filter(e => e.kind === 'rettelse').length, moves: events.filter(e => e.kind === 'flyttet').length,
+      source: word ? 'word' : 'holymoly',
+    };
+    // Tastestatistik findes kun fra skrivevinduet (og fra Word, hvis appen sender den)
+    if (!word || num(s.typed) > 0) { summary.typed = num(s.typed); summary.deleted = num(s.deleted); }
+    if (m.reduced) summary.expired = true; // skrivedetaljerne er slettet efter fristen (retention.js)
+    return { summary, events, pastes: pastes.map(e => ({ ts: e.ts, chars: e.chars, excerpt: e.excerpt || '', reason: (e.detail && e.detail.reason) || '' })) };
   }
 
   /**
@@ -443,6 +736,8 @@ class DocStore {
     const facts = {
       words, chars: text.length, writingMinutes: Math.max(1, Math.round(totalMs / 60000)),
       typed: s.typed, deleted: s.deleted, pasteBlocked: s.pasteBlocked + s.dropBlocked,
+      // Word: talte appen tastetryk? (skrivevinduet tæller altid)
+      keys: word ? s.keys === true : true,
       monitoredShare: totalMs ? Math.round((m.greenMs / totalMs) * 100) : 0,
       started: m.first, lessons: m.lessons.length,
     };
@@ -452,7 +747,7 @@ class DocStore {
      */
     const categories = Object.keys(CATEGORY_TEXT).filter(k => cats.has(k)).map((key) => {
       if (key === 'kort') return { key, text: `Teksten er for kort. Et bevis kræver mindst ${this.minWords} ord.`, fixable: true, need: this.minWords };
-      const c = { key, text: CATEGORY_TEXT[key], fixable: false, label: key === 'rod' ? RED_LABEL[m.redHardCat || ''] || RED_LABEL[''] : CATEGORY_LABEL[key] };
+      const c = { key, text: (word && D.CATEGORY_TEXT_WORD[key]) || CATEGORY_TEXT[key], fixable: false, label: key === 'rod' ? RED_LABEL[m.redHardCat || ''] || RED_LABEL[''] : CATEGORY_LABEL[key] };
       const at = key === 'rod' ? m.redHardAt : key === 'indsat' && m.flags.some(f => !/ikke kunne følge med/.test(f)) ? m.flagAt : 0;
       if (at) c.at = at;
       return c;
@@ -519,7 +814,12 @@ class DocStore {
       const word = observed.includes('word');
       const checks = [word ? 'Skrevet i Word gennem HolyMoly – ingen tekst indsat fra andre programmer' : 'Tastet i HolyMolys skrivevindue – indsæt blokeret'];
       if (observed.includes('vagt')) checks.push('HolyMoly-vagten blokerede AI på computeren');
-      checks.push('Ingen rød lampe undervejs', word ? 'Teksten voksede i et menneskeligt tempo' : aids.length ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten');
+      const tempo = aids.length ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo';
+      checks.push('Ingen rød lampe undervejs');
+      // Word med talte tastetryk: teksten passer med dem, og tempoet er vurderet som i skrivevinduet
+      if (word && ev.facts.keys) checks.push('Teksten passer med tastetrykkene i Word', tempo);
+      else checks.push(word ? 'Teksten voksede i et menneskeligt tempo' : tempo);
+      checks.push('Ingen ordrette fraser fra en AI-chat i teksten');
       const created = Number(meta.assignmentCreated) > 0 ? new Date(Number(meta.assignmentCreated)).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }) : null;
       // Fast rækkefølge af felter – det er præcis denne tekst der signeres (v3).
       // Ingen navne, klasse, lærer eller pseudonym: intet felt kobler to beviser fra samme elev sammen.

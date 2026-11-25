@@ -956,6 +956,7 @@
             : h('span', { class: 'badge' + (HMDoc.markGreen({ observed: sub.observed }) ? ' green' : ''), text: HMDoc.label(sub.place, { observed: sub.observed }) }))
             : h('span', { class: 'muted small', title: (sub.reasons || []).join('; '), text: 'Uden bevis' });
           const acts = sub ? h('div', { class: 'row-actions start' },
+            sub.docId ? h('button', { class: 'btn small', type: 'button', text: 'Skrivelog', 'aria-label': `Skrivelog for ${s.name}`, onclick: () => { view = { kind: 'log', id: a.id, docId: sub.docId, name: s.name, title: sub.title }; render(); } }) : null,
             h('button', { class: 'btn small', type: 'button', text: 'Hent Word', onclick: () => downloadWord(sub.docId).catch(e => toast(e.message)) }),
             sub.certId ? h('a', { class: 'btn small ghost', href: '/bevis/' + sub.certId, target: '_blank', rel: 'noopener', text: 'Tjek' }) : null) : null;
           return h('tr', {}, h('td', { class: 'r-name', text: s.name }), h('td', {}, status), h('td', {}, mark), h('td', {}, acts));
@@ -970,10 +971,20 @@
             h('thead', {}, h('tr', {}, h('th', { text: 'Elev' }), h('th', { text: 'Aflevering' }), h('th', { text: 'Bevis' }), h('th', { text: '' }))),
             h('tbody', {}, ...rows))));
       }
+      // Skrivelogen for elevens vedhæftede aflevering, med afspilningen nedenunder ("Vis i afspilningen")
+      async function renderLog(v) {
+        const back = h('button', { class: 'btn small', type: 'button', text: '← Tilbage til afleveringen', onclick: () => { view = { kind: 'one', id: v.id }; render(); } });
+        const logSec = h('div', { class: 'sec' });
+        const replay = h('div', { class: 'sec' });
+        box.replaceChildren(h('div', { class: 'row-actions' }, back),
+          h('div', { class: 'asg-head' }, h('h3', { text: `${v.name}: "${v.title || 'Uden titel'}"` })), logSec, replay);
+        await Promise.all([fillLog(v.docId, logSec, replay), fillReplay(v.docId, replay).catch(() => {})]);
+      }
       async function render() {
         try {
           if (view.kind === 'list') await renderList();
           else if (view.kind === 'one') await renderOne(view.id);
+          else if (view.kind === 'log') await renderLog(view);
           else assignmentForm(view.kind === 'edit' ? view.a : null);
         } catch (e) { box.replaceChildren(h('p', { class: 'error', text: e.message })); }
       }
@@ -1386,7 +1397,10 @@
       const notes = d.notes && d.notes.length ? h('ul', { class: 'muted small' }, ...d.notes.map(x => h('li', { text: x }))) : null;
       const replay = h('div', { class: 'sec' });
       const similar = h('div', { class: 'sec' });
-      body.replaceChildren(h('div', { class: 'sec' }, h('div', { class: 'row-actions' }, back, word)), h('h3', { text: d.title || 'Uden titel' }), status, facts, notes, similar, renderBlocks(d.blocks), replay);
+      // Skrivelogen (kun afleverede dokumenter – samme regel som afspilningen)
+      const logSec = h('div', { class: 'sec' });
+      const logBtn = d.submitted ? logButton(docId, logSec, replay) : null;
+      body.replaceChildren(h('div', { class: 'sec' }, h('div', { class: 'row-actions' }, back, h('div', { class: 'row-actions start' }, logBtn, word))), h('h3', { text: d.title || 'Uden titel' }), status, facts, notes, logSec, similar, renderBlocks(d.blocks), replay);
       // Lighedstjek og afspilning kun for afleverede dokumenter
       if (d.submitted && state.info.features && state.info.features.similar) fillSimilar(docId, similar).catch(() => {});
       if (d.submitted) fillReplay(docId, replay).catch(() => {});
@@ -1435,6 +1449,35 @@
       range.addEventListener('input', () => show(Number(range.value)));
       el.replaceChildren(h('h3', { text: 'Afspil skriveforløbet' }), h('div', { class: 'replay-bar' }, play, range), when, view);
       show(v.length - 1);
+      // Skrivelogens "Vis i afspilningen": første version fra tidspunktet (eller den sidste)
+      el.seek = (ts) => {
+        if (timer) { clearInterval(timer); timer = null; play.textContent = '▶ Afspil'; }
+        const i = v.findIndex(x => x.ts >= ts);
+        show(i < 0 ? v.length - 1 : i);
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        range.focus();
+      };
+    }
+
+    // Skrivelogen: hvordan teksten blev skrevet (skrivelog.js). replay = afspilningens sektion (til "Vis i afspilningen").
+    async function fillLog(docId, el, replay) {
+      el.replaceChildren(h('p', { class: 'muted small', text: 'Henter skrivelogen …' }));
+      try {
+        const log = await api(`/api/docs/${docId}/log`);
+        el.replaceChildren(window.HM.skrivelog.render({ h }, log, { seek: (ts) => { if (replay && replay.seek) replay.seek(ts); else toast('Afspilningen er ikke klar endnu'); } }));
+      } catch (e) { el.replaceChildren(h('p', { class: 'error', text: e.message })); }
+    }
+    /** Knappen 'Skrivelog', der folder skrivelogen ud og ind (hentes første gang). */
+    function logButton(docId, el, replay) {
+      let loaded = false;
+      el.hidden = true;
+      el.id = el.id || 'slog-' + docId.slice(0, 8);
+      const btn = h('button', { class: 'btn small', type: 'button', text: 'Skrivelog', 'aria-expanded': 'false', 'aria-controls': el.id, onclick: () => {
+        el.hidden = !el.hidden;
+        btn.setAttribute('aria-expanded', String(!el.hidden));
+        if (!el.hidden && !loaded) { loaded = true; fillLog(docId, el, replay); }
+      } });
+      return btn;
     }
 
     async function eventList(id, kind) {
