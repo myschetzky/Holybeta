@@ -10,6 +10,9 @@
   const fmt = (ts) => new Date(ts).toLocaleString('da-DK', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   const WORD_RE = /[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu;
   const PLACE = { lektion: 'I timen', hjemme: 'Hjemme uden opsyn', 'lektion og hjemme': 'I timen og hjemme uden opsyn' };
+  // v3: kind. Ekstra tid efter timen vises som "I timen" (forlængelsen står aldrig på beviset).
+  const KIND = { klasse: 'I timen', ekstra: 'I timen', hjemme: 'Hjemme' };
+  const fmtDate = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric' }) : ''; };
 
   async function sha256(text) {
     if (!(window.crypto && crypto.subtle)) throw new Error('Din browser kan kun tjekke teksten over en sikker forbindelse (https).');
@@ -30,6 +33,7 @@
   }
 
   let p = null;
+  let notMine = false; // en indlogget lærer ser et bevis, der tilhører en anden lærers elev
 
   async function load() {
     if (!id) { $('loading').hidden = true; $('missing').hidden = false; return; }
@@ -66,6 +70,7 @@
     if (c.legacy) {
       verdict(c.valid ? 'ok' : 'bad', c.valid ? '✓ Signaturen er gyldig (ældre bevis)' : '✗ Signaturen passer ikke – beviset er ikke gyldigt');
       $('mark').hidden = true;
+      $('observed').textContent = 'Står ikke i dette ældre bevis';
       fact(dl, 'Afleveret', fmt(c.submitted));
       $('check-wrap').hidden = true;
       $('checks').replaceChildren();
@@ -76,21 +81,38 @@
     }
 
     p = c.payload;
-    if (/Testserver/.test(String(p.issuer || ''))) $('testserver').hidden = false;
+    notMine = !!c.notMine;
+    const v3 = p.v === 3;
+    if (p.test === true || /Testserver/.test(String(p.issuer || ''))) $('testserver').hidden = false;
     if (!c.valid) {
       verdict('bad', '✗ Signaturen passer ikke – beviset er ikke gyldigt');
       $('check-wrap').hidden = true;
     } else {
       verdict('', 'Beviset findes – tjek at teksten passer');
     }
-    $('mark').textContent = HMDoc.label(p.place);
+    $('mark').textContent = v3 ? HMDoc.label(p.kind, { observed: Array.isArray(p.observed) ? p.observed : [], test: p.test === true }) : HMDoc.label(p.place);
     fact(dl, 'Kode', 'HM-' + p.id.slice(0, 8).toUpperCase());
     fact(dl, 'Afleveret', fmt(p.submitted));
     fact(dl, 'Omfang', `${p.words} ord`);
-    fact(dl, 'Skrevet', PLACE[p.place] || String(p.place || '–'));
+    fact(dl, 'Skrevet', v3 ? (KIND[p.kind] || String(p.kind || '–')) : (PLACE[p.place] || String(p.place || '–')));
     fact(dl, 'Udstedt af', String(p.issuer || '–'));
     $('checks').replaceChildren(...(p.checks || []).map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
-    $('limits').textContent = p.limits || '';
+    // Hvad betyder mærket: forbeholdet, hvad der blev målt og hvornår afleveringen blev oprettet
+    $('limit-text').textContent = HMDoc.LIMIT_TEXT;
+    if (v3) {
+      const obs = (Array.isArray(p.observed) ? p.observed : []).map(String);
+      $('observed').textContent = obs.join(' og ') || '–';
+      $('observed-text').hidden = false;
+      $('observed-text').textContent = obs.includes('vagt')
+        ? 'HolyMolys skrivevindue og HolyMoly-vagten på computeren blev fulgt.'
+        : 'Kun HolyMolys skrivevindue blev fulgt. Resten af computeren blev ikke overvåget af HolyMoly-vagten.';
+      const d = fmtDate(p.assignmentCreated);
+      if (d) { $('asg-created').hidden = false; $('asg-created').textContent = `Skrevet til en aflevering oprettet ${d}.`; }
+      $('limits').hidden = true;
+    } else {
+      $('observed').textContent = 'Står ikke i dette ældre bevis';
+      $('limits').textContent = p.limits || '';
+    }
     $('keyid').textContent = p.keyId;
     $('signed').textContent = c.signed + '\n\nSignatur (Ed25519, base64): ' + c.sig;
     $('pubkey').textContent = c.publicKey;
@@ -120,11 +142,13 @@
 
   /** Vis resultatet: overskrift, linje under feltet og hvad der blev sammenlignet. */
   function show(ok, info) {
-    verdict(ok ? 'ok' : 'bad', ok ? '✓ Teksten passer til beviset' : '✗ Teksten passer IKKE');
+    // Passer teksten, men tilhører beviset en anden lærers elev, siges det i gult
+    const warn = ok && notMine;
+    verdict(warn ? 'warn' : ok ? 'ok' : 'bad', warn ? '✓ Passer – men tilhører ikke en af dine elever' : ok ? '✓ Teksten passer til beviset' : '✗ Teksten passer IKKE');
     const out = $('match');
     out.hidden = false;
-    out.className = 'match ' + (ok ? 'ok' : 'bad');
-    out.textContent = ok ? 'Teksten er præcis den, beviset gælder for.' : 'Teksten er ikke den samme som i beviset. Den er ændret, eller noget mangler.';
+    out.className = 'match ' + (warn ? 'warn' : ok ? 'ok' : 'bad');
+    out.textContent = warn ? 'Teksten er præcis den, beviset gælder for. Beviset er udstedt til en elev, der ikke er en af dine.' : ok ? 'Teksten er præcis den, beviset gælder for.' : 'Teksten er ikke den samme som i beviset. Den er ændret, eller noget mangler.';
     const dl = $('file-facts');
     dl.replaceChildren();
     if (!info) { dl.hidden = true; return; }
@@ -177,7 +201,7 @@
     if (!raw.trim()) { $('match').hidden = true; $('file-facts').hidden = true; verdict('', 'Beviset findes – tjek at teksten passer'); return; }
     const lines = HMDoc.normalizeText(raw).split('\n');
     // Sidefoden fra Word-filen er ikke en del af teksten
-    while (lines.length && /^(✓ Tastet i HolyMoly|Dækker skriveforløbet|HolyMoly skrive-bevis|Tjek beviset)/.test(lines[lines.length - 1])) lines.pop();
+    while (lines.length && /^(✓ Tastet i HolyMoly|Dækker skriveforløbet|Mærket viser, hvad HolyMoly målte|Testserver – må ikke bruges|HolyMoly skrive-bevis|Tjek beviset)/.test(lines[lines.length - 1])) lines.pop();
     // Med og uden titlen øverst, og med og uden "•" / "1." fra Word-lister
     const unmark = (v) => v.map(l => l.replace(/^(•|\d+\.)(\s+|$)/, '')).filter(Boolean);
     const variants = [];

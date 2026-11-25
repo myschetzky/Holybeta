@@ -7,7 +7,7 @@
  *  - normalizeText(): den tekst skrive-beviset dækker (samme resultat overalt).
  *  - aiTraces(): ordrette chatbot-fraser i teksten (lokalt, ingen API). Kun hårde spor – aldrig gæt.
  *    aiHints(): svagere spor (fx at teksten nævner ChatGPT). Kun til læreren – aldrig et afslag.
- *  - label(place): mærket på et dokument med bevis. Samme tekst overalt.
+ *  - label(place, { observed, test }): mærket på et dokument med bevis. Samme tekst overalt.
  *  - toDocx(): Word-fil (.docx) uden eksterne biblioteker.
  *  - readZipEntry() / docxText(): læs teksten i en .docx (bruges på tjek-siden i browseren).
  */
@@ -97,16 +97,29 @@
   }
 
   /*
-   * Mærket på et dokument med bevis. Det siger, hvad HolyMoly faktisk har set: at teksten er tastet
-   * i HolyMoly uden indsat tekst – og om det skete i timen eller hjemme uden opsyn.
-   * place: 'lektion' | 'hjemme' | 'lektion og hjemme' (fra beviset). Ukendt sted: intet sted i mærket.
+   * Mærket på et dokument med bevis. Det siger præcis, hvad HolyMoly har målt, og intet mere:
+   * at teksten er tastet i HolyMoly uden indsat tekst, om det skete i timen eller hjemme,
+   * om kun skrivevinduet blev fulgt (ingen HolyMoly-vagt på computeren) – og om beviset kommer fra en testserver.
+   * place: 'lektion' | 'klasse' | 'ekstra' | 'hjemme' | 'lektion og hjemme' (v2: place, v3: kind). Ukendt sted: intet sted i mærket.
+   * opts: { observed: ['skrivevindue', 'vagt'?], test } fra et v3-bevis. Uden observed (v2 og ældre) er teksten som før.
    */
   const MARK = '\u2713 Tastet i HolyMoly \u2013 intet indsat';
-  const LIMIT_TEXT = 'D\u00e6kker skriveforl\u00f8bet p\u00e5 computeren \u2013 ikke afskrift fra telefon eller papir.';
-  function label(place) {
+  const LIMIT_TEXT = 'M\u00e6rket viser, hvad HolyMoly m\u00e5lte p\u00e5 elevens computer. Det d\u00e6kker ikke afskrift fra telefon eller papir, og en computer, eleven selv har \u00e6ndret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler m\u00e6rket, er det ikke et tegn p\u00e5 snyd.';
+  const TEST_TEXT = 'Testserver \u2013 m\u00e5 ikke bruges til bed\u00f8mmelse. Tjek altid teksten p\u00e5 linket.';
+  function label(place, opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
     const p = String(place || '');
-    if (!p) return MARK;
-    return MARK + ' \u00b7 ' + (/hjemme/.test(p) ? 'hjemme uden opsyn' : 'i timen');
+    const v3 = Array.isArray(o.observed);
+    let s = MARK;
+    if (p) s += ' \u00b7 ' + (/hjemme/.test(p) ? (v3 ? 'hjemme' : 'hjemme uden opsyn') : 'i timen');
+    if (v3 && !o.observed.includes('vagt')) s += ' \u00b7 kun skrivevinduet';
+    if (o.test) s += ' \u00b7 TESTSERVER';
+    return s;
+  }
+  /** Grønt mærke kun, når vagten var med og beviset ikke er fra en testserver. Ellers gråt. */
+  function markGreen(mark) {
+    if (!mark || mark.test) return false;
+    return !Array.isArray(mark.observed) || mark.observed.includes('vagt');
   }
 
   /* ---------------------------------------------------------------- .docx ---------------------------------------------------------------- */
@@ -167,7 +180,8 @@
 
   /**
    * Word-dokument (.docx).
-   * meta: { title, author, mark: { code, url, place } – mærket i sidefoden (se label()), readOnly: skrivebeskyttet }
+   * meta: { title, author, mark: { code, url, place, observed, test } – mærket i sidefoden (se label()), readOnly: skrivebeskyttet }
+   * Mærket er grønt (15803D) med vagt og gråt (6B7280) uden vagt eller fra en testserver. En testserver får en ekstra linje.
    * Skrivebeskyttelsen i Word kan slås fra af en, der vil; om teksten er ændret, afgøres altid på tjek-siden (url).
    */
   function toDocx(blocks, meta = {}) {
@@ -188,12 +202,16 @@
     const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${paras.join('')}<w:sectPr>${footerRef}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`;
     // Sidefod på hver side: mærket · HolyMoly HM-XXXX · Tjek: <link>, og på næste linje forbeholdet og antal ord
     const words = wordCount(normalizeText(textOf(blocks)));
+    const markText = mark ? label(mark.place, { observed: mark.observed, test: mark.test }) : '';
+    const markColor = markGreen(mark) ? '15803D' : '6B7280';
     const footer = mark ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ${W}><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="D1D5DB"/></w:pBdr><w:spacing w:after="0"/></w:pPr>`
-      + runXml({ x: label(mark.place), b: 1 }, '<w:color w:val="15803D"/><w:sz w:val="18"/>')
+      + runXml({ x: markText, b: 1 }, `<w:color w:val="${markColor}"/><w:sz w:val="18"/>`)
       + runXml({ x: `  \u00b7  HolyMoly ${mark.code}${mark.url ? '  \u00b7  Tjek: ' + mark.url : ''}` }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
       + '</w:p><w:p>'
       + runXml({ x: `${LIMIT_TEXT} ${words} ord.` }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
-      + '</w:p></w:ftr>' : '';
+      + '</w:p>'
+      + (mark.test ? '<w:p>' + runXml({ x: TEST_TEXT, b: 1 }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>') + '</w:p>' : '')
+      + '</w:ftr>' : '';
     const settings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ${W}>${meta.readOnly ? '<w:documentProtection w:edit="readOnly" w:enforcement="1"/>' : ''}<w:defaultTabStop w:val="708"/></w:settings>`;
     const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}>
 <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="24"/><w:lang w:val="da-DK"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
@@ -202,7 +220,7 @@
 <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="200"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>
 </w:styles>`;
-    const core = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${xmlEsc(meta.title || '')}</dc:title><dc:creator>${xmlEsc(meta.author || '')}</dc:creator>${mark ? `<dc:description>${xmlEsc(label(mark.place) + ' - HolyMoly ' + mark.code + (mark.url ? ' - ' + mark.url : '') + ' - ' + LIMIT_TEXT)}</dc:description>` : ''}</cp:coreProperties>`;
+    const core = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${xmlEsc(meta.title || '')}</dc:title><dc:creator>${xmlEsc(meta.author || '')}</dc:creator>${mark ? `<dc:description>${xmlEsc(markText + ' - HolyMoly ' + mark.code + (mark.url ? ' - ' + mark.url : '') + ' - ' + LIMIT_TEXT + (mark.test ? ' ' + TEST_TEXT : ''))}</dc:description>` : ''}</cp:coreProperties>`;
     const WM = 'application/vnd.openxmlformats-officedocument.wordprocessingml';
     return zip([
       ['[Content_Types].xml', enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${WM}.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="${WM}.styles+xml"/><Override PartName="/word/settings.xml" ContentType="${WM}.settings+xml"/>${mark ? `<Override PartName="/word/footer1.xml" ContentType="${WM}.footer+xml"/>` : ''}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`)],
@@ -301,5 +319,5 @@
     return { title: titleP ? titleP.line : '', text: variants[0], variants };
   }
 
-  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, label, MARK, LIMIT_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
+  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, label, markGreen, MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
 });

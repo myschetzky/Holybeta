@@ -49,12 +49,10 @@ test('skrive-bevis: ægte skriveforløb giver et signeret bevis, der kan tjekkes
   assert.ok(r.certId && r.certId.length === 16);
   const c = docs.certificate(r.certId);
   assert.strictEqual(c.valid, true);
-  // Ingen persondata i det signerede bevis: kun en saltet hash af navnet
-  assert.deepStrictEqual(Object.keys(c.payload), ['v', 'id', 'sha256', 'words', 'submitted', 'place', 'checks', 'limits', 'issuer', 'keyId', 'nameHash']);
-  assert.strictEqual(c.payload.v, 2);
-  assert.ok(!/Anna|Jensen|2\.g|Mette|pasteBlocked/.test(c.signed), c.signed);
-  assert.strictEqual(c.payload.nameHash, docs.nameHash('anna  jensen'));
-  assert.notStrictEqual(c.payload.nameHash, crypto.createHash('sha256').update('anna jensen').digest('hex'), 'hashen er saltet');
+  // Ingen persondata og intet pseudonym i det signerede bevis (v3)
+  assert.deepStrictEqual(Object.keys(c.payload), ['v', 'id', 'sha256', 'words', 'started', 'submitted', 'kind', 'observed', 'test', 'assignmentCreated', 'checks', 'issuer', 'keyId']);
+  assert.strictEqual(c.payload.v, 3);
+  assert.ok(!/Anna|Jensen|2\.g|Mette|pasteBlocked|nameHash/.test(c.signed), c.signed);
   assert.strictEqual(c.payload.issuer, 'https://holymoly.test');
   // Navn og klasse ligger usigneret i databasen (til elevens egen lærer)
   assert.deepStrictEqual(docs.certificateOwner(r.certId), { studentId: 1, student: 'Anna Jensen', class: '2.g Dansk', title: 'Romantikken' });
@@ -472,15 +470,19 @@ test('sikkerhed: skriveøkter efter genstart, mod en klasselektion, kvote, genbr
     const res = await anna.wait(m => m.type === 'doc-result');
     assert.ok(res.certId, JSON.stringify(res));
     const pub = await (await fetch(base + '/api/bevis/' + res.certId)).json();
-    assert.strictEqual(pub.payload.place, 'hjemme');
-    assert.match(pub.payload.checks[0], /hjemme i en skriveøkt/);
+    assert.strictEqual(pub.payload.kind, 'hjemme');
+    assert.strictEqual(pub.payload.assignmentCreated, new Date(srv.db.prepare('SELECT created FROM assignments WHERE id = ?').get(home.id).created).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }));
     anna.send(JSON.stringify({ type: 'assignment-attach', assignmentId: home.id, docId: id }));
     assert.strictEqual((await anna.wait(m => m.type === 'assignment-result')).ok, true);
     await new Promise(r => setTimeout(r, 1100));
     anna.send(JSON.stringify({ type: 'assignment-attach', assignmentId: home2.id, docId: id }));
     assert.match((await anna.wait(m => m.type === 'assignment-result')).error, /allerede afleveret/);
     const one = await call('GET', '/api/assignments/' + home.id);
-    assert.strictEqual(one.students.find(s => s.name === 'Anna Jensen').submission.place, 'hjemme');
+    const sub = one.students.find(s => s.name === 'Anna Jensen').submission;
+    assert.strictEqual(sub.place, 'hjemme');
+    // Afleveringstabellen får mærkets observed og test (badge "Testserver" i stedet for et grønt mærke)
+    assert.deepStrictEqual(sub.observed, ['skrivevindue']);
+    assert.strictEqual(sub.test, false);
 
     // 4. Slettes eleven, forsvinder det offentlige bevis
     assert.strictEqual((await call('DELETE', '/api/students/' + annaA.studentId))._status, 200);

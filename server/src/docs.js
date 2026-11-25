@@ -11,8 +11,10 @@
  *   5. Ingen ordrette chatbot-fraser i teksten (fx "as an AI language model"). Svagere spor er kun en note til læreren.
  * Er alt opfyldt, udsteder serveren et bevis signeret med sin egen nøgle (Ed25519). Alle kan tjekke det på /bevis/<id>.
  *
- * Det signerede bevis (v2) har ingen persondata: kun en saltet hash af navnet. Navn og klasse ligger i databasen
- * og vises kun for elevens egen lærer. Ældre beviser (v1) vises offentligt kun som gyldig/ugyldig og dato.
+ * Det signerede bevis (v3) har ingen persondata og intet pseudonym: kun tekstens hash, omfang, tider, hvad der blev målt
+ * (observed), om det er fra en testserver og hvornår afleveringen blev oprettet. Navn og klasse ligger i databasen
+ * og vises kun for elevens egen lærer. v2-beviser (med en saltet navne-hash) vises og tjekkes stadig.
+ * Ældre beviser (v1) vises offentligt kun som gyldig/ugyldig og dato.
  *
  * Hvad beviset IKKE kan: se om eleven har skrevet en tekst af efter en anden skærm/telefon. Det står på beviset.
  */
@@ -133,8 +135,6 @@ class DocStore {
     this.publicKey = crypto.createPublicKey(this.privateKey);
     this.publicPem = this.publicKey.export({ type: 'spki', format: 'pem' });
     this.keyId = crypto.createHash('sha256').update(this.publicKey.export({ type: 'spki', format: 'der' })).digest('hex').slice(0, 16);
-    // Salt til navne-hash: afledt af den hemmelige nøgle (kan ikke regnes ud fra beviset eller den offentlige nøgle)
-    this.nameSalt = Buffer.from(crypto.hkdfSync('sha256', this.privateKey.export({ type: 'pkcs8', format: 'der' }), Buffer.alloc(0), 'HolyMoly navne-hash v1', 32));
     this.q = {
       get: db.prepare('SELECT * FROM documents WHERE id = ?'),
       ins: db.prepare('INSERT INTO documents (id, student_id, class_id, title, blocks, text, stats, monitor, created, updated) VALUES (?,?,?,?,?,?,?,?,?,?)'),
@@ -422,14 +422,27 @@ class DocStore {
     return { ok: reasons.length === 0, reasons, notes, facts, categories };
   }
 
-  /** Saltet hash af et navn (står i beviset i stedet for navnet). Samme navn giver samme hash på denne server. */
-  nameHash(name) {
-    const n = String(name || '').normalize('NFC').toLocaleLowerCase('da').replace(/\s+/g, ' ').trim();
-    return crypto.createHmac('sha256', this.nameSalt).update(n, 'utf8').digest('hex');
+  /**
+   * Hvad HolyMoly målte (v3): altid skrivevinduet, og vagten kun hvis klassen kræver den (hub.policyFor)
+   * og vagten fulgte hele forløbet (ingen grå tid, fordi vagten manglede, ikke svarede eller havde en fejl).
+   */
+  _observed(row, observed) {
+    const out = ['skrivevindue'];
+    if (Array.isArray(observed) && observed.includes('vagt')) {
+      const m = JSON.parse(row.monitor);
+      const gone = (m.grey || []).some(g => /vagten (er ikke tilknyttet|findes ikke|svarer ikke|har en fejl)/i.test(g));
+      if (!gone) out.push('vagt');
+    }
+    return out;
   }
 
   /**
-   * Aflever: vurdér og udsted evt. bevis. meta: { studentName, className, teacherName, issuer, view, force }
+   * Aflever: vurdér og udsted evt. bevis.
+   * meta: { studentName, className, teacherName, issuer, view, force, observed, assignmentCreated, aids, extra }
+   *  - observed: fra hub.policyFor (['skrivevindue'] + 'vagt', når vagten kræves)
+   *  - assignmentCreated: hvornår afleveringen, dokumentet er skrevet til, blev oprettet (ms) – kun datoen kommer i beviset
+   *  - aids: elevens hjælpemidler (fx ['ordforslag']); så vurderes skrivetempoet ikke
+   *  - extra: skrevet i ekstra tid efter klassens lektion (kind 'ekstra')
    * Giver vurderingen ikke et bevis, låses dokumentet IKKE, medmindre eleven har valgt "Aflever alligevel" (force).
    * Så svarer serveren { ok: false, confirm: true, reasons, categories }, og eleven kan skrive videre.
    */
@@ -448,26 +461,33 @@ class DocStore {
         error: 'Beviset vil mangle: ' + ev.categories.map(c => c.text).join(' '),
       };
     }
+    const kind = where.home ? 'hjemme' : meta.extra ? 'ekstra' : 'klasse';
+    const observed = this._observed(this.q.get.get(row.id), meta.observed);
+    const test = this.testServer;
     let cert = null;
     if (ev.ok) {
       const certId = crypto.randomBytes(12).toString('base64url');
       const issuer = this.testServer ? (meta.issuer ? `${meta.issuer} (${TEST_ISSUER})` : TEST_ISSUER) : String(meta.issuer || '');
-      // Fast rækkefølge af felter – det er præcis denne tekst der signeres. Ingen navne, klasse eller lærer (kun en saltet hash af navnet).
+      const aids = Array.isArray(meta.aids) && meta.aids.length > 0;
+      const checks = ['Tastet i HolyMolys skrivevindue – indsæt blokeret'];
+      if (observed.includes('vagt')) checks.push('HolyMoly-vagten blokerede AI på computeren');
+      checks.push('Ingen rød lampe undervejs', aids ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten');
+      const created = Number(meta.assignmentCreated) > 0 ? new Date(Number(meta.assignmentCreated)).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }) : null;
+      // Fast rækkefølge af felter – det er præcis denne tekst der signeres (v3).
+      // Ingen navne, klasse, lærer eller pseudonym: intet felt kobler to beviser fra samme elev sammen.
       const payload = JSON.stringify({
-        v: 2, id: certId,
+        v: 3, id: certId,
         sha256: crypto.createHash('sha256').update(row.text, 'utf8').digest('hex'),
-        words: ev.facts.words, submitted: now, place,
-        checks: [where.home ? (where.lesson ? 'Tastet i HolyMoly med overvågning – i timen og hjemme i en skriveøkt uden opsyn' : 'Tastet i HolyMoly med overvågning – hjemme i en skriveøkt uden opsyn') : 'Tastet i HolyMoly under en lektion med overvågning', 'Ingen rød lampe undervejs', 'Al tekst er tastet (indsæt blokeret)', 'Menneskeligt skrivetempo', 'Ingen ordrette fraser fra en AI-chat i teksten'],
-        limits: 'Beviset dækker skriveforløbet på computeren – ikke afskrift fra telefon eller papir.' + (where.home ? ' Skrevet hjemme uden lærer til stede.' : ''),
-        issuer, keyId: this.keyId,
-        nameHash: this.nameHash(meta.studentName),
+        words: ev.facts.words, started: Number(ev.facts.started) || null, submitted: now,
+        kind, observed, test, assignmentCreated: created,
+        checks, issuer, keyId: this.keyId,
       });
-      const sig = crypto.sign(null, Buffer.from(payload), this.privateKey).toString('base64');
+    const sig = crypto.sign(null, Buffer.from(payload), this.privateKey).toString('base64');
       this.db.prepare('INSERT INTO certificates (id, doc_id, payload, sig, created, student_name, class_name, text_sha256) VALUES (?,?,?,?,?,?,?,?)')
         .run(certId, row.id, payload, sig, now, String(meta.studentName || ''), String(meta.className || ''), JSON.parse(payload).sha256);
       cert = { id: certId };
     }
-    const result = { certId: cert ? cert.id : null, reasons: ev.reasons, notes: ev.notes, facts: ev.facts, categories: ev.categories };
+    const result = { certId: cert ? cert.id : null, reasons: ev.reasons, notes: ev.notes, facts: ev.facts, categories: ev.categories, kind, observed, test };
     this.db.prepare('UPDATE documents SET submitted = ?, result = ?, cert_id = ? WHERE id = ?').run(now, JSON.stringify(result), cert ? cert.id : null, row.id);
     // Afspilningen beholder højst 120 versioner efter aflevering (retention.js)
     RET.trimVersions(this.db, row.id);
@@ -510,6 +530,9 @@ class DocStore {
       created: r.created, updated: r.updated, submitted: r.submitted, certId: r.cert_id,
       reasons: res ? res.reasons : live.reasons, notes: res ? res.notes : live.notes, facts: res ? res.facts : live.facts,
       place: res && res.facts ? res.facts.place : undefined,
+      // Mærket (v3): hvad der blev målt, og om beviset er fra en testserver. Ældre afleveringer har ikke observed.
+      kind: res ? res.kind : undefined, observed: res && Array.isArray(res.observed) ? res.observed : undefined,
+      test: res && typeof res.test === 'boolean' ? res.test : this.testServer,
     };
   }
 
@@ -527,8 +550,8 @@ class DocStore {
     let p = {};
     try { p = JSON.parse(c.payload); } catch (e) { /* ødelagt: ugyldig */ }
     const docDeleted = c.doc_deleted || null; // gravsten: teksten er slettet efter skolens frist
-    if (p.v !== 2) return Object.assign({ v: Number(p.v) || 1, legacy: true, valid, submitted: Number(p.submitted) || c.created }, docDeleted ? { docDeleted } : {});
-    return { v: 2, payload: p, signed: c.payload, sig: c.sig, publicKey: this.publicPem, valid, docDeleted };
+    if (p.v !== 2 && p.v !== 3) return Object.assign({ v: Number(p.v) || 1, legacy: true, valid, submitted: Number(p.submitted) || c.created }, docDeleted ? { docDeleted } : {});
+    return { v: p.v, payload: p, signed: c.payload, sig: c.sig, publicKey: this.publicPem, valid, docDeleted };
   }
 
   /** "Slet elev": elevens beviser slettes helt (ingen gravsten). Kaldes, før eleven slettes. */

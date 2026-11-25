@@ -336,6 +336,8 @@ function applyLesson(lesson) {
   state.home = !!(state.lesson && state.lesson.solo);
   const live = lessonActive();
   if (writer) writer.lessonChanged(live);
+  // Skrivetime: læreren har valgt en opgave – skrivevinduet åbner den (uden at stjæle fokus)
+  if (writer) writer.writeLesson(live && state.lesson.write ? state.lesson.write : null);
   if (live !== wasLive) updateTrayMenu();
   if (live) {
     policy.setRules(ACRules.compile(state.rules, state.lesson.config), state.lesson.config);
@@ -578,7 +580,7 @@ function startConnection() {
       case 'lesson':
         if (msg.live && !lessonActive()) notifyStudent(`Lektionen ${msg.className || ''} er startet – HolyMoly er aktiv.`);
         if (msg.live) {
-          applyLesson({ live: true, className: msg.className, studentName: msg.studentName, teacherName: msg.teacherName, endsAt: Number(msg.endsAt), config: msg.config || {}, solo: msg.solo || null });
+          applyLesson({ live: true, className: msg.className, studentName: msg.studentName, teacherName: msg.teacherName, endsAt: Number(msg.endsAt), config: msg.config || {}, solo: msg.solo || null, write: msg.write || null });
           conn.event({ kind: 'info', title: 'HolyMoly forbundet (' + osName() + ')' });
         } else applyLesson(null);
         break;

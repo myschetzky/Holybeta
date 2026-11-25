@@ -73,6 +73,16 @@ Felterne vises på privatlivssiden, så elever og forældre kan se, hvem der er 
 
 Den, der driver serveren, har signeringsnøglen og kan læse alle elevdata. Kører serveren hos en elev eller privatperson, er det en **testserver**, og beviserne siger "Testserver – må ikke bruges til bedømmelse". Når skolens IT driver serveren og ejer nøglen, sættes `SCHOOL_OPERATED=1`.
 
+Lektioner kræver også, at driften er på plads. Enten er der en databehandleraftale med den, der driver serveren (en voksen eller en juridisk person): sæt `DBA_DATO`. Eller skolens IT har overtaget driften: sæt `SCHOOL_OPERATED=1`, og kør `npm run enkel -- overdrag` (i Docker: `docker compose exec holymoly node /app/scripts/enkel.js overdrag`). Uden en af delene svarer serveren: "Serveren drives ikke af skolen, og der er ingen databehandleraftale. Bed skolens IT om at overtage driften."
+
+| Variabel | Eksempel |
+| --- | --- |
+| `DBA_DATO` | 2026-11-20 |
+| `DRIFTSANSVARLIG` | en lærer på skolen (en rolle, ikke et navn – står på forsiden) |
+| `BETA_FEATURES` | tom. Beta har ingen live-skærm, ingen skærmbilleder og intet lighedstjek. `liveScreen,screenshot` slår dem til |
+
+Forsiden i enkel tilstand er beta-forsiden: ingen priser, ingen prøveperiode og ingen Unilogin. Den viser, hvem der driver serveren, tjeklisten "Skolens ja" og nødproceduren.
+
 ## Før rigtige elever bruger det
 
 Elevernes accept dækker informationen til eleverne. Den erstatter ikke skolens ja: skolen er dataansvarlig, og elever kan ikke frit sige nej til noget, der bruges i undervisningen. Få et kort ja fra ledelsen, og send databehandleraftalen til skolens DPO. Se handlingsplanen ("Start: gratis på egen skole").

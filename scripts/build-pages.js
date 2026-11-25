@@ -2,7 +2,9 @@
 /*
  * Bygger HolyMoly's hjemmeside til GitHub Pages (site/):
  *
- *   index.html                 forsiden (server/public/forside.html) med priser
+ *   index.html                 forsiden (server/public/forside.html) med priser – eller beta-forsiden
+ *                              (server/public/forside-beta.html) uden priser og uden /tilbud, når server/edition.json
+ *                              har "simple": true (grenen beta og den offentlige beta-preview Holybeta)
  *   demo.html                  det rigtige lærer-dashboard + en simulator (scripts/pages/shim.js), der svarer i stedet
  *                              for serveren med data optaget fra `npm run demo` (scripts/pages/demo-data.json)
  *   vilkaar.html, privatliv.html, databehandleraftale.html, hent.html
@@ -19,8 +21,12 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const P = path.join(ROOT, 'server', 'public') + path.sep;
-const OUT = path.join(ROOT, 'site');
+const OUT = process.env.PAGES_OUT ? path.resolve(process.env.PAGES_OUT) : path.join(ROOT, 'site');
 const fragment = process.argv.includes('--fragment');
+// Beta (edition.json "simple": true): beta-forsiden uden priser, prøveperiode og tilbud
+let edition = {};
+try { edition = JSON.parse(fs.readFileSync(path.join(ROOT, 'server', 'edition.json'), 'utf8')); } catch (e) { /* ingen fil = den fulde udgave */ }
+const beta = process.env.PAGES_BETA ? process.env.PAGES_BETA === '1' : !!edition.simple;
 
 const must = (s, a, b) => {
   if (!s.includes(a)) throw new Error('build-pages: fandt ikke "' + a.slice(0, 70) + '" – er dashboardet ændret?');
@@ -96,6 +102,8 @@ ${esc(fs.readFileSync(path.join(__dirname, 'pages', 'shim.js'), 'utf8'))}</scrip
 <script>
 ${esc(js)}</script>
 <script>
+${esc(fs.readFileSync(P + 'room-write.js', 'utf8'))}</script>
+<script>
 ${esc(acc)}</script>`;
 
 fs.mkdirSync(OUT, { recursive: true });
@@ -126,18 +134,23 @@ ${scripts}
   console.log('site/demo.html', page.length, 'bytes');
 
   // Forside, jura og hent-side: samme filer som på serveren, med relative links
-  const siteCfg = { pages: true, app: process.env.HOLYMOLY_APP_URL || '', demo: 'demo.html',
-    pricing: { perStudent: Number(process.env.PRICE_PER_STUDENT || 129), minimum: Number(process.env.PRICE_MINIMUM || 2500), trialDays: Number(process.env.TRIAL_DAYS || 30) },
+  const siteCfg = { pages: true, beta, app: process.env.HOLYMOLY_APP_URL || '', demo: 'demo.html',
+    pricing: beta ? null : { perStudent: Number(process.env.PRICE_PER_STUDENT || 129), minimum: Number(process.env.PRICE_MINIMUM || 2500), trialDays: Number(process.env.TRIAL_DAYS || 30) },
     info: { company: { name: process.env.COMPANY_NAME || 'HolyMoly', cvr: process.env.COMPANY_CVR || '', email: process.env.COMPANY_EMAIL || '', address: process.env.COMPANY_ADDRESS || '', hosting: process.env.HOSTING_PROVIDER || '' } } };
-  for (const [src, dst] of [['forside.html', 'index.html'], ['vilkaar.html', 'vilkaar.html'], ['vilkaar-elev.html', 'vilkaar-elev.html'], ['privatliv.html', 'privatliv.html'], ['databehandleraftale.html', 'databehandleraftale.html'], ['hent.html', 'hent.html'], ['tilbud.html', 'tilbud.html'], ['sikkerhed.html', 'sikkerhed.html']]) {
+  // Beta-preview: ingen server bag siden, så statusboksen siger, at det er en forhåndsvisning
+  if (beta) Object.assign(siteCfg.info, { simple: true, preview: true });
+  const pages = [[beta ? 'forside-beta.html' : 'forside.html', 'index.html'], ['vilkaar.html', 'vilkaar.html'], ['vilkaar-elev.html', 'vilkaar-elev.html'], ['privatliv.html', 'privatliv.html'], ['databehandleraftale.html', 'databehandleraftale.html'], ['hent.html', 'hent.html'], ['sikkerhed.html', 'sikkerhed.html']];
+  if (!beta) pages.push(['tilbud.html', 'tilbud.html']);
+  else for (const f of ['tilbud.html', 'tilbud.js']) fs.rmSync(path.join(OUT, f), { force: true });
+  for (const [src, dst] of pages) {
     let h = fs.readFileSync(P + src, 'utf8');
     for (const [a, b] of [['href="/site.css"', 'href="site.css"'], ['src="/theme.js"', 'src="theme.js"'], ['href="/icon.svg"', 'href="icon.svg"'],
-      ['href="/vilkaar"', 'href="vilkaar.html"'], ['href="/privatliv"', 'href="privatliv.html"'], ['href="/databehandleraftale"', 'href="databehandleraftale.html"'], ['href="/hent"', 'href="hent.html"'], ['href="/tilbud"', 'href="tilbud.html"'], ['href="/sikkerhed"', 'href="sikkerhed.html"'], ['src="/img/', 'src="img/'], ['src="/icon.svg"', 'src="icon.svg"'], ['src="/tilbud.js"', 'src="tilbud.js"']]) h = h.split(a).join(b);
+      ['href="/vilkaar"', 'href="vilkaar.html"'], ['href="/vilkaar-elev"', 'href="vilkaar-elev.html"'], ['href="/privatliv"', 'href="privatliv.html"'], ['href="/databehandleraftale"', 'href="databehandleraftale.html"'], ['href="/hent"', 'href="hent.html"'], ['href="/tilbud"', 'href="tilbud.html"'], ['href="/sikkerhed"', 'href="sikkerhed.html"'], ['src="/img/', 'src="img/'], ['src="/icon.svg"', 'src="icon.svg"'], ['src="/tilbud.js"', 'src="tilbud.js"']]) h = h.split(a).join(b);
     h = must(h, '<script src="/site.js"></script>', `<script>window.HM_SITE = ${esc(JSON.stringify(siteCfg))};</script>\n  <script src="site.js"></script>`);
     fs.writeFileSync(path.join(OUT, dst), h);
   }
-  for (const f of ['site.css', 'site.js', 'theme.js', 'tilbud.js']) fs.copyFileSync(P + f, path.join(OUT, f));
+  for (const f of ['site.css', 'site.js', 'theme.js'].concat(beta ? [] : ['tilbud.js'])) fs.copyFileSync(P + f, path.join(OUT, f));
   fs.mkdirSync(path.join(OUT, 'img'), { recursive: true });
   for (const f of fs.readdirSync(P + 'img')) fs.copyFileSync(path.join(P, 'img', f), path.join(OUT, 'img', f));
-  console.log('site/index.html (forside) + jura og hent-side');
+  console.log(`site/index.html (${beta ? 'beta-forside' : 'forside'}) + jura og hent-side`);
 }

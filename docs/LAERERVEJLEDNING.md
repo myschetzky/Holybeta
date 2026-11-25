@@ -40,6 +40,10 @@
 - **Vis aldrig klasseværelset på projektoren** – det viser alle elevers lamper og sider.
 - **Hvis serveren er nede:** eleverne skriver i Word og afleverer i Lectio som normalt. Notér tidspunktet, og giv besked til den driftsansvarlige. Ingen elev må få en ulempe, fordi HolyMoly ikke virkede.
 
+## Skrivetime og ekstra tid
+- **Skrivetime**: vælg en opgave under "Skal eleverne skrive en opgave?", når du starter lektionen. Knappen hedder så **Start skrivetime**. Elevernes app åbner opgaven i skrivevinduet (deres kladde, hvis de har en), og teksten afleveres til opgaven, når eleven trykker "Afslut dokument". Det er en almindelig lektion: mærket siger "i timen".
+- **Ekstra tid** (fx ordblinde): klik på eleven → **+ tid** → +10, +15 eller +30 min. Det er den samme lektion, bare længere for eleven. Når du afslutter lektionen, kan du vælge **Afslut, men lad dem skrive færdig** eller **Afslut for alle**. Kun du ser den ekstra tid – den står ikke i rapporten, på beviset eller i Word-filen.
+
 ## Tips
 - **Ny computer**: klik på eleven i *Rediger klasseværelse* → **Ny computer**. Eleven får en kode til den nye computer og bliver stående på sin plads. Med UNI-Login skal du ikke gøre noget – eleven logger bare ind igen.
 - **Der er to med samme navn**: det står i hændelserne. Er det den samme elev på en ny computer, så slet den gamle.

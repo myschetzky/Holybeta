@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HolyMoly – beta</title>
+  <meta name="description" content="HolyMoly i beta på én skole. Elevernes bevis på, at deres tekst ikke er skrevet med AI.">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script src="/theme.js"></script>
+</head>
+<body data-beta="1">
+  <a class="skip" href="#indhold">Gå til indhold</a>
+  <header class="site-head" id="site-head"></header>
+
+  <main id="indhold">
+    <section class="hero beta-hero">
+      <div class="wrap">
+        <p class="kicker">Beta</p>
+        <h1 id="beta-title">HolyMoly – beta</h1>
+        <p class="lead">Elevernes bevis på, at deres tekst ikke er skrevet med AI</p>
+
+        <div class="beta-box emergency" role="note" aria-labelledby="noed-h">
+          <h2 id="noed-h">Hvis HolyMoly ikke virker</h2>
+          <p>Eleverne skriver i Word og afleverer som normalt. Notér tidspunktet, og giv besked til den driftsansvarlige. Ingen elev må få en ulempe, fordi HolyMoly ikke virkede.</p>
+        </div>
+
+        <div class="beta-box status" id="beta-status" role="status">
+          <p><b>Testserver.</b> Drives ikke af skolens IT. Beviser herfra må ikke bruges til bedømmelse.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="skolens-ja">
+      <div class="wrap narrow">
+        <h2>Skolens ja</h2>
+        <p class="intro">Der kan først startes lektioner, når alt herunder er på plads.</p>
+        <ul class="checklist" id="beta-checklist">
+          <li data-key="DATAANSVARLIG"><span class="mark" aria-hidden="true">?</span><span class="what">Dataansvarlig skole</span><span class="state">Ukendt</span></li>
+          <li data-key="DPO_KONTAKT"><span class="mark" aria-hidden="true">?</span><span class="what">Databeskyttelsesrådgiver (DPO)</span><span class="state">Ukendt</span></li>
+          <li data-key="DPIA_DATO"><span class="mark" aria-hidden="true">?</span><span class="what">Konsekvensanalyse (DPIA)</span><span class="state">Ukendt</span></li>
+          <li data-key="LEDELSE_JA_DATO"><span class="mark" aria-hidden="true">?</span><span class="what">Ledelsens ja</span><span class="state">Ukendt</span></li>
+          <li data-key="DRIFT"><span class="mark" aria-hidden="true">?</span><span class="what">Drift: databehandleraftale, eller skolens IT driver serveren</span><span class="state">Ukendt</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="block alt" id="roller">
+      <div class="wrap">
+        <h2>Hvem gør hvad</h2>
+        <div class="cols three">
+          <div id="laerer">
+            <h3>Lærer</h3>
+            <ul class="list">
+              <li>Log ind, lav en klasse, og skriv klassekoden på tavlen.</li>
+              <li>Start en lektion eller en skrivetime.</li>
+              <li>Ikke til prøver eller eksamen i beta.</li>
+              <li>Vis aldrig klasseværelset på projektoren.</li>
+            </ul>
+            <div class="actions tight"><a class="btn primary" data-link="login" href="/login">Log ind</a></div>
+          </div>
+          <div id="elev">
+            <h3>Elev</h3>
+            <ul class="list">
+              <li>Hent HolyMoly-appen.</li>
+              <li>Skriv klassekoden, dit navn og en kode på 4 cifre.</li>
+              <li>HolyMoly er kun aktiv i lektionen og i skrivetimen.</li>
+            </ul>
+            <div class="actions tight"><a class="btn" href="/hent">Hent appen</a><a class="btn plain" href="/vilkaar-elev">Vilkår for elever</a></div>
+          </div>
+          <div id="ledelse">
+            <h3>Ledelse, IT og DPO</h3>
+            <ul class="list">
+              <li><a href="/privatliv">Privatlivspolitik</a></li>
+              <li><a href="/databehandleraftale">Databehandleraftale</a></li>
+              <li><a href="/sikkerhed">Sikkerhed og databeskyttelse</a></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="maerket">
+      <div class="wrap narrow">
+        <h2>Mærket</h2>
+        <p>En tekst, der er tastet i HolyMoly uden indsat tekst, får mærket <b>✓ Tastet i HolyMoly – intet indsat</b>. Mærket dækker kun skriveforløbet på computeren – ikke afskrift fra telefon eller papir. Manglende mærke er ikke bevis for snyd, og en sag kræver altid en samtale med eleven.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-foot" id="site-foot"></footer>
+  <script src="/site.js"></script>
+</body>
+</html>

@@ -55,3 +55,18 @@ test('npm run enkel -- godkend <brugernavn>: godkender en ventende lærer', () =
   db2.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('npm run enkel -- overdrag: registrerer, at skolens IT har overtaget driften', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-enkel-'));
+  const run = (...a) => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'scripts', 'enkel.js'), ...a], { env: Object.assign({}, process.env, { DATA_DIR: dir, SCHOOL_OPERATED: '1' }), encoding: 'utf8' });
+  let r = run('overdrag');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /overdraget til skolen/);
+  r = run('overdrag');
+  assert.match(r.stdout, /blev overdraget til skolen \d{4}-\d{2}-\d{2}/, 'anden gang: datoen for overdragelsen');
+  const db = require('../server/src/db.js').open(dir);
+  assert.ok(Number(db.prepare("SELECT value FROM meta WHERE key = 'school_operated_since'").get().value) > 0);
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

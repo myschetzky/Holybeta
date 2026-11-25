@@ -25,7 +25,7 @@ function client(base) {
 test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-simple-'));
   // Selv med licens, to-faktor og e-mail slået til, slår enkel tilstand dem fra
-  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, simple: true, licensing: true, require2fa: true, mailSend: async () => {}, schoolApproval: APPROVAL });
+  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, simple: true, licensing: true, require2fa: true, mailSend: async () => {}, schoolApproval: APPROVAL, dbaDate: '2026-11-20' });
   const port = await srv.listen();
   const base = 'http://127.0.0.1:' + port;
   // Appen sender accept: true, når eleven har sat flueben ved vilkårene
@@ -383,6 +383,128 @@ test('almindelig tilstand: skolens ja kræves ikke', async () => {
     const cls = await A.call('POST', '/api/classes', { name: '2.g' });
     const r = await A.call('POST', `/api/classes/${cls.id}/lesson`, { action: 'start', minutes: 45 });
     assert.strictEqual(r.lesson.live, true);
+  } finally {
+    await srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('beta: forside uden priser, spærrede ruter, features og driften (databehandleraftale eller overdragelse)', async () => {
+  const WebSocket = require(require.resolve('ws', { paths: [path.join(__dirname, '../server')] }));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-beta-'));
+  const mk = (extra) => createServer(Object.assign({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, simple: true, schoolApproval: APPROVAL, operator: 'en lærer på skolen', dbaDate: '' }, extra));
+  let srv = mk();
+  let base = 'http://127.0.0.1:' + await srv.listen();
+  try {
+    // Forsiden er beta-forsiden: skolens ja, ingen priser, ingen prøveperiode, ingen Unilogin
+    for (const p of ['/', '/forside']) {
+      const html = await (await fetch(base + p)).text();
+      assert.match(html, /Skolens ja/, p);
+      assert.match(html, /Elevernes bevis på, at deres tekst ikke er skrevet med AI/);
+      assert.match(html, /Hvis HolyMoly ikke virker/, 'nødproceduren står på forsiden');
+      assert.doesNotMatch(html, /prøveperiode|129|Unilogin|Priser/i, p);
+      for (const link of ['/hent', '/vilkaar-elev', '/privatliv', '/databehandleraftale', '/sikkerhed', '/login']) assert.ok(html.includes(`href="${link}"`), link);
+    }
+    assert.strictEqual((await fetch(base + '/tilbud')).status, 404, '/tilbud findes ikke i beta');
+    assert.strictEqual((await fetch(base + '/tilbud.html')).status, 404);
+    assert.strictEqual((await fetch(base + '/databehandleraftale')).status, 200, 'skolens DPO skal bruge databehandleraftalen');
+    // Ruter, der ikke hører til beta, svarer 404
+    for (const [m, p] of [['GET', '/api/school/order'], ['POST', '/api/school/order'], ['GET', '/api/auth/unilogin/start'], ['GET', '/api/auth/unilogin/callback'], ['GET', '/api/pricing'],
+      ['GET', '/api/admin/overview'], ['POST', '/api/account/2fa/start'], ['POST', '/api/verify'], ['POST', '/api/password/forgot'], ['POST', '/api/password/reset']]) {
+      assert.strictEqual((await client(base).call(m, p, m === 'POST' ? {} : undefined))._status, 404, `${m} ${p}`);
+    }
+    // Én profil: ingen live-skærm, ingen skærmbilleder og intet lighedstjek – hånd op og skrivetime er med
+    let info = await client(base).call('GET', '/api/info');
+    assert.deepStrictEqual(info.features, { liveScreen: false, screenshot: false, autoEvidence: false, similar: false, hand: true, writeLesson: true });
+    assert.deepStrictEqual(info.approvalMissing, []);
+    assert.strictEqual(info.operator.role, 'en lærer på skolen');
+    assert.strictEqual(info.operator.testServer, true);
+    assert.strictEqual(info.lessonBlocked, true, 'skolens ja er der, men ikke driften');
+    assert.strictEqual(info.lessonBlockedReason, 'operator');
+
+    const A = client(base);
+    assert.strictEqual((await A.call('POST', '/api/register', { email: 'mette', name: 'Mette', password: 'tavle-kridt-1234', acceptTerms: true, signupCode: srv.setupCode() })).ok, true);
+    const cls = await A.call('POST', '/api/classes', { name: '2.g' });
+    // Klassen har automatiske skærmbilleder slået til – beta slår dem fra alligevel
+    await A.call('PATCH', `/api/classes/${cls.id}`, { config: { autoEvidence: true } });
+    let r = await A.call('POST', `/api/classes/${cls.id}/lesson`, { action: 'start', minutes: 45 });
+    assert.strictEqual(r._status, 409);
+    assert.strictEqual(r.error, 'Serveren drives ikke af skolen, og der er ingen databehandleraftale. Bed skolens IT om at overtage driften.');
+    assert.strictEqual(r.needs, 'operator');
+    await srv.close();
+
+    // SCHOOL_OPERATED=1 alene er ikke nok – overdragelsen skal være registreret (npm run enkel -- overdrag)
+    srv = mk({ schoolOperated: true });
+    base = 'http://127.0.0.1:' + await srv.listen();
+    assert.strictEqual((await client(base).call('GET', '/api/info')).lessonBlocked, true);
+    srv.db.prepare("INSERT INTO meta (key, value) VALUES ('school_operated_since', ?)").run(String(Date.now()));
+    info = await client(base).call('GET', '/api/info');
+    assert.strictEqual(info.lessonBlocked, false);
+    assert.strictEqual(info.operator.handedOver, true);
+    assert.strictEqual(info.operator.testServer, false);
+    await srv.close();
+
+    // Med databehandleraftale (DBA_DATO) kan lektionen starte
+    srv = mk({ dbaDate: '2026-11-20' });
+    base = 'http://127.0.0.1:' + await srv.listen();
+    const T = client(base);
+    assert.strictEqual((await T.call('POST', '/api/login', { email: 'mette', password: 'tavle-kridt-1234' })).ok, true);
+    r = await T.call('POST', `/api/classes/${cls.id}/lesson`, { action: 'start', minutes: 45 });
+    assert.strictEqual(r.lesson.live, true, JSON.stringify(r));
+    const en = await client(base).call('POST', '/api/enroll', { accept: true, code: cls.joinCode, name: 'Anna Jensen', pin: '4821' });
+    const agent = new WebSocket(base.replace('http', 'ws') + '/ws/agent');
+    const amsgs = [];
+    agent.on('message', (d, bin) => { if (!bin) amsgs.push(JSON.parse(d.toString())); });
+    await new Promise(res => agent.on('open', res));
+    agent.send(JSON.stringify({ type: 'hello', tokens: [en.token], device: { os: 'Linux', version: '1.3.0' } }));
+    // Lærerens websocket: watch og screenshot giver 403
+    const ck = (await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'mette', password: 'tavle-kridt-1234' }) })).headers.get('set-cookie').split(';')[0];
+    const tw = new WebSocket(base.replace('http', 'ws') + '/ws/teacher?classId=' + cls.id, { headers: { Cookie: ck, Origin: base } });
+    const tmsgs = [];
+    tw.on('message', (d, bin) => { if (!bin) tmsgs.push(JSON.parse(d.toString())); });
+    await new Promise(res => tw.on('open', res));
+    const wait = async (list, f) => { for (let i = 0; i < 150; i++) { const m = list.find(f); if (m) { list.splice(list.indexOf(m), 1); return m; } await new Promise(res => setTimeout(res, 20)); } throw new Error('ingen besked: ' + JSON.stringify(list.map(x => x.type))); };
+    const lesson = await wait(amsgs, m => m.type === 'lesson' && m.live);
+    assert.strictEqual(lesson.config.autoEvidence, false, 'automatiske skærmbilleder er slået fra i beta');
+    await wait(tmsgs, m => m.type === 'snapshot');
+    tw.send(JSON.stringify({ type: 'watch', studentId: en.studentId, screen: 0 }));
+    let err = await wait(tmsgs, m => m.type === 'error');
+    assert.strictEqual(err.code, 403);
+    assert.strictEqual(err.feature, 'liveScreen');
+    tw.send(JSON.stringify({ type: 'screenshot', studentId: en.studentId }));
+    err = await wait(tmsgs, m => m.type === 'error');
+    assert.strictEqual(err.code, 403);
+    assert.strictEqual(err.feature, 'screenshot');
+    // follow: faner og hændelser uden skærm – appen bliver aldrig bedt om at sende billeder
+    tw.send(JSON.stringify({ type: 'follow', studentId: en.studentId }));
+    await wait(tmsgs, m => m.type === 'detail');
+    await new Promise(res => setTimeout(res, 100));
+    assert.ok(!amsgs.some(m => (m.type === 'stream' && m.mode !== 'off') || m.type === 'screenshot'), 'ingen skærm og intet skærmbillede');
+    assert.strictEqual(srv.db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'teacher' AND title LIKE '%skærmen live%'").get().n, 0);
+    tw.close(); agent.close();
+    await srv.close();
+
+    // BETA_FEATURES kan slå ting til (og fra)
+    srv = mk({ dbaDate: '2026-11-20', betaFeatures: 'liveScreen, screenshot,-hand' });
+    base = 'http://127.0.0.1:' + await srv.listen();
+    assert.deepStrictEqual((await client(base).call('GET', '/api/info')).features, { liveScreen: true, screenshot: true, autoEvidence: false, similar: false, hand: false, writeLesson: true });
+  } finally {
+    await srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('almindelig tilstand: alle funktioner, den almindelige forside og /tilbud', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-full-'));
+  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, betaFeatures: '-liveScreen' });
+  const base = 'http://127.0.0.1:' + await srv.listen();
+  try {
+    const info = await client(base).call('GET', '/api/info');
+    assert.deepStrictEqual(info.features, { liveScreen: true, screenshot: true, autoEvidence: true, similar: true, hand: true, writeLesson: true }, 'BETA_FEATURES gælder kun i beta');
+    assert.strictEqual(info.operator, null);
+    assert.match(await (await fetch(base + '/')).text(), /prøveperiode/);
+    assert.strictEqual((await fetch(base + '/tilbud')).status, 200);
+    assert.strictEqual((await client(base).call('GET', '/api/pricing'))._status, 200);
   } finally {
     await srv.close();
     fs.rmSync(dir, { recursive: true, force: true });

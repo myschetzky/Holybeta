@@ -23,10 +23,36 @@
   }
 
   /* ---------- topbar og footer (fælles for alle sider) ---------- */
+  // Beta (enkel tilstand): ingen priser, ingen prøveperiode og ingen salg. Forside-beta.html har data-beta,
+  // og på de andre sider skiftes til beta, når /api/info siger simple.
+  let beta = !!S.beta || !!(document.body && document.body.dataset && document.body.dataset.beta);
   const onFront = !!$('.hero');
   const sec = (id) => (onFront ? '#' + id : home + '#' + id);
   const head = $('#site-head');
-  if (head) {
+  const foot = $('#site-foot');
+  function betaChrome() {
+    if (head) {
+      const nav = el('nav', { class: 'site-nav', 'aria-label': 'Hovedmenu', id: 'site-nav' },
+        el('a', { href: sec('laerer'), text: 'Lærer' }), el('a', { href: sec('elev'), text: 'Elev' }),
+        el('a', { href: sec('ledelse'), text: 'Ledelse, IT og DPO' }), el('a', { href: sec('skolens-ja'), text: 'Skolens ja' }));
+      const toggle = el('button', { class: 'btn small plain menu-toggle', 'aria-expanded': 'false', 'aria-controls': 'site-nav', text: 'Menu' });
+      toggle.addEventListener('click', () => { const o = nav.classList.toggle('open'); toggle.setAttribute('aria-expanded', String(o)); toggle.textContent = o ? 'Luk' : 'Menu'; });
+      nav.addEventListener('click', (e) => { if (e.target.tagName === 'A') { nav.classList.remove('open'); toggle.textContent = 'Menu'; } });
+      head.replaceChildren(el('div', { class: 'wrap' },
+        el('a', { class: 'logo', href: home }, el('img', { src: icon, alt: '' }), 'HolyMoly'),
+        nav,
+        el('div', { class: 'head-cta' }, el('a', { class: 'btn small primary', 'data-link': 'login', href: '/login', text: 'Log ind' }), toggle)));
+    }
+    if (foot) {
+      foot.replaceChildren(el('div', { class: 'wrap' },
+        el('div', { class: 'about' }, el('a', { class: 'logo', href: home }, el('img', { src: icon, alt: '' }), 'HolyMoly'),
+          el('p', { text: 'Elevernes bevis på, at deres tekst ikke er skrevet med AI.' }), el('p', { class: 'small', text: 'Beta på én skole.' })),
+        el('div', {}, el('h4', { text: 'Beta' }), el('ul', {}, el('li', {}, el('a', { href: page('/hent'), text: 'Hent elev-appen' })), el('li', {}, el('a', { 'data-link': 'login', href: '/login', text: 'Log ind' })), el('li', {}, el('a', { href: sec('skolens-ja'), text: 'Skolens ja' })))),
+        el('div', {}, el('h4', { text: 'Jura' }), el('ul', {}, el('li', {}, el('a', { href: page('/sikkerhed'), text: 'Sikkerhed og databeskyttelse' })), el('li', {}, el('a', { href: page('/vilkaar'), text: 'Vilkår' })), el('li', {}, el('a', { href: page('/vilkaar-elev'), text: 'Vilkår for elever' })), el('li', {}, el('a', { href: page('/privatliv'), text: 'Privatlivspolitik' })), el('li', {}, el('a', { href: page('/databehandleraftale'), text: 'Databehandleraftale' })))),
+        el('div', { class: 'legal' }, el('span', { text: '© ' + new Date().getFullYear() + ' HolyMoly' }))));
+    }
+  }
+  if (head && !beta) {
     const nav = el('nav', { class: 'site-nav', 'aria-label': 'Hovedmenu', id: 'site-nav' },
       el('a', { href: sec('produkt'), text: 'Sådan virker det' }),
       el('a', { href: sec('tryghed'), text: 'Databeskyttelse' }), el('a', { href: sec('priser'), text: 'Priser' }), el('a', { href: sec('faq'), text: 'Spørgsmål' }));
@@ -40,11 +66,12 @@
         el('a', { class: 'btn small plain login', 'data-link': 'login', href: '/login', text: 'Log ind' }),
         el('a', { class: 'btn small primary', 'data-link': 'signup', href: '/opret', text: 'Start prøveperiode' }),
         toggle)));
+  }
+  if (head) {
     const onScroll = () => head.classList.toggle('scrolled', scrollY > 4);
     addEventListener('scroll', onScroll, { passive: true }); onScroll();
   }
-  const foot = $('#site-foot');
-  if (foot) {
+  if (foot && !beta) {
     foot.append(el('div', { class: 'wrap' },
       el('div', { class: 'about' }, el('a', { class: 'logo', href: home }, el('img', { src: icon, alt: '' }), 'HolyMoly'),
         el('p', { text: 'Elevernes bevis på, at deres tekst ikke er skrevet med AI.' }), el('p', { class: 'small', 'data-company': 'line' })),
@@ -52,6 +79,47 @@
       el('div', {}, el('h4', { text: 'Skoler' }), el('ul', {}, el('li', {}, el('a', { 'data-link': 'signup', href: '/opret', text: 'Start prøveperiode' })), el('li', {}, el('a', { 'data-link': 'login', href: '/login', text: 'Log ind' })), el('li', {}, el('a', { href: sec('faq'), text: 'Spørgsmål' })))),
       el('div', {}, el('h4', { text: 'Jura' }), el('ul', {}, el('li', {}, el('a', { href: page('/sikkerhed'), text: 'Sikkerhed og databeskyttelse' })), el('li', {}, el('a', { href: page('/vilkaar'), text: 'Vilkår' })), el('li', {}, el('a', { href: page('/vilkaar-elev'), text: 'Vilkår for elever' })), el('li', {}, el('a', { href: page('/privatliv'), text: 'Privatlivspolitik' })), el('li', {}, el('a', { href: page('/databehandleraftale'), text: 'Databehandleraftale' })))),
       el('div', { class: 'legal' }, el('span', { 'data-company': 'copy', text: '© ' + new Date().getFullYear() + ' HolyMoly' }))));
+  }
+
+  if (beta) betaChrome();
+
+  /* ---------- beta-forsiden: overskrift, status og skolens ja ---------- */
+  const CHECK = [['DATAANSVARLIG', 'controller'], ['DPO_KONTAKT', 'dpo'], ['DPIA_DATO', 'dpiaDate'], ['LEDELSE_JA_DATO', 'approvedDate']];
+  function fillBeta(info) {
+    const title = document.getElementById('beta-title');
+    if (!title || !info) return;
+    const a = info.approval;
+    title.textContent = a && a.controller ? 'HolyMoly – beta på ' + a.controller : 'HolyMoly – beta';
+    const op = info.operator || null;
+    const status = document.getElementById('beta-status');
+    if (status) {
+      if (info.preview) {
+        status.replaceChildren(el('p', {}, el('b', { text: 'Forhåndsvisning. ' }), 'Sådan ser forsiden ud på skolens beta-server. Der står, hvem der driver serveren, og om skolens ja er på plads.'));
+      } else if (op && !op.testServer) {
+        status.className = 'beta-box status';
+        status.replaceChildren(el('p', {}, el('b', { text: 'Skolens server. ' }), 'Drives af skolens IT.'));
+      } else {
+        status.className = 'beta-box status test';
+        const who = op && op.role ? op.role : 'en frivillig';
+        status.replaceChildren(el('p', {}, el('b', { text: 'Testserver. ' }), `Drives af ${who}, ikke af skolens IT. Beviser herfra må ikke bruges til bedømmelse.`));
+      }
+    }
+    const list = document.getElementById('beta-checklist');
+    if (!list || info.preview || !Array.isArray(info.approvalMissing)) return;
+    const missing = new Set(info.approvalMissing);
+    const set = (li, ok, text) => {
+      if (!li) return;
+      li.className = ok ? 'ok' : 'missing';
+      const m = li.querySelector('.mark'), s = li.querySelector('.state');
+      if (m) m.textContent = ok ? '✓' : '!';
+      if (s) s.textContent = text || (ok ? 'På plads' : 'Mangler');
+    };
+    for (const [key, field] of CHECK) {
+      const ok = !missing.has(key);
+      set(list.querySelector(`[data-key="${key}"]`), ok, ok && a && /Dato|Date/i.test(field) ? a[field] : '');
+    }
+    const drift = op ? (op.handedOver ? 'Skolens IT' : op.dba ? 'Databehandleraftale' : '') : '';
+    set(list.querySelector('[data-key="DRIFT"]'), !!drift, drift);
   }
 
   /* ---------- links: opret / log ind / demo / kontakt ---------- */
@@ -126,10 +194,15 @@
   }
 
   const defaults = { perStudent: 129, minimum: 2500, trialDays: 30 };
-  if (S.pages) { applyPricing(S.pricing || defaults); applyCompany(S.info && S.info.company); wireLinks(S.info); fillDownloads(null); }
+  if (S.pages) { if (!beta) applyPricing(S.pricing || defaults); applyCompany(S.info && S.info.company); wireLinks(S.info); fillDownloads(null); fillBeta(S.info); }
   else {
-    applyPricing(defaults); wireLinks(null);
-    fetch('/api/pricing').then(r => r.json()).then(applyPricing).catch(() => {});
-    fetch('/api/info').then(r => r.json()).then((i) => { applyCompany(i.company); wireLinks(i); fillDownloads(i); fillApproval(i); fillRetention(i.retention); }).catch(() => fillDownloads(null));
+    if (!beta) applyPricing(defaults);
+    wireLinks(null);
+    fetch('/api/info').then(r => r.json()).then((i) => {
+      // Enkel tilstand: beta-topbar og -footer på alle sider, og ingen priser
+      if (i.simple && !beta) { beta = true; betaChrome(); }
+      if (!i.simple) fetch('/api/pricing').then(r => r.json()).then(applyPricing).catch(() => {});
+      applyCompany(i.company); wireLinks(i); fillDownloads(i); fillApproval(i); fillRetention(i.retention); fillBeta(i);
+    }).catch(() => fillDownloads(null));
   }
 })();

@@ -16,4 +16,8 @@ contextBridge.exposeInMainWorld('hmw', {
   docx: (id) => ipcRenderer.invoke('write:docx', String(id || '')),
   onSaved: (cb) => ipcRenderer.on('write:saved', (_e, r) => cb(r)),
   onLesson: (cb) => ipcRenderer.on('write:lesson', (_e, live) => cb(!!live)),
+  // Skrivetime: kladden til afleveringen (eller et nyt dokument), banneret og "åbn dette dokument"
+  openFor: (assignmentId) => ipcRenderer.invoke('write:open-for', Number(assignmentId) || 0),
+  onWriteLesson: (cb) => ipcRenderer.on('write:write-lesson', (_e, w) => cb(w && typeof w === 'object' ? { assignmentId: Number(w.assignmentId) || 0, title: String(w.title || '') } : null)),
+  onOpenDoc: (cb) => ipcRenderer.on('write:open-doc', (_e, id) => cb(String(id || ''))),
 });

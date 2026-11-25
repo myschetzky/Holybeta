@@ -191,7 +191,12 @@
       }
       if (sub === '/lesson') {
         if (body.action === 'start') lesson = { live: true, id: lesson.id + 1, started: Date.now(), endsAt: Date.now() + (Number(body.minutes) || 90) * 60_000 };
-        else { lesson = { live: false }; frozen.clear(); hands.clear(); }
+        else if (body.action === 'extend') {
+          // Ekstra tid: kun læreren ser den (simuleret – eleverne skriver ikke videre i demoen)
+          const extra = (lesson.extra || []).filter(e => !(body.studentIds || []).includes(e.studentId));
+          for (const id of body.studentIds || []) extra.push({ studentId: id, until: (lesson.endsAt || Date.now()) + (Number(body.minutes) || 15) * 60_000 });
+          lesson = Object.assign({}, lesson, { extra });
+        } else { lesson = { live: false }; frozen.clear(); hands.clear(); }
         setTimeout(() => { broadcast({ type: 'lesson', lesson }); for (const s of cls.students) pushStudent(s.id); }, 30);
         return json(200, { lesson });
       }

@@ -17,6 +17,8 @@ const MAX_TABS = 60;
 const MAX_APPS = 120;
 const STALE_MS = 20_000; // ingen status i 20 sek -> grå
 const HOME_NO_SCREEN = 'Skriveøkt hjemme: skærmen kan ikke ses';
+const FEATURE_OFF = { liveScreen: 'Live-skærm er slået fra på denne server', screenshot: 'Skærmbilleder er slået fra på denne server' };
+const MAX_EXTRA_MS = 2 * 3600_000; // ekstra tid: højst 2 timer efter klassens lektion
 /*
  * Hjemme har én fast profil: kun AI, fjernstyring og virtuelle maskiner blokeres, intet lukkes,
  * og der tages aldrig skærmbilleder. Læreren ser kun "Skriver hjemme", lampen og kategorien.
@@ -62,7 +64,9 @@ function preferLesson(l, cur) {
 }
 
 class Hub {
-  constructor({ db, dataDir, getRules, classConfig, log, staleMs, minAgentVersion, minExtensionVersion, downloadUrl, requireGuard, compileFor, docs, publicUrl, lessonBlocked }) {
+  constructor({ db, dataDir, getRules, classConfig, log, staleMs, minAgentVersion, minExtensionVersion, downloadUrl, requireGuard, compileFor, docs, publicUrl, lessonBlocked, features }) {
+    // Funktioner, der er slået fra (beta): håndhæves her – ikke kun i dashboardet
+    this.features = Object.assign({ liveScreen: true, screenshot: true, autoEvidence: true, hand: true, writeLesson: true }, features || {});
     // Enkel tilstand: skolens ja mangler -> ingen lektioner og ingen skriveøkter (returnerer en besked eller null)
     this.lessonBlocked = lessonBlocked || (() => null);
     this.docs = docs || null;           // "Skriv i HolyMoly" (server/src/docs.js)
@@ -94,16 +98,34 @@ class Hub {
     this.watchers = new Map(); // studentId -> Set<tconn>
     this.frozen = new Map(); // studentId -> { message, mode: 'freeze' | 'review' }
     this.closed = new Map(); // studentId -> {ts, reason}
-    this.lessons = new Map(); // classId -> {id, endsAt, started}
+    this.lessons = new Map(); // classId -> {id, endsAt, started, writeAssignment: {id, title} | null}
+    this.extended = new Map(); // classId -> klassens afsluttede lektion, mens nogle elever har ekstra tid
+    this.ext = new Map(); // lessonId -> Map(studentId -> endsAt) (ekstra tid, lesson_extensions)
     this.studentClass = new Map(); // cache studentId -> classId (kun til visning – aldrig til adgangskontrol)
     this.limits = new Map(); // studentId -> { rl, evidenceRl, events, evidence, lessonId } – overlever genforbindelser
 
     const now = Date.now();
     // Skriveøkter (én elev) overlever ikke en genstart – ellers ville de blive til en lektion for hele klassen
     db.prepare('UPDATE lessons SET ended = MIN(ends_at, ?) WHERE student_id IS NOT NULL AND ended IS NULL').run(now);
+    const writeOf = (id) => {
+      const r = id ? db.prepare('SELECT id, title FROM assignments WHERE id = ?').get(id) : null;
+      return r ? { id: r.id, title: r.title } : null;
+    };
     for (const l of db.prepare('SELECT * FROM lessons WHERE ended IS NULL AND student_id IS NULL').all()) {
-      if (l.ends_at > now) this.lessons.set(l.class_id, { id: l.id, endsAt: l.ends_at, started: l.started });
+      if (l.ends_at > now) this.lessons.set(l.class_id, { id: l.id, endsAt: l.ends_at, started: l.started, writeAssignment: writeOf(l.write_assignment_id) });
       else db.prepare('UPDATE lessons SET ended = ? WHERE id = ?').run(l.ends_at, l.id);
+    }
+    // Ekstra tid overlever en genstart: lektionen genindlæses for de elever, der stadig skriver
+    db.prepare('DELETE FROM lesson_extensions WHERE ends_at <= ?').run(now);
+    for (const e of db.prepare(`SELECT e.lesson_id, e.student_id, e.ends_at, l.class_id, l.started, l.ends_at AS l_ends, l.ended, l.write_assignment_id
+        FROM lesson_extensions e JOIN lessons l ON l.id = e.lesson_id WHERE l.student_id IS NULL`).all()) {
+      let m = this.ext.get(e.lesson_id);
+      if (!m) { m = new Map(); this.ext.set(e.lesson_id, m); }
+      m.set(e.student_id, e.ends_at);
+      const live = this.lessons.get(e.class_id);
+      if ((!live || live.id !== e.lesson_id) && !this.extended.has(e.class_id)) {
+        this.extended.set(e.class_id, { id: e.lesson_id, started: e.started, endsAt: Math.min(e.l_ends, e.ended || e.l_ends), writeAssignment: writeOf(e.write_assignment_id) });
+      }
     }
     this._q = {
       student: db.prepare('SELECT id, class_id, name FROM students WHERE id = ?'),
@@ -128,9 +150,22 @@ class Hub {
     const s = this.solo.get(sid);
     return s && s.endsAt > Date.now() ? s : null;
   }
-  /** Er eleven "i lektion"? Klassens lektion – eller elevens egen skriveøkt. */
+  /**
+   * Klassens lektion for én elev: endsAt = max(lektionens slut, elevens ekstra tid). Efter klassens slut har kun elever
+   * med ekstra tid lektionen – med samme id, så beviset siger "i timen", og vagten og blokeringen følger med.
+   */
+  classLessonFor(sid, classId = this.studentClass.get(sid)) {
+    if (classId == null) return null;
+    const live = this.lessonOf(classId);
+    const base = live || this.extended.get(classId);
+    if (!base) return null;
+    const until = (this.ext.get(base.id) || new Map()).get(sid) || 0;
+    if (live) return until > live.endsAt ? Object.assign({}, live, { endsAt: until, extra: true }) : live;
+    return until > Date.now() ? Object.assign({}, base, { endsAt: until, extra: true }) : null;
+  }
+  /** Er eleven "i lektion"? Klassens lektion (evt. med ekstra tid) – eller elevens egen skriveøkt. */
   lessonFor(sid, classId = this.studentClass.get(sid)) {
-    return (classId != null && this.lessonOf(classId)) || this.soloOf(sid);
+    return this.classLessonFor(sid, classId) || this.soloOf(sid);
   }
   /**
    * Skriver eleven hjemme lige nu (skriveøkt uden klassens lektion)? Så ser læreren hverken skærm,
@@ -150,7 +185,29 @@ class Hub {
     try { config = (classId != null && this.classConfig(classId)) || {}; } catch (e) { config = {}; }
     const observed = this.requireGuard ? ['skrivevindue', 'vagt'] : ['skrivevindue'];
     if (this.isHome(sid)) return { kind: 'hjemme', observed, config: homeConfig(config) };
+    if (!this.features.autoEvidence && config.autoEvidence) config = Object.assign({}, config, { autoEvidence: false });
     return { kind: 'klasse', observed, config };
+  }
+
+  /**
+   * Hvornår blev afleveringen, dokumentet skrives til, oprettet? Den aflevering, appen nævner (dokumentets egen),
+   * hvis den hører til elevens klasse – ellers skriveøktens. Ingen aflevering: null.
+   */
+  _assignmentCreated(sid, classId, assignmentId) {
+    const q = this.db.prepare('SELECT created FROM assignments WHERE id = ? AND class_id = ?');
+    const own = Number(assignmentId) > 0 ? q.get(Number(assignmentId), classId) : null;
+    if (own) return own.created;
+    const solo = this.soloOf(sid);
+    const asg = solo && solo.assignmentId ? q.get(solo.assignmentId, classId) : null;
+    return asg ? asg.created : null;
+  }
+  /** Elevens hjælpemidler (students.aids, JSON-liste). Findes kolonnen ikke endnu, er listen tom. */
+  _aidsOf(sid) {
+    try {
+      const row = this.db.prepare('SELECT * FROM students WHERE id = ?').get(sid);
+      const v = row && row.aids ? JSON.parse(row.aids) : [];
+      return Array.isArray(v) ? v.map(String).slice(0, 10) : [];
+    } catch (e) { return []; }
   }
 
   /**
@@ -210,17 +267,25 @@ class Hub {
     this.watchers.delete(sid);
   }
 
-  startLesson(classId, minutes) {
+  /**
+   * write: { id, title } = skrivetime (eleverne skriver den aflevering), null = almindelig lektion,
+   * undefined = uændret (når en lektion i gang får ny sluttid).
+   */
+  startLesson(classId, minutes, write) {
     const now = Date.now();
     const existing = this.lessonOf(classId);
     // Ny lektion starter aldrig med frosne skærme fra sidst
     if (!existing) for (const r of this._q.studentsOfClass.all(classId)) this.frozen.delete(r.id);
     if (existing) {
       existing.endsAt = now + minutes * 60_000;
-      this.db.prepare('UPDATE lessons SET ends_at = ? WHERE id = ?').run(existing.endsAt, existing.id);
+      if (write !== undefined) existing.writeAssignment = write ? { id: write.id, title: write.title } : null;
+      this.db.prepare('UPDATE lessons SET ends_at = ?, write_assignment_id = ? WHERE id = ?').run(existing.endsAt, existing.writeAssignment ? existing.writeAssignment.id : null, existing.id);
     } else {
-      const r = this.db.prepare('INSERT INTO lessons (class_id, started, ends_at) VALUES (?,?,?)').run(classId, now, now + minutes * 60_000);
-      this.lessons.set(classId, { id: Number(r.lastInsertRowid), endsAt: now + minutes * 60_000, started: now });
+      // En ny lektion afslutter den forriges ekstra tid
+      this._endExtended(classId);
+      const wa = write ? { id: write.id, title: write.title } : null;
+      const r = this.db.prepare('INSERT INTO lessons (class_id, started, ends_at, write_assignment_id) VALUES (?,?,?,?)').run(classId, now, now + minutes * 60_000, wa ? wa.id : null);
+      this.lessons.set(classId, { id: Number(r.lastInsertRowid), endsAt: now + minutes * 60_000, started: now, writeAssignment: wa });
       for (const { id } of this._q.studentsOfClass.all(classId)) this.closed.delete(id);
       // En klasselektion går forud for skriveøkter på de samme computere
       for (const conn of this.agentConns) {
@@ -232,12 +297,22 @@ class Hub {
     return this.lessons.get(classId);
   }
 
-  stopLesson(classId) {
+  /**
+   * Afslut klassens lektion. Elever med ekstra tid skriver færdig (lektionen flyttes til this.extended med samme id),
+   * medmindre all = true ("Afslut for alle").
+   */
+  stopLesson(classId, { all = false } = {}) {
     const l = this.lessons.get(classId);
-    if (!l) return;
-    this.db.prepare('UPDATE lessons SET ended = ? WHERE id = ?').run(Date.now(), l.id);
+    if (!l) { if (all) this._endExtended(classId); return; }
+    const now = Date.now();
+    this.db.prepare('UPDATE lessons SET ended = ? WHERE id = ?').run(now, l.id);
     this.lessons.delete(classId);
+    const m = this.ext.get(l.id);
+    const keep = new Set(m && !all ? [...m].filter(([, until]) => until > now).map(([sid]) => sid) : []);
+    if (keep.size) this.extended.set(classId, Object.assign({}, l, { endsAt: Math.min(l.endsAt, now) }));
+    else this._dropExt(l.id);
     for (const { id } of this._q.studentsOfClass.all(classId)) {
+      if (keep.has(id)) continue; // skriver videre med ekstra tid
       this.frozen.delete(id);
       this.hands.delete(id);
       this.lastColor.delete(id);
@@ -246,6 +321,62 @@ class Hub {
       this.detail.delete(id);
     }
     this._lessonChanged(classId);
+  }
+
+  /** Ekstra tid til elever (minutter lægges til elevens nuværende slut). Under lektionen eller mens andre skriver færdig. */
+  extendLesson(classId, studentIds, minutes) {
+    const live = this.lessonOf(classId);
+    const base = live || this.extended.get(classId);
+    if (!base) return { ok: false, error: 'Der er ingen lektion i gang' };
+    const now = Date.now();
+    let m = this.ext.get(base.id);
+    if (!m) { m = new Map(); this.ext.set(base.id, m); }
+    const classEnd = live ? live.endsAt : base.endsAt;
+    const up = this.db.prepare(`INSERT INTO lesson_extensions (lesson_id, student_id, ends_at) VALUES (?,?,?)
+      ON CONFLICT(lesson_id, student_id) DO UPDATE SET ends_at = excluded.ends_at`);
+    const out = {};
+    for (const sid of studentIds) {
+      const cur = m.get(sid) || 0;
+      // Efter klassens slut kan kun elever, der stadig skriver, få mere tid
+      if (!live && cur <= now) continue;
+      const until = Math.min(Math.max(classEnd, cur, now) + minutes * 60_000, Math.max(classEnd, now) + MAX_EXTRA_MS);
+      m.set(sid, until);
+      up.run(base.id, sid, until);
+      out[sid] = until;
+      this.studentClass.set(sid, classId);
+      const conn = this.agentByStudent.get(sid);
+      if (conn) this._assignActive(conn);
+      this._pushStudent(sid);
+    }
+    if (!m.size) this.ext.delete(base.id);
+    this._broadcastClass(classId, { type: 'lesson', lesson: this._lessonInfo(classId) });
+    return Object.keys(out).length ? { ok: true, until: out } : { ok: false, error: 'Lektionen er slut for de valgte elever' };
+  }
+  _dropExt(lessonId) {
+    this.ext.delete(lessonId);
+    this.db.prepare('DELETE FROM lesson_extensions WHERE lesson_id = ?').run(lessonId);
+  }
+  /** Ekstra tid er slut for én elev: overvågningen stopper for eleven (som ved lektionens slut). */
+  _extraEnded(sid) {
+    this.frozen.delete(sid);
+    this.hands.delete(sid);
+    this.lastColor.delete(sid);
+    this.closed.delete(sid);
+    this.status.delete(sid);
+    this.detail.delete(sid);
+    const conn = this.agentByStudent.get(sid);
+    if (conn) this._assignActive(conn);
+    this._pushStudent(sid);
+  }
+  /** Afslutter den ekstra tid efter klassens lektion for alle (fx "Afslut for alle" eller en ny lektion). */
+  _endExtended(classId) {
+    const l = this.extended.get(classId);
+    if (!l) return;
+    const m = this.ext.get(l.id) || new Map();
+    this.extended.delete(classId);
+    this._dropExt(l.id);
+    for (const sid of m.keys()) this._extraEnded(sid);
+    this._broadcastClass(classId, { type: 'lesson', lesson: this._lessonInfo(classId) });
   }
 
   _lessonChanged(classId) {
@@ -258,7 +389,16 @@ class Hub {
 
   _lessonInfo(classId) {
     const l = this.lessonOf(classId);
-    return l ? { live: true, id: l.id, started: l.started, endsAt: l.endsAt } : { live: false };
+    const info = l ? { live: true, id: l.id, started: l.started, endsAt: l.endsAt } : { live: false };
+    if (l && l.writeAssignment) info.write = { assignmentId: l.writeAssignment.id, title: l.writeAssignment.title };
+    // Ekstra tid (kun til lærerens dashboard): elever, der skriver efter klassens slut
+    const base = l || this.extended.get(classId);
+    const m = base && this.ext.get(base.id);
+    const after = Math.max(Date.now(), l ? l.endsAt : 0);
+    const extra = m ? [...m].filter(([, until]) => until > after).map(([studentId, until]) => ({ studentId, until })) : [];
+    if (extra.length) info.extra = extra;
+    if (!l && extra.length) info.extended = { id: base.id, started: base.started };
+    return info;
   }
 
   _tick() {
@@ -274,6 +414,14 @@ class Hub {
     }
     for (const [classId, l] of this.lessons) {
       if (l.endsAt <= now) this.stopLesson(classId);
+    }
+    // Ekstra tid udløber elev for elev; når den sidste er færdig, er lektionen helt slut
+    for (const [classId, l] of this.extended) {
+      const m = this.ext.get(l.id) || new Map();
+      let changed = false;
+      for (const [sid, until] of m) if (until <= now) { m.delete(sid); this._extraEnded(sid); changed = true; }
+      if (!m.size) this._endExtended(classId);
+      else if (changed) this._broadcastClass(classId, { type: 'lesson', lesson: this._lessonInfo(classId) });
     }
     // Vagten er gået i stå -> opdater lærerens skærm (selv om elev-appen er stille)
     for (const [sid, rep] of this.guardReports) {
@@ -421,9 +569,10 @@ class Hub {
       if (l && (!best || preferLesson(l, best.lesson))) best = { student: s, lesson: l };
     }
     const prev = conn.active;
-    conn.active = best ? { studentId: best.student.id, classId: best.student.class_id, lessonId: best.lesson.id, endsAt: best.lesson.endsAt, solo: !!best.lesson.assignmentId } : null;
+    const wa = best && !best.lesson.assignmentId ? best.lesson.writeAssignment || null : null;
+    conn.active = best ? { studentId: best.student.id, classId: best.student.class_id, lessonId: best.lesson.id, endsAt: best.lesson.endsAt, solo: !!best.lesson.assignmentId, writeId: wa ? wa.id : 0 } : null;
     if (conn.active && (!prev || prev.lessonId !== conn.active.lessonId)) conn.activeSince = Date.now();
-    const changed = !prev !== !conn.active || (prev && conn.active && (prev.lessonId !== conn.active.lessonId || prev.endsAt !== conn.active.endsAt || prev.studentId !== conn.active.studentId));
+    const changed = !prev !== !conn.active || (prev && conn.active && (prev.lessonId !== conn.active.lessonId || prev.endsAt !== conn.active.endsAt || prev.studentId !== conn.active.studentId || prev.writeId !== conn.active.writeId));
     if (changed || !conn.lessonSent) {
       conn.lessonSent = true;
       if (conn.active) {
@@ -433,6 +582,8 @@ class Hub {
           type: 'lesson', live: true, studentId: s.id, className: solo ? `Skriveøkt: ${solo.title}` : s.class_name, teacherName: s.teacher_name,
           studentName: s.name, endsAt: best.lesson.endsAt, config: this.policyFor(s.id, s.class_id).config,
           solo: solo ? { assignmentId: solo.assignmentId, title: solo.title } : null,
+          // Skrivetime: appen åbner afleveringen i skrivevinduet (klassens lektion har writeAssignment – aldrig assignmentId)
+          write: wa ? { assignmentId: wa.id, title: wa.title } : null,
         });
       } else {
         this._send(conn, { type: 'lesson', live: false });
@@ -490,7 +641,7 @@ class Hub {
       }
       case 'hand': {
         // "Ræk hånden op": kun under lektionen
-        if (!a) return;
+        if (!a || !this.features.hand) return;
         const up = !!msg.up;
         if (up === this.hands.has(a.studentId)) return;
         if (up) {
@@ -531,7 +682,11 @@ class Hub {
           const sv = this.docs.save({ id: meta.id, class_id: meta.class_id }, msg, this.studentView(a.studentId), a.lessonId, Date.now(), Date.now() - (conn.activeSince || Date.now()));
           if (!sv.ok && !/afleveret/.test(sv.error || '')) return this._send(conn, { type: 'doc-result', id, ok: false, error: sv.error });
         }
-        const r = this.docs.submit({ id: meta.id, class_id: meta.class_id }, id, { studentName: meta.student, className: meta.class, teacherName: meta.teacher, issuer: this.publicUrl, view: this.studentView(a.studentId), force: msg.force === true });
+        // Bevis v3: hvad HolyMoly målte (policyFor), hvornår afleveringen blev oprettet, og elevens hjælpemidler
+        const r = this.docs.submit({ id: meta.id, class_id: meta.class_id }, id, {
+          studentName: meta.student, className: meta.class, teacherName: meta.teacher, issuer: this.publicUrl, view: this.studentView(a.studentId), force: msg.force === true,
+          observed: this.policyFor(a.studentId, meta.class_id).observed, assignmentCreated: this._assignmentCreated(a.studentId, meta.class_id, msg.assignmentId), aids: this._aidsOf(a.studentId),
+        });
         if (r.ok && this.writing.get(a.studentId) === id) this.writing.delete(a.studentId);
         this._send(conn, Object.assign({ type: 'doc-result', id }, r));
         if (r.ok && !r.already && !this.shuttingDown) {
@@ -597,7 +752,8 @@ class Hub {
         this._sendAssignments(conn);
         if (!this.shuttingDown) {
           const late = asg.due && now > asg.due ? ' (efter fristen)' : '';
-          const text = `Afleverede "${doc.title || 'Uden titel'}" til ${asg.title}${late}${doc.cert_id ? ' – ' + D.label(((JSON.parse(doc.result || '{}').facts) || {}).place) : ' – uden mærke'}`;
+          const res = JSON.parse(doc.result || '{}');
+          const text = `Afleverede "${doc.title || 'Uden titel'}" til ${asg.title}${late}${doc.cert_id ? ' – ' + D.label((res.facts || {}).place, { observed: res.observed, test: res.test }) : ' – uden mærke'}`;
           const l = this.lessonOf(asg.class_id);
           const ins = this._q.insertEvent.run(st.id, l ? l.id : null, now, 'info', null, text.slice(0, 500), null, null, 0, null, null);
           this._broadcastToWatchers(st.id, { type: 'event', studentId: st.id, event: { id: Number(ins.lastInsertRowid), ts: now, kind: 'info', title: text.slice(0, 500) } });
@@ -689,16 +845,16 @@ class Hub {
     // Skriveøkt hjemme: ingen billeder af skærmen – hverken live eller som skærmbillede
     if (a.solo) return;
     if (kind === 'live') {
-      if (!conn.frameRl.take()) return;
+      if (!this.features.liveScreen || !conn.frameRl.take()) return;
       const w = this.watchers.get(a.studentId);
       if (!w || w.size === 0) return;
       const out = encodeFrame({ kind: 'live', studentId: a.studentId, ts: Date.now(), screen: Number(f.header.screen) || 0, screens: Number(f.header.screens) || 1 }, f.payload);
-      for (const t of w) this._sendBinaryTeacher(t, out);
+      for (const t of w) if (t.screenOn) this._sendBinaryTeacher(t, out);
     } else if (kind === 'evidence') {
       // Kun efter lærerens "Tag skærmbillede" eller lige efter en overtrædelse – aldrig af sig selv
       const now = Date.now();
-      const requested = now < conn.screenshotUntil;
-      if (!requested && now >= conn.violationUntil) return;
+      const requested = this.features.screenshot && now < conn.screenshotUntil;
+      if (!requested && (now >= conn.violationUntil || !this.features.autoEvidence)) return;
       const lim = this._limits(a);
       if (!lim.evidenceRl.take() || ++lim.evidence > MAX_EVIDENCE_PER_LESSON) return;
       if (requested) { conn.screenshotUntil = 0; f.header.reason = 'Skærmbillede taget af læreren'; } else conn.violationUntil = 0;
@@ -734,7 +890,7 @@ class Hub {
       this.agentByStudent.delete(sid);
       const classId = this.studentClass.get(sid);
       if (this.solo.has(sid)) this.endSolo(sid); // appen lukket = skriveøkten slutter
-      if (conn.active && conn.active.studentId === sid && this.lessonOf(classId)) {
+      if (conn.active && conn.active.studentId === sid && this.classLessonFor(sid, classId)) {
         const reason = conn.byeReason ? 'Eleven lukkede appen' : 'Forbindelsen blev afbrudt';
         this.closed.set(sid, { ts: Date.now(), reason, quit: !!conn.byeReason });
         this._q.insertEvent.run(sid, conn.active.lessonId, Date.now(), conn.byeReason ? 'tamper' : 'info', null, reason, null, null, 0, null, null);
@@ -747,9 +903,9 @@ class Hub {
   _updateStream(conn) {
     let mode = 'off';
     let screen = 0;
-    if (conn.active && !conn.active.solo) {
-      const w = this.watchers.get(conn.active.studentId);
-      if (w && w.size) {
+    if (conn.active && !conn.active.solo && this.features.liveScreen) {
+      const w = [...(this.watchers.get(conn.active.studentId) || [])].filter(t => t.screenOn);
+      if (w.length) {
         mode = 'live';
         for (const t of w) screen = t.watchScreen || 0;
       }
@@ -814,20 +970,29 @@ class Hub {
         }
         break;
       }
-      case 'watch': {
+      case 'watch':
+      case 'follow': {
+        // watch = se skærmen live (+ faner og hændelser). follow = kun faner og hændelser (ingen skærm).
         const id = Number(msg.studentId);
         if (!ownStudent(id)) return;
+        const screenOn = msg.type === 'watch';
+        if (screenOn && !this.features.liveScreen) {
+          this._unwatch(t);
+          return this._sendTeacher(t, { type: 'error', code: 403, feature: 'liveScreen', message: FEATURE_OFF.liveScreen, studentId: id });
+        }
         if (this.isHome(id)) {
           this._unwatch(t);
+          if (!screenOn) return;
           return this._sendTeacher(t, { type: 'error', message: HOME_NO_SCREEN, studentId: id, home: true });
         }
         this._unwatch(t);
         t.watching = id;
+        t.screenOn = screenOn;
         t.watchScreen = Math.max(0, Math.min(7, Number(msg.screen) || 0));
         let w = this.watchers.get(id);
         if (!w) { w = new Set(); this.watchers.set(id, w); }
         w.add(t);
-        this._audit(id, `${t.teacher.name} så skærmen live`);
+        if (screenOn) this._audit(id, `${t.teacher.name} så skærmen live`);
         const conn = this.agentByStudent.get(id);
         if (conn) { conn.streamMode = null; this._updateStream(conn); }
         this._sendTeacher(t, { type: 'detail', studentId: id, detail: this.detail.get(id) || { tabs: [], apps: [] } });
@@ -849,6 +1014,7 @@ class Hub {
         // Læreren tager et skærmbillede – gemmes under elevens hændelser
         const id = Number(msg.studentId);
         if (!ownStudent(id)) return;
+        if (!this.features.screenshot) return this._sendTeacher(t, { type: 'error', code: 403, feature: 'screenshot', message: FEATURE_OFF.screenshot, studentId: id });
         if (this.isHome(id)) return this._sendTeacher(t, { type: 'error', message: HOME_NO_SCREEN, studentId: id, home: true });
         const conn = this.agentByStudent.get(id);
         if (conn && conn.active && conn.active.studentId === id) {
@@ -903,8 +1069,8 @@ class Hub {
   /** En elev har tilmeldt sig selv med klassekoden: læreren ser det straks. */
   /** Har klassen slået automatisk skærmbillede ved forbudt brug til? (standard: nej) */
   _autoEvidence(sid) {
-    // Aldrig skærmbilleder af elevens skærm derhjemme
-    if (this.isHome(sid)) return false;
+    // Aldrig skærmbilleder af elevens skærm derhjemme – og aldrig, når automatiske skærmbilleder er slået fra (beta)
+    if (this.isHome(sid) || !this.features.autoEvidence) return false;
     const classId = this.studentClass.get(sid);
     if (classId == null) return false;
     try { return this.classConfig(classId).autoEvidence === true; } catch (e) { return false; }
@@ -1149,6 +1315,9 @@ class Hub {
     if (set) for (const t of [...set]) { try { t.ws.close(4404, 'class deleted'); } catch (e) { /* */ } }
     this.teachers.delete(classId);
     this.lessons.delete(classId);
+    const e = this.extended.get(classId);
+    if (e) this.ext.delete(e.id);
+    this.extended.delete(classId);
   }
 
   /** Når en elev slettes eller får ny kode, skal en eventuel forbindelse smides af. */

@@ -20,6 +20,13 @@
       <p id="deleted" hidden></p>
       <p class="proof-mark" id="mark"></p>
       <dl class="proof-facts" id="facts"></dl>
+      <div class="proof-meaning" id="meaning">
+        <h2>Hvad betyder mærket?</h2>
+        <p id="limit-text">Mærket viser, hvad HolyMoly målte på elevens computer. Det dækker ikke afskrift fra telefon eller papir, og en computer, eleven selv har ændret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler mærket, er det ikke et tegn på snyd.</p>
+        <dl class="proof-facts"><dt>Hvad blev målt</dt><dd id="observed">–</dd></dl>
+        <p class="small" id="observed-text" hidden></p>
+        <p class="small" id="asg-created" hidden></p>
+      </div>
       <div id="owner" hidden>
         <h2>Kun for dig som lærer</h2>
         <dl class="proof-facts" id="owner-facts"></dl>
@@ -47,7 +54,7 @@
 
       <details class="muted small" id="tech">
         <summary>Teknisk: signatur</summary>
-        <p>Beviset er signeret af HolyMoly-serveren med Ed25519 (nøgle-id <code id="keyid"></code>). Navnet står ikke i beviset – kun en saltet hash, som kun serveren kan regne ud. Den signerede tekst og den offentlige nøgle:</p>
+        <p>Beviset er signeret af HolyMoly-serveren med Ed25519 (nøgle-id <code id="keyid"></code>). Navnet står ikke i beviset. Ældre beviser (version 2) har en saltet hash af navnet, som kun serveren kan regne ud. Den signerede tekst og den offentlige nøgle:</p>
         <pre id="signed"></pre>
         <pre id="pubkey"></pre>
       </details>

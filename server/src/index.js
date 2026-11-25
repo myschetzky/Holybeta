@@ -42,6 +42,30 @@ function weakPin(pin) {
   return false;
 }
 const APPROVAL_MISSING = 'Beta: skolens ja mangler. Udfyld DATAANSVARLIG, DPO_KONTAKT, DPIA_DATO og LEDELSE_JA_DATO på serveren (se docs/ENKEL.md).';
+// Beta: en server, der behandler elevdata, skal drives af skolen – eller have en databehandleraftale med en voksen/juridisk person
+const OPERATOR_MISSING = 'Serveren drives ikke af skolen, og der er ingen databehandleraftale. Bed skolens IT om at overtage driften.';
+/*
+ * Ruter, der ikke findes i enkel tilstand (beta): bestilling, platform-administration, to-faktor (undtagen TOTP),
+ * e-mail-bekræftelse, glemt adgangskode, Unilogin og priser. Svarer 404, som om de aldrig fandtes.
+ */
+const SIMPLE_OFF = /^\/api\/(school\/order|admin\/|account\/2fa\/(?!totp)|verify|password\/(forgot|reset)|auth\/unilogin\/|pricing)/;
+/*
+ * Funktioner, der kan slås fra. Beta (enkel tilstand) er én profil: ingen live-skærm, ingen skærmbilleder (heller ikke
+ * automatiske) og intet lighedstjek. Hånd op og skrivetime er med. BETA_FEATURES="liveScreen,screenshot" slår ting til,
+ * "-hand" slår fra. Uden enkel tilstand er alt slået til.
+ */
+const FEATURE_KEYS = ['liveScreen', 'screenshot', 'autoEvidence', 'similar', 'hand', 'writeLesson'];
+function featuresFor(simple, betaFeatures) {
+  const f = Object.fromEntries(FEATURE_KEYS.map(k => [k, !simple]));
+  if (simple) { f.hand = true; f.writeLesson = true; }
+  if (simple) {
+    for (const tok of String(betaFeatures || '').split(/[,\s]+/).map(s => s.trim()).filter(Boolean)) {
+      const key = FEATURE_KEYS.find(k => k.toLowerCase() === tok.replace(/^[-+]/, '').toLowerCase());
+      if (key) f[key] = !tok.startsWith('-');
+    }
+  }
+  return f;
+}
 
 function createServer(opts = {}) {
   const cfg = {
@@ -103,6 +127,11 @@ function createServer(opts = {}) {
     securityContact: opts.securityContact ?? process.env.SECURITY_CONTACT ?? '',
     // Skolens ja (enkel tilstand/beta): dataansvarlig, DPO, DPIA og ledelsens ja. Uden dem startes ingen lektioner.
     schoolApproval: schoolApprovalFrom(opts.schoolApproval),
+    // Dato for databehandleraftalen med den, der driver serveren (en voksen eller juridisk person). Tom = ingen aftale.
+    dbaDate: String(opts.dbaDate ?? process.env.DBA_DATO ?? '').trim().slice(0, 40),
+    // Hvem driver serveren – en rolle, ikke et navn (står på den offentlige forside), fx "en lærer på skolen"
+    operator: String(opts.operator ?? process.env.DRIFTSANSVARLIG ?? '').trim().slice(0, 120),
+    betaFeatures: opts.betaFeatures ?? process.env.BETA_FEATURES ?? '',
   };
   cfg.retentionDays = cfg.retention.logDays;
   // Daglig kopi af databasen i <data>/backup (VACUUM INTO – en hel, konsistent fil). Antal dage der gemmes; 0 = slået fra.
@@ -115,8 +144,17 @@ function createServer(opts = {}) {
   if (cfg.simple) { cfg.licensing = false; cfg.verifyEmail = false; cfg.require2fa = false; }
   /** Navnene på de felter i skolens ja, der mangler (tom liste = alt er udfyldt). */
   const approvalMissingFields = () => APPROVAL_FIELDS.filter(([k]) => !cfg.schoolApproval[k]).map(([, env]) => env);
-  /** Enkel tilstand: ingen lektioner eller skriveøkter, før skolens ja er udfyldt. Returnerer beskeden eller null. */
-  const lessonBlocked = () => (cfg.simple && approvalMissingFields().length ? APPROVAL_MISSING : null);
+  /** Er driften overdraget til skolen? SCHOOL_OPERATED=1 og overdragelsen er registreret (npm run enkel -- overdrag). */
+  const handedOver = () => schoolOperated && !!(db.prepare("SELECT value FROM meta WHERE key = 'school_operated_since'").get() || {}).value;
+  /** 'approval' (skolens ja mangler), 'operator' (hverken overdragelse eller databehandleraftale) eller null. */
+  const lessonBlockedReason = () => {
+    if (!cfg.simple) return null;
+    if (approvalMissingFields().length) return 'approval';
+    if (!cfg.dbaDate && !handedOver()) return 'operator';
+    return null;
+  };
+  /** Enkel tilstand: ingen lektioner eller skriveøkter, før skolens ja og driften er på plads. Returnerer beskeden eller null. */
+  const lessonBlocked = () => ({ approval: APPROVAL_MISSING, operator: OPERATOR_MISSING })[lessonBlockedReason()] || null;
   const approvalInfo = () => (approvalMissingFields().length ? null : Object.assign({}, cfg.schoolApproval));
   const log = (...a) => { if (!cfg.quiet) console.log(new Date().toISOString(), ...a); };
   const db = dbm.open(cfg.dataDir);
@@ -181,12 +219,12 @@ function createServer(opts = {}) {
 
   // Enkel tilstand uden at skolen driver serveren (SCHOOL_OPERATED=1): beviser mærkes "Testserver"
   const schoolOperated = opts.schoolOperated === true || String(opts.schoolOperated ?? process.env.SCHOOL_OPERATED ?? '') === '1';
-  // Funktioner, der kan slås fra. Beta (enkel tilstand): ingen lighedstjek mellem elevernes tekster.
-  const features = { similar: !cfg.simple };
+  // Funktioner, der kan slås fra (se featuresFor). Håndhæves i serveren, ikke kun i dashboardet.
+  const features = featuresFor(cfg.simple, cfg.betaFeatures);
   const docs = new DocStore(db, cfg.dataDir, { testServer: cfg.simple && !schoolOperated, minWords: opts.minProofWords });
   const hub = new Hub({ db, dataDir: cfg.dataDir, docs, publicUrl: cfg.publicUrl, getRules: () => rules, classConfig, log, staleMs: opts.staleMs,
     minAgentVersion: cfg.minAgentVersion, minExtensionVersion: cfg.minExtensionVersion, downloadUrl: cfg.downloadUrl,
-    requireGuard: cfg.requireGuard, compileFor: (classId, config) => ACRules.compile(rules, config || classConfig(classId)), lessonBlocked: () => lessonBlocked() });
+    requireGuard: cfg.requireGuard, compileFor: (classId, config) => ACRules.compile(rules, config || classConfig(classId)), lessonBlocked: () => lessonBlocked(), features });
 
   /* ---------------------------- auth ---------------------------- */
   const SESSION_MS = 12 * 3600_000; // uden aktivitet
@@ -413,7 +451,11 @@ function createServer(opts = {}) {
 
   const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
   // Forside, priser og jura er almindelige sider; resten er lærer-dashboardet (index.html)
-  const PAGES = new Set(['/forside', '/vilkaar', '/vilkaar-elev', '/privatliv', '/databehandleraftale', '/hent', '/tilbud', '/sikkerhed']);
+  // Beta (enkel tilstand): ingen tilbud/priser. Databehandleraftalen bliver – skolens DPO skal bruge den.
+  const PAGES = new Set(['/forside', '/vilkaar', '/vilkaar-elev', '/privatliv', '/databehandleraftale', '/hent', '/sikkerhed'].concat(cfg.simple ? [] : ['/tilbud']));
+  // Beta-forsiden (ingen priser, ingen prøveperiode, ingen Unilogin) i enkel tilstand
+  const FRONT = cfg.simple ? 'forside-beta.html' : 'forside.html';
+  const SIMPLE_HIDDEN = new Set(['/tilbud', '/tilbud.html', '/tilbud.js', '/forside.html']);
   function serveDownload(req, res, name) {
     let n;
     try { n = decodeURIComponent(name); } catch (e) { return fail(res, 404, 'Ikke fundet'); }
@@ -430,7 +472,9 @@ function createServer(opts = {}) {
     if (pathname === '/shared/rules.js') file = path.join(sharedDir, 'rules.js');
     else if (pathname === '/shared/doc.js') file = path.join(sharedDir, 'doc.js');
     else if (/^\/bevis\/[A-Za-z0-9_-]{16}$/.test(pathname) || pathname === '/bevis') file = path.join(publicDir, 'bevis.html');
-    else if (pathname === '/' && !teacherFromReq(req) && !studentFromReq(req)) file = path.join(publicDir, 'forside.html');
+    else if (cfg.simple && SIMPLE_HIDDEN.has(pathname)) return fail(res, 404, 'Ikke fundet');
+    else if (pathname === '/' && !teacherFromReq(req) && !studentFromReq(req)) file = path.join(publicDir, FRONT);
+    else if (pathname === '/forside') file = path.join(publicDir, FRONT);
     else if (PAGES.has(pathname)) file = path.join(publicDir, pathname.slice(1) + '.html');
     else if (pathname.startsWith('/hent/')) return serveDownload(req, res, pathname.slice(6));
     else {
@@ -452,7 +496,7 @@ function createServer(opts = {}) {
   /* ---------------------------- API ---------------------------- */
   /** Sletter en klasse med elever, log, skærmbilleder og dokumenter. */
   function deleteClassFully(c) {
-    hub.stopLesson(c.id);
+    hub.stopLesson(c.id, { all: true });
     const ids = db.prepare('SELECT id FROM students WHERE class_id = ?').all(c.id).map(r => r.id);
     db.prepare('DELETE FROM classes WHERE id = ?').run(c.id);
     for (const id of ids) { hub.forgetStudent(id); fs.rm(path.join(cfg.dataDir, 'evidence', String(id)), { recursive: true, force: true }, () => {}); }
@@ -631,10 +675,12 @@ function createServer(opts = {}) {
     const ip = clientIp(req);
     if (!apiRl.take(ip)) return fail(res, 429, 'For mange forespørgsler – vent lidt');
     if (m !== 'GET' && !sameOrigin(req)) return fail(res, 403, 'Forkert oprindelse');
+    if (cfg.simple && SIMPLE_OFF.test(p)) return fail(res, 404, 'Ukendt adresse');
 
     // --- offentlige ---
     if (p === '/api/info' && m === 'GET') {
-      return send(res, 200, { simple: cfg.simple, uniLogin: uni.enabled, signupRequiresCode: !!accounts.signupCodeNow(), firstTeacher: !!accounts.setupCode(), approval: approvalInfo(), approvalMissing: approvalMissingFields(), lessonBlocked: !!lessonBlocked(), signupOpen: cfg.signupOpen, licensing: cfg.licensing, trialDays: cfg.trialDays, verifyEmail: cfg.verifyEmail, require2fa: cfg.require2fa, company: cfg.company, downloads: downloadsInfo(), downloadUrl: cfg.downloadUrl, extensionUrls: cfg.extensionUrls, categories: ACRules.CATEGORIES, rulesVersion: rules.version,
+      return send(res, 200, { simple: cfg.simple, uniLogin: uni.enabled, signupRequiresCode: !!accounts.signupCodeNow(), firstTeacher: !!accounts.setupCode(), approval: approvalInfo(), approvalMissing: approvalMissingFields(), lessonBlocked: !!lessonBlocked(), lessonBlockedReason: lessonBlockedReason(),
+        operator: cfg.simple ? { role: cfg.operator, dba: !!cfg.dbaDate, handedOver: handedOver(), testServer: docs.testServer } : null, signupOpen: cfg.signupOpen, licensing: cfg.licensing, trialDays: cfg.trialDays, verifyEmail: cfg.verifyEmail, require2fa: cfg.require2fa, company: cfg.company, downloads: downloadsInfo(), downloadUrl: cfg.downloadUrl, extensionUrls: cfg.extensionUrls, categories: ACRules.CATEGORIES, rulesVersion: rules.version,
         retention: RET.publicInfo(cfg.retention), features });
     }
     if (await accounts.publicRoutes(req, res, p, m)) return;
@@ -746,6 +792,8 @@ function createServer(opts = {}) {
       const t = teacherFromReq(req);
       const o = t && docs.certificateOwner(bm[1]);
       if (o && ownStudent(t, o.studentId)) c.owner = { student: o.student, class: o.class, title: o.title };
+      // En indlogget lærer får at vide, at beviset tilhører en anden lærers elev (men ikke hvem)
+      else if (o) c.notMine = true;
       return send(res, 200, c);
     }
     if (p === '/api/student/me' && m === 'GET') {
@@ -1003,13 +1051,32 @@ function createServer(opts = {}) {
       const b = await readJson(req);
       if (b.action === 'start') {
         const blocked = lessonBlocked();
-        if (blocked) return send(res, 409, { error: blocked, needs: 'approval' });
+        if (blocked) return send(res, 409, { error: blocked, needs: lessonBlockedReason() });
         const lic = accounts.canTeach(teacher);
         if (!lic.ok) return send(res, 402, { error: lic.error, needs: 'license' });
         const minutes = U.clampNum(b.minutes, 5, cfg.maxLessonMinutes, classConfig(c.id).lessonMinutes);
-        hub.startLesson(c.id, minutes);
+        // Skrivetime: eleverne skriver én bestemt aflevering. Den skal høre til denne klasse.
+        let write;
+        if (b.assignmentId != null && b.assignmentId !== '' && b.assignmentId !== 0) {
+          if (!features.writeLesson) return fail(res, 404, 'Ikke slået til på denne server');
+          const asg = db.prepare('SELECT id, title FROM assignments WHERE id = ? AND class_id = ?').get(Number(b.assignmentId) || 0, c.id);
+          if (!asg) return fail(res, 404, 'Afleveringen findes ikke');
+          write = { id: asg.id, title: asg.title };
+        } else if ('assignmentId' in b) write = null;
+        hub.startLesson(c.id, minutes, write);
       } else if (b.action === 'stop') {
-        hub.stopLesson(c.id);
+        // all: true = "Afslut for alle". Ellers skriver elever med ekstra tid færdig.
+        hub.stopLesson(c.id, { all: b.all === true });
+      } else if (b.action === 'extend') {
+        // Ekstra tid til enkelte elever (fx ordblinde): samme lektion, bare længere for dem
+        const minutes = Number(b.minutes);
+        if (![10, 15, 30].includes(minutes)) return fail(res, 400, 'Vælg 10, 15 eller 30 minutter');
+        const ids = (Array.isArray(b.studentIds) ? b.studentIds : []).map(Number).filter(n => Number.isInteger(n) && n > 0).slice(0, 200);
+        if (!ids.length) return fail(res, 400, 'Vælg mindst én elev');
+        const own = new Set(db.prepare('SELECT id FROM students WHERE class_id = ?').all(c.id).map(r => r.id));
+        if (ids.some(id => !own.has(id))) return fail(res, 404, 'Eleven findes ikke');
+        const r = hub.extendLesson(c.id, ids, minutes);
+        if (!r.ok) return send(res, 409, { error: r.error });
       } else return fail(res, 400, 'Ukendt handling');
       return send(res, 200, { lesson: hub._lessonInfo(c.id) });
     }
@@ -1058,9 +1125,14 @@ function createServer(opts = {}) {
         return send(res, 200, {
           id: asg.id, classId: asg.class_id, title: asg.title, description: asg.description, due: asg.due, home: !!asg.home, created: asg.created,
           students: rows.map((r) => {
-            let reasons = [], place = '';
-            try { const res = r.result ? JSON.parse(r.result) : {}; reasons = res.reasons || []; place = (res.facts && res.facts.place) || ''; } catch (e) { /* */ }
-            return { id: r.id, name: r.name, submission: r.doc_id ? { docId: r.doc_id, title: r.doc_title || '', submitted: r.submitted, certId: r.cert_id || null, late: !!(asg.due && r.submitted > asg.due), reasons, place } : null };
+            let reasons = [], place = '', observed, test = docs.testServer;
+            try {
+              const res = r.result ? JSON.parse(r.result) : {};
+              reasons = res.reasons || []; place = (res.facts && res.facts.place) || '';
+              if (Array.isArray(res.observed)) observed = res.observed;
+              if (typeof res.test === 'boolean') test = res.test;
+            } catch (e) { /* */ }
+            return { id: r.id, name: r.name, submission: r.doc_id ? { docId: r.doc_id, title: r.doc_title || '', submitted: r.submitted, certId: r.cert_id || null, late: !!(asg.due && r.submitted > asg.due), reasons, place, observed, test } : null };
           }),
         });
       }
@@ -1412,6 +1484,7 @@ function createServer(opts = {}) {
         const setup = accounts.setupCode();
         if (setup) log('Opsætningskode til første lærer: ' + setup);
         if (cfg.simple && approvalMissingFields().length) log('ADVARSEL: ' + APPROVAL_MISSING + ' Mangler: ' + approvalMissingFields().join(', '));
+        else if (lessonBlockedReason() === 'operator') log('ADVARSEL: ' + OPERATOR_MISSING + ' (DBA_DATO, eller SCHOOL_OPERATED=1 og npm run enkel -- overdrag)');
         log(startupLine());
         resolve(server.address().port);
       }));

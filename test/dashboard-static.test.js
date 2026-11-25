@@ -58,3 +58,44 @@ test('klasseværelset: start-knappen er slået fra uden skolens ja, og feltnavne
   assert.ok(src.includes("'Venter på skolens ja'"));
   assert.doesNotMatch(src, /text: r\.approval/, 'serverens besked med variabelnavne vises ikke for læreren');
 });
+
+/** Kører room-write.js med en lille falsk DOM og returnerer HM.room.write(ctx). */
+function roomWrite(state) {
+  const vm = require('node:vm');
+  const window = {};
+  vm.runInNewContext(pub('room-write.js'), { window, setInterval: () => 0, clearInterval() {}, Date });
+  const dialogs = [];
+  const text = (n) => (n == null ? '' : typeof n === 'string' ? n : (n.text || '') + (n.kids || []).map(text).join(''));
+  const h = (tag, attrs, ...kids) => ({ tag, text: (attrs || {}).text, kids: kids.flat() });
+  const ctx = { state, classId: 1, h, $: () => null, api: async () => ({}), toast() {}, updateLessonUi() {},
+    dialog: async (d) => { dialogs.push({ title: d.title, body: (Array.isArray(d.body) ? d.body : [d.body]).map(text), actions: [...d.actions].map(a => a.label).join(' | ') }); return 'keep'; } };
+  return { rw: window.HM.room.write(ctx), dialogs };
+}
+
+test('skrivetime og ekstra tid i klasseværelset (room-write.js)', async () => {
+  const until = Date.now() + 3600_000;
+  const kl = new Date(until).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' }).replace(':', '.');
+  const state = {
+    info: { features: { liveScreen: false, screenshot: false, writeLesson: true } },
+    students: new Map([[1, { name: 'Anna' }], [2, { name: 'Bo' }], [3, { name: 'Carl' }]]), views: new Map(), open: null,
+    lesson: { live: true, endsAt: Date.now() + 600_000, write: { assignmentId: 7, title: 'Novelleanalyse' }, extra: [{ studentId: 1, until }, { studentId: 2, until: until - 60_000 }] },
+  };
+  const { rw, dialogs } = roomWrite(state);
+  assert.strictEqual(rw.pillText(state.lesson, 52), 'Skrivetime · Novelleanalyse · 52 min tilbage');
+  assert.strictEqual(rw.pillText({ live: true }, 30), 'Lektion · 30 min tilbage');
+  assert.strictEqual(rw.watchType(), 'follow', 'uden live-skærm følger dashboardet kun faner og hændelser');
+  assert.strictEqual(rw.hasExtra(), true);
+  assert.strictEqual(JSON.stringify(await rw.stopDialog()), JSON.stringify({ all: false }));
+  assert.strictEqual(dialogs[0].body[0], `2 elever har ekstra tid til kl. ${kl}: Anna, Bo.`);
+  assert.strictEqual(dialogs[0].actions, 'Annuller | Afslut for alle | Afslut, men lad dem skrive færdig');
+  state.info.features.liveScreen = true;
+  assert.strictEqual(roomWrite(state).rw.watchType(), 'watch');
+
+  // Dialogen og knapperne findes i dashboardet
+  const src = pub('room-write.js');
+  for (const t of ['Skal eleverne skrive en opgave?', "'Start skrivetime'", "'+ tid'", 'Afslut for alle']) assert.ok(src.includes(t), t);
+  assert.match(pub('index.html'), /<button class="btn" id="d-extra" hidden>\+ tid<\/button>/);
+  assert.match(pub('index.html'), /<script src="\/room-write\.js"><\/script>/);
+  assert.match(pub('app.js'), /rw \? rw\.watchType\(\) : 'watch'/);
+  assert.match(pub('app.js'), /action: 'stop', all: choice\.all/);
+});

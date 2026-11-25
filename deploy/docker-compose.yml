@@ -16,6 +16,13 @@ services:
       DPO_KONTAKT: ${DPO_KONTAKT:-}
       DPIA_DATO: ${DPIA_DATO:-}
       LEDELSE_JA_DATO: ${LEDELSE_JA_DATO:-}
+      # Driften (beta): dato for databehandleraftalen med den, der driver serveren (en voksen eller juridisk person).
+      # Uden den (og uden overdragelse til skolens IT) startes ingen lektioner i enkel tilstand
+      DBA_DATO: ${DBA_DATO:-}
+      # Hvem driver serveren – en rolle, ikke et navn (står på forsiden), fx "en lærer på skolen"
+      DRIFTSANSVARLIG: ${DRIFTSANSVARLIG:-}
+      # Beta-funktioner, der er slået fra som standard: liveScreen, screenshot, autoEvidence, similar (fx "liveScreen,screenshot")
+      BETA_FEATURES: ${BETA_FEATURES:-}
       # 1 = Windows/Mac-elever skal have HolyMoly-vagten for at være grønne. Fra i beta
       REQUIRE_GUARD: ${REQUIRE_GUARD:-0}
       # Ældste elev-app og browserudvidelse, der må forbinde (tom = alle)

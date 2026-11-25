@@ -269,7 +269,7 @@
     $('submit').disabled = !can;
     $('del').hidden = !(doc && !doc.submitted);
     const n = $('notice');
-    if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${labelFor(doc.result.place)}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres.'; n.hidden = false; }
+    if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${(doc.result.label || labelFor(doc.result.place))}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres.'; n.hidden = false; }
     else if (!lessonLive) { n.textContent = 'Du kan skrive her, når din lærer har startet en lektion eller du har startet en skriveøkt.'; n.hidden = false; }
     else n.hidden = true;
     showPreview();
@@ -311,6 +311,24 @@
     await open(d.id);
     ed.focus();
   }
+  /** Afleveringens kladde – eller et nyt dokument til den (writer.openForAssignment i hovedprocessen). */
+  async function openFor(assignmentId) {
+    await saveNow();
+    const r = await window.hmw.openFor(assignmentId);
+    if (!r || !r.ok) { toast((r && r.error) || 'Kunne ikke åbne afleveringen'); return; }
+    await open(r.id);
+    ed.focus();
+  }
+
+  /* ---------- skrivetime: læreren har valgt en opgave ---------- */
+  function setWriteLesson(w) {
+    const b = $('write-banner');
+    b.hidden = !(w && w.title);
+    b.textContent = w && w.title ? `Skrivetime: ${w.title}. Dokumentet afleveres til opgaven, når du trykker "Afslut dokument".` : '';
+  }
+  window.hmw.onWriteLesson(setWriteLesson);
+  // Hovedprocessen har åbnet kladden til skrivetimen (vinduet blinker – fokus tages ikke)
+  window.hmw.onOpenDoc((id) => { if (id && (!doc || doc.id !== id)) open(id); });
   $('docs').addEventListener('change', (e) => open(e.target.value));
   $('new').addEventListener('click', () => newDoc());
 
@@ -393,7 +411,7 @@
     const body = $('r-body');
     body.replaceChildren();
     if (r.certId) {
-      $('r-title').textContent = labelFor(r.place);
+      $('r-title').textContent = r.label || labelFor(r.place);
       const box = document.createElement('div'); box.className = 'cert';
       const code = document.createElement('div'); code.className = 'code'; code.textContent = 'HM-' + r.certId.slice(0, 8).toUpperCase();
       const p = document.createElement('p'); p.textContent = 'Dokumentet har fået mærket. Det står også i sidefoden, når du gemmer det som Word. Beviset dækker skriveforløbet på computeren – ikke afskrift fra telefon eller papir. Koden og linket kan bruges til at tjekke det.';
@@ -425,7 +443,8 @@
   }
   const HOME_TEXT = 'Hjemme blokerer HolyMoly kun AI-tjenester og fjernstyring, mens skrivevinduet er åbent. Din lærer ser kun, at du skriver, din lampe og om noget blev blokeret – ikke din skærm, dine faner, programmer eller hvilke sider du besøger. Hjemme tages der aldrig skærmbilleder.';
   async function renderAssignments() {
-    const docs = (await window.hmw.state()).docs.filter(d => d.submitted);
+    const all = (await window.hmw.state()).docs;
+    const docs = all.filter(d => d.submitted);
     const ul = $('asg-list');
     if (!assignments.length) { ul.replaceChildren(el('li', 'empty', 'Din lærer har ikke lagt nogen afleveringer ud.')); return; }
     ul.replaceChildren(...assignments.map((a) => {
@@ -437,7 +456,9 @@
       if (a.submission) li.append(el('div', 'st' + (a.submission.certified ? ' ok' : ''), `Afleveret: "${a.submission.title || 'Uden titel'}"` + (a.submission.certified ? ' – ' + labels.base : ' – uden bevis')));
       const row = el('div', 'row');
       const canHome = a.home && !lessonLive && !(a.due && Date.now() > a.due);
-      const write = el('button', 'btn', canHome ? 'Skriv hjemme' : 'Skriv besvarelse');
+      // Har eleven en kladde til afleveringen, fortsætter knappen den (i stedet for et nyt dokument)
+      const draft = all.find(d => d.assignmentId === a.id && !d.submitted);
+      const write = el('button', 'btn', draft ? `Fortsæt kladde (${draft.words || 0} ord)` : canHome ? 'Skriv hjemme' : 'Skriv besvarelse');
       write.type = 'button';
       write.disabled = !lessonLive && !canHome;
       write.title = lessonLive || canHome ? '' : (a.home ? 'Fristen er overskredet' : 'Denne aflevering skrives i timen, når din lærer har startet en lektion');
@@ -451,7 +472,7 @@
           toast('Skriveøkten er startet. HolyMoly er aktiv, til du lukker skrivevinduet.');
         }
         $('asg').close();
-        await newDoc({ assignmentId: a.id });
+        await openFor(a.id);
       });
       row.append(write);
       if (a.home) li.append(el('div', 'muted', 'Må skrives hjemme. ' + HOME_TEXT));
@@ -508,7 +529,9 @@
     const s = await window.hmw.state();
     lessonLive = s.lesson;
     if (s.labels) labels = s.labels;
-    if (s.docs.length) await open(s.docs[0].id); else await newDoc();
+    setWriteLesson(s.writeLesson);
+    const first = (s.openId && s.docs.find(d => d.id === s.openId)) || s.docs[0];
+    if (first) await open(first.id); else await newDoc();
     applyMode();
   })();
 })();

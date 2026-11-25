@@ -5,6 +5,7 @@
  *   npm run enkel                         starter serveren (data gemmes i server/data)
  *   npm run enkel -- nulstil <brugernavn> laver en ny midlertidig adgangskode til en lærer
  *   npm run enkel -- godkend <brugernavn> godkender en ny lærer (når ingen kollega kan gøre det)
+ *   npm run enkel -- overdrag             registrerer, at skolens IT har overtaget driften (kræver SCHOOL_OPERATED=1)
  *
  * Lærere opretter sig med navn, brugernavn og adgangskode (den første med opsætningskoden, som skrives her ved start).
  * Elever skriver klassekoden, deres navn og en kode på 4 cifre i HolyMoly-appen. Lektioner kræver skolens ja:
@@ -45,6 +46,17 @@ if (process.argv[2] === 'godkend') {
   if (t.approved) { console.log(`${t.name} (${user}) er allerede godkendt.`); process.exit(0); }
   db.prepare('UPDATE teachers SET approved = ? WHERE id = ?').run(Date.now(), t.id);
   console.log(`${t.name} (${user}) er godkendt.`);
+  process.exit(0);
+}
+
+if (process.argv[2] === 'overdrag') {
+  // Skolens IT har overtaget serveren og signeringsnøglen. Sammen med SCHOOL_OPERATED=1 kan der startes lektioner uden DBA_DATO.
+  const db = require('../server/src/db.js').open(DATA_DIR);
+  const cur = db.prepare("SELECT value FROM meta WHERE key = 'school_operated_since'").get();
+  if (cur) { console.log(`Driften blev overdraget til skolen ${new Date(Number(cur.value)).toISOString().slice(0, 10)}.`); process.exit(0); }
+  db.prepare("INSERT INTO meta (key, value) VALUES ('school_operated_since', ?)").run(String(Date.now()));
+  console.log('Driften er registreret som overdraget til skolen.');
+  if (String(process.env.SCHOOL_OPERATED || '') !== '1') console.log('Husk også SCHOOL_OPERATED=1 i miljøet – ellers er det stadig en testserver.');
   process.exit(0);
 }
 

@@ -122,6 +122,21 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .price-notes p { color: var(--muted); }
 @media (max-width: 860px) { .pricing { grid-template-columns: 1fr; gap: 32px; } .price-box { padding: 24px; } }
 
+/* beta-forsiden: nødprocedure, status og skolens ja */
+.beta-hero { padding-bottom: 56px; }
+.beta-box { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; padding: 16px 20px; margin-top: 24px; max-width: 760px; background: var(--bg); }
+.beta-box h2 { font-size: 19px; margin-bottom: 6px; }
+.beta-box p { color: var(--text); }
+.beta-box.emergency { border-left-color: var(--red); }
+.beta-box.status.test { border-left-color: var(--grey); }
+.checklist { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.checklist li { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.checklist .mark { font-weight: 700; color: var(--muted); }
+.checklist .state { color: var(--muted); font-size: 15px; }
+.checklist li.ok .mark { color: #15803d; }
+.checklist li.missing .mark { color: var(--red); }
+.checklist li.missing .state { color: var(--red); }
+
 /* spørgsmål */
 .faq { border-top: 1px solid var(--line); }
 .faq details { border-bottom: 1px solid var(--line); }

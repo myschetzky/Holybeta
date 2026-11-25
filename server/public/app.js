@@ -373,10 +373,16 @@
     for (const s of cls.students) if (s.joined) state.students.set(s.id, s);
     // Beta: uden skolens ja kan lektioner ikke startes (knappen er slået fra, og banneret siger hvorfor)
     if (info.lessonBlocked) {
+      const why = info.lessonBlockedReason === 'operator'
+        ? 'Lektioner kan ikke startes endnu – serveren drives ikke af skolen, og der er ingen databehandleraftale. Eleverne kan godt tilmelde sig.'
+        : 'Lektioner kan ikke startes endnu – skolen har ikke givet sit ja. Eleverne kan godt tilmelde sig.';
       $('.room-wrap').prepend(h('div', { class: 'banner warn', role: 'status', id: 'approval-banner', style: 'margin-bottom:12px' },
-        h('span', { text: 'Lektioner kan ikke startes endnu – skolen har ikke givet sit ja. Eleverne kan godt tilmelde sig.' })));
+        h('span', { text: why })));
       if (!(cls.lesson && cls.lesson.live)) { $('#lesson-btn').disabled = true; $('#lesson-btn').title = 'Venter på skolens ja'; }
     }
+
+    // Skrivetime, ekstra tid og funktioner, der er slået fra (room-write.js)
+    const rw = window.HM.room && window.HM.room.write ? window.HM.room.write({ state, classId, h, $, api, dialog, toast, updateLessonUi: () => updateLessonUi() }) : null;
 
     $('#class-name').textContent = cls.name;
     $('#back').addEventListener('click', () => route('/'));
@@ -424,7 +430,7 @@
       toast('Tager skærmbillede…');
     });
     $('#d-fullscreen').addEventListener('click', () => { const sc = $('.screen'); if (document.fullscreenElement) document.exitFullscreen(); else sc.requestFullscreen().catch(() => {}); });
-    $('#d-screen-sel').addEventListener('change', (e) => { if (!isHome(state.open)) send({ type: 'watch', studentId: state.open, screen: Number(e.target.value) }); });
+    $('#d-screen-sel').addEventListener('change', (e) => { if (!isHome(state.open)) send({ type: rw ? rw.watchType() : 'watch', studentId: state.open, screen: Number(e.target.value) }); });
     const onKey = (e) => { if (e.key === 'Escape' && state.open && !$('#dlg').open) closeDrawer(); };
     document.addEventListener('keydown', onKey);
 
@@ -654,7 +660,7 @@
       if (state.lesson && state.lesson.live) {
         const tick = () => {
           const left = Math.max(0, state.lesson.endsAt - Date.now());
-          pill.textContent = `Lektion · ${Math.ceil(left / 60000)} min tilbage`;
+          pill.textContent = rw ? rw.pillText(state.lesson, Math.ceil(left / 60000)) : `Lektion · ${Math.ceil(left / 60000)} min tilbage`;
           pill.title = 'Lektionen slutter ' + fmtTime(state.lesson.endsAt);
         };
         tick();
@@ -675,30 +681,37 @@
         if (state.info.lessonBlocked) btn.title = 'Venter på skolens ja'; else btn.removeAttribute('title');
         $('#toolbar-live').hidden = true;
       }
+      if (rw) rw.updateUi();
     }
 
     async function toggleLesson() {
       if (state.lesson && state.lesson.live) {
-        const ok = await dialog({ title: 'Afslut lektionen?', body: h('p', { text: 'Overvågning, blokering og frysning stopper for alle elever i klassen.' }), actions: [{ label: 'Annuller', value: false }, { label: 'Afslut lektion', kind: 'danger', value: true }] });
-        if (!ok) return;
-        const r = await api(`/api/classes/${classId}/lesson`, { method: 'POST', body: { action: 'stop' } });
+        // Har nogle elever ekstra tid, vælger læreren, om de må skrive færdig
+        const choice = rw && rw.hasExtra() ? await rw.stopDialog()
+          : ((await dialog({ title: 'Afslut lektionen?', body: h('p', { text: 'Overvågning, blokering og frysning stopper for alle elever i klassen.' }), actions: [{ label: 'Annuller', value: false }, { label: 'Afslut lektion', kind: 'danger', value: true }] })) ? { all: false } : null);
+        if (!choice) return;
+        const r = await api(`/api/classes/${classId}/lesson`, { method: 'POST', body: { action: 'stop', all: choice.all } });
         state.lesson = r.lesson;
         updateLessonUi();
         showReport(); // overblik over timen, lige når den er slut
         return;
       }
       const sel = h('select', { name: 'minutes' }, ...[45, 60, 90, 120, 180, 240].map(m => h('option', { value: m, text: m + ' minutter', selected: m === (state.cls.config.lessonMinutes || 90) })));
-      const r = await dialog({
+      // Skrivetime: "Skal eleverne skrive en opgave?" (room-write.js)
+      const write = rw ? await rw.startFields() : null;
+      const shown = dialog({
         title: 'Start lektion',
-        body: [h('p', { class: 'muted', text: 'Elever med appen åben bliver overvåget og blokeret indtil lektionen slutter. Lektionen stopper automatisk.' }), h('label', {}, 'Varighed', sel)],
+        body: [h('p', { class: 'muted', text: 'Elever med appen åben bliver overvåget og blokeret indtil lektionen slutter. Lektionen stopper automatisk.' }), h('label', {}, 'Varighed', sel), ...(write ? write.nodes : [])],
         actions: [{ label: 'Annuller' }, { label: 'Start', kind: 'primary', submit: true, run: async () => {
-          try { return await api(`/api/classes/${classId}/lesson`, { method: 'POST', body: { action: 'start', minutes: Number(sel.value) } }); } catch (ex) {
+          try { return await api(`/api/classes/${classId}/lesson`, { method: 'POST', body: Object.assign({ action: 'start', minutes: Number(sel.value) }, write ? write.payload() : {}) }); } catch (ex) {
             // Beta: serveren starter ingen lektioner, før skolens ja er udfyldt
             if (/skolens ja mangler/i.test(ex.message)) return { approval: ex.message };
             throw ex;
           }
         } }],
       });
+      if (write) write.wire();
+      const r = await shown;
       if (r && r.approval) {
         await dialog({
           title: 'Skolens ja mangler',
@@ -878,7 +891,8 @@
     const localInput = (ts) => { const d = new Date(ts); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
     async function downloadWord(docId) {
       const d = await api('/api/docs/' + docId);
-      const mark = d.certId ? { code: 'HM-' + d.certId.slice(0, 8).toUpperCase(), url: `${location.origin}/bevis/${d.certId}`, place: d.place } : null;
+      // Mærket med det, der blev målt (observed) og "TESTSERVER" – samme tekst og farve som elevens egen Word-fil
+      const mark = d.certId ? { code: 'HM-' + d.certId.slice(0, 8).toUpperCase(), url: `${location.origin}/bevis/${d.certId}`, place: d.place, observed: d.observed, test: d.test } : null;
       const blob = new Blob([HMDoc.toDocx(d.blocks, { title: d.title, mark, readOnly: true })], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
       const a = h('a', { href: URL.createObjectURL(blob), download: (d.title || 'Dokument').replace(/[\\/:*?"<>|]/g, '') + '.docx' });
       document.body.append(a); a.click(); a.remove();
@@ -937,7 +951,9 @@
           const status = !sub ? h('span', { class: 'muted', text: 'Ikke afleveret' })
             : h('div', {}, h('div', { text: sub.title || 'Uden titel' }), h('div', { class: 'muted small', text: fmtDateTime(sub.submitted) + (sub.place === 'hjemme' ? ' · skrevet hjemme' : sub.place === 'lektion og hjemme' ? ' · skrevet i timen og hjemme' : '') + (sub.late ? ' · efter fristen' : '') }));
           // Uden bevis er ikke en anklage: neutral grå tekst (årsagen står i elevens dokument under Dokumenter)
-          const mark = !sub ? null : sub.certId ? h('span', { class: 'badge green', text: HMDoc.label(sub.place) })
+          // Fra en testserver: badge 'Testserver' i stedet for et grønt mærke. Uden vagt: gråt mærke med "kun skrivevinduet".
+          const mark = !sub ? null : sub.certId ? (sub.test ? h('span', { class: 'badge', title: HMDoc.label(sub.place, { observed: sub.observed, test: true }), text: 'Testserver' })
+            : h('span', { class: 'badge' + (HMDoc.markGreen({ observed: sub.observed }) ? ' green' : ''), text: HMDoc.label(sub.place, { observed: sub.observed }) }))
             : h('span', { class: 'muted small', title: (sub.reasons || []).join('; '), text: 'Uden bevis' });
           const acts = sub ? h('div', { class: 'row-actions start' },
             h('button', { class: 'btn small', type: 'button', text: 'Hent Word', onclick: () => downloadWord(sub.docId).catch(e => toast(e.message)) }),
@@ -1160,7 +1176,7 @@
         return;
       }
       if (state.watching === id) return;
-      send({ type: 'watch', studentId: id, screen: screen || 0 });
+      send({ type: rw ? rw.watchType() : 'watch', studentId: id, screen: screen || 0 });
       state.watching = id;
     }
     function closeDrawer() {
@@ -1191,6 +1207,7 @@
       $('#d-freeze').textContent = v.frozen ? 'Optø' : 'Frys';
       $('#d-hand').hidden = !v.hand;
       $('#d-freeze').disabled = !(state.lesson && state.lesson.live);
+      if (rw) rw.updateDrawer(id);
       const home = !!v.solo;
       const shot = $('#d-shot');
       shot.disabled = home || !(state.lesson && state.lesson.live && v.online);
@@ -1341,14 +1358,14 @@
         return;
       }
       const word = h('button', { class: 'btn small', text: 'Hent som Word', onclick: () => {
-        const mark = d.certId ? { code: proofCode(d.certId), url: `${location.origin}/bevis/${d.certId}`, place: d.place } : null;
+        const mark = d.certId ? { code: proofCode(d.certId), url: `${location.origin}/bevis/${d.certId}`, place: d.place, observed: d.observed, test: d.test } : null;
         const blob = new Blob([HMDoc.toDocx(d.blocks, { title: d.title, author: d.studentName || '', mark, readOnly: true })], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
         const a = h('a', { href: URL.createObjectURL(blob), download: (d.title || 'Dokument').replace(/[\\/:*?"<>|]/g, '') + '.docx' });
         document.body.append(a); a.click(); a.remove();
       } });
       const status = d.certId
         ? h('div', { class: 'sec' }, h('div', { class: 'proof-head ok', text: '✓ Skrive-bevis ' + proofCode(d.certId) }),
-          h('p', { class: 'small' }, HMDoc.label(d.place) + '. ' + HMDoc.LIMIT_TEXT + ' ', h('a', { href: '/bevis/' + d.certId, target: '_blank', rel: 'noopener', text: 'Se beviset' })))
+          h('p', { class: 'small' }, HMDoc.label(d.place, { observed: d.observed, test: d.test }) + '. ' + HMDoc.LIMIT_TEXT + ' ', h('a', { href: '/bevis/' + d.certId, target: '_blank', rel: 'noopener', text: 'Se beviset' })))
         : h('div', { class: 'sec' }, h('div', { class: 'proof-head', text: d.submitted ? 'Afleveret uden bevis' : 'Ikke afleveret endnu – sådan ser det ud lige nu:' }),
           d.reasons.length ? h('ul', { class: 'small' }, ...d.reasons.map(x => h('li', { class: 'violation grey', text: x }))) : h('p', { class: 'small muted', text: 'Indtil videre er der intet, der forhindrer et bevis.' }),
           d.submitted ? h('p', { class: 'muted small', text: 'Manglende flueben er ikke bevis for snyd. En snydsag kræver altid, at eleven bliver hørt.' }) : null);
@@ -1466,6 +1483,7 @@
       clearInterval(state.lessonTimer);
       document.removeEventListener('click', closeMenu);
       document.removeEventListener('keydown', onKey);
+      if (rw) rw.cleanup();
       cleanupInfo();
       if (state.ws) state.ws.close();
     };

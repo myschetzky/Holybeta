@@ -191,6 +191,15 @@ function open(dataDir) {
   // Skriveøkt: en elev skriver en aflevering hjemme – en "lektion" for kun den elev
   const lc = new Set(db.prepare('PRAGMA table_info(lessons)').all().map(c => c.name));
   if (!lc.has('student_id')) db.exec('ALTER TABLE lessons ADD COLUMN student_id INTEGER');
+  // Skrivetime: klassens lektion, hvor eleverne skriver én bestemt aflevering
+  if (!lc.has('write_assignment_id')) db.exec('ALTER TABLE lessons ADD COLUMN write_assignment_id INTEGER');
+  // Ekstra tid: samme lektion (samme id) varer længere for enkelte elever
+  db.exec(`CREATE TABLE IF NOT EXISTS lesson_extensions (
+    lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    ends_at INTEGER NOT NULL,
+    PRIMARY KEY (lesson_id, student_id)
+  )`);
   const ac = new Set(db.prepare('PRAGMA table_info(assignments)').all().map(c => c.name));
   if (!ac.has('home')) db.exec('ALTER TABLE assignments ADD COLUMN home INTEGER NOT NULL DEFAULT 0');
   // Unilogin: skolens institutionsnummer (lærere fra institutionen kobles automatisk på) og lærerens institutioner

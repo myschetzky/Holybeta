@@ -31,12 +31,12 @@ function setup(opts) {
   return { dir, db, docs: new DocStore(db, dir, opts), anna: { id: 1, class_id: 1 }, done };
 }
 
-function write(docs, student, fullText, { start = 1_000_000, view = () => green, stats = {}, id = crypto.randomUUID(), step = 40, blocks = blocksOf } = {}) {
+function write(docs, student, fullText, { start = 1_000_000, view = () => green, stats = {}, id = crypto.randomUUID(), step = 40, blocks = blocksOf, lesson = 1 } = {}) {
   let t = start;
   let last;
   for (let n = step; ; n += step) {
     const text = fullText.slice(0, Math.min(n, fullText.length));
-    last = docs.save(student, { id, title: 'Romantikken', blocks: blocks(text), stats: Object.assign({ typed: Math.round(text.length * 1.15) + 12, deleted: Math.round(text.length * 0.1), keystrokes: text.length + 20, maxCps: 6, regularity: 0.7 }, stats) }, view(t), 1, t);
+    last = docs.save(student, { id, title: 'Romantikken', blocks: blocks(text), stats: Object.assign({ typed: Math.round(text.length * 1.15) + 12, deleted: Math.round(text.length * 0.1), keystrokes: text.length + 20, maxCps: 6, regularity: 0.7 }, stats) }, view(t), lesson, t);
     assert.ok(last.ok, last.error);
     if (n >= fullText.length) break;
     t += 5000;
@@ -71,13 +71,168 @@ test('A: mærket siger, hvad HolyMoly har set – og Word-filens sidefod har for
   const z = D.toDocx(blocks, { title: 'X', mark: { code: 'HM-ABCD1234', url: 'https://holymoly.test/bevis/abc', place: 'hjemme' } });
   const footer = new TextDecoder().decode(await D.readZipEntry(z, 'word/footer1.xml', inflateRaw));
   assert.match(footer, /✓ Tastet i HolyMoly – intet indsat · hjemme uden opsyn/);
-  assert.match(footer, /Dækker skriveforløbet på computeren – ikke afskrift fra telefon eller papir\. 6 ord\./);
+  assert.match(footer, /Mærket viser, hvad HolyMoly målte på elevens computer\. Det dækker ikke afskrift fra telefon eller papir, og en computer, eleven selv har ændret, eller en maskine, der taster som et menneske, kan ikke udelukkes\. Mangler mærket, er det ikke et tegn på snyd\. 6 ord\./);
   assert.ok(!/Skrevet uden AI/.test(footer));
   // Det gamle mærke står ingen steder i koden længere
   for (const f of ['shared/doc.js', 'agent/src/doc.js', 'agent/renderer/write.html', 'agent/renderer/write.js', 'agent/src/writer.js', 'server/public/app.js', 'server/public/bevis.js', 'server/public/bevis.html']) {
     assert.ok(!/Skrevet uden AI/.test(fs.readFileSync(path.join(__dirname, '..', f), 'utf8')), f);
   }
   assert.strictEqual(fs.readFileSync(path.join(__dirname, '..', 'agent/src/doc.js'), 'utf8'), fs.readFileSync(path.join(__dirname, '..', 'shared/doc.js'), 'utf8'), 'npm run sync');
+});
+
+test('H: mærket v3 – "kun skrivevinduet" uden vagt, "TESTSERVER" fra en testserver, og v2 vises som før', () => {
+  const only = ['skrivevindue'], both = ['skrivevindue', 'vagt'];
+  assert.strictEqual(D.label('hjemme', { observed: only }), '✓ Tastet i HolyMoly – intet indsat · hjemme · kun skrivevinduet');
+  assert.match(D.label('hjemme', { observed: only }), /kun skrivevinduet/);
+  assert.strictEqual(D.label('klasse', { observed: only }), '✓ Tastet i HolyMoly – intet indsat · i timen · kun skrivevinduet');
+  assert.strictEqual(D.label('klasse', { observed: both }), '✓ Tastet i HolyMoly – intet indsat · i timen');
+  assert.strictEqual(D.label('ekstra', { observed: both }), '✓ Tastet i HolyMoly – intet indsat · i timen');
+  assert.strictEqual(D.label('hjemme', { observed: both, test: true }), '✓ Tastet i HolyMoly – intet indsat · hjemme · TESTSERVER');
+  assert.strictEqual(D.label('lektion og hjemme', { observed: only, test: true }), '✓ Tastet i HolyMoly – intet indsat · hjemme · kun skrivevinduet · TESTSERVER');
+  // v2 (uden observed): som før
+  assert.strictEqual(D.label('hjemme'), '✓ Tastet i HolyMoly – intet indsat · hjemme uden opsyn');
+  // Grønt kun med vagt og uden testserver
+  assert.strictEqual(D.markGreen({ observed: both }), true);
+  assert.strictEqual(D.markGreen({ observed: only }), false);
+  assert.strictEqual(D.markGreen({ observed: both, test: true }), false);
+  assert.strictEqual(D.markGreen({}), true, 'v2-mærke: grønt som før');
+  // Forbeholdet nævner afskrift, en ændret computer og autotyper – og at et manglende mærke ikke er snyd
+  assert.match(D.LIMIT_TEXT, /afskrift fra telefon eller papir/);
+  assert.match(D.LIMIT_TEXT, /computer, eleven selv har ændret/);
+  assert.match(D.LIMIT_TEXT, /maskine, der taster som et menneske/);
+  assert.match(D.LIMIT_TEXT, /Mangler mærket, er det ikke et tegn på snyd/);
+});
+
+test('H: bevis v3 fra en testserver – intet nameHash, TESTSERVER og gråt mærke i Word, og intet felt kobler elevens beviser', async () => {
+  const t = setup({ testServer: true });
+  try {
+    const created = Date.UTC(2026, 10, 20, 9, 0);
+    const r = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, Object.assign({ observed: ['skrivevindue'], assignmentCreated: created }, meta), 3_000_000);
+    assert.ok(r.certId, r.reasons.join());
+    assert.strictEqual(r.test, true);
+    assert.deepStrictEqual(r.observed, ['skrivevindue']);
+    assert.strictEqual(r.kind, 'klasse');
+    const c = t.docs.certificate(r.certId);
+    assert.strictEqual(c.valid, true);
+    assert.strictEqual(c.v, 3);
+    const p = c.payload;
+    assert.strictEqual(p.v, 3);
+    assert.ok(!('nameHash' in p), 'intet nameHash');
+    assert.ok(!/nameHash|Anna|Jensen/.test(c.signed));
+    assert.deepStrictEqual(Object.keys(p), ['v', 'id', 'sha256', 'words', 'started', 'submitted', 'kind', 'observed', 'test', 'assignmentCreated', 'checks', 'issuer', 'keyId']);
+    assert.strictEqual(p.test, true);
+    assert.strictEqual(p.kind, 'klasse');
+    assert.deepStrictEqual(p.observed, ['skrivevindue']);
+    assert.strictEqual(p.assignmentCreated, '2026-11-20');
+    assert.strictEqual(p.started, 1_000_000);
+    assert.strictEqual(p.checks[0], 'Tastet i HolyMolys skrivevindue – indsæt blokeret');
+    assert.ok(!p.checks.some(x => /vagten/.test(x)), 'ingen vagt-linje uden vagt');
+    assert.ok(p.checks.includes('Menneskeligt skrivetempo'));
+    // Dokumentet: full() har test og observed, og Word-filen har TESTSERVER og et gråt mærke
+    const full = t.docs.full(t.db.prepare('SELECT id FROM documents WHERE cert_id = ?').get(r.certId).id);
+    assert.strictEqual(full.test, true);
+    assert.deepStrictEqual(full.observed, ['skrivevindue']);
+    const z = D.toDocx(full.blocks, { title: full.title, mark: { code: 'HM-' + r.certId.slice(0, 8).toUpperCase(), url: 'https://holymoly.test/bevis/' + r.certId, place: full.place, observed: full.observed, test: full.test } });
+    const footer = new TextDecoder().decode(await D.readZipEntry(z, 'word/footer1.xml', inflateRaw));
+    assert.match(footer, /TESTSERVER/);
+    assert.match(footer, /kun skrivevinduet/);
+    assert.match(footer, /Testserver – må ikke bruges til bedømmelse\. Tjek altid teksten på linket\./);
+    assert.ok(!/15803D/.test(footer), 'mærket er ikke grønt');
+    assert.match(footer, /w:color w:val="6B7280"\/><w:sz w:val="18"/);
+    const core = new TextDecoder().decode(await D.readZipEntry(z, 'docProps/core.xml', inflateRaw));
+    assert.match(core, /<dc:description>[^<]*TESTSERVER[^<]*Testserver – må ikke bruges til bedømmelse\. Tjek altid teksten på linket\.<\/dc:description>/);
+    // Med vagt og fra skolens egen server: grønt og uden testserver-linje
+    const z2 = D.toDocx(full.blocks, { title: full.title, mark: { code: 'HM-X', url: 'u', place: 'lektion', observed: ['skrivevindue', 'vagt'] } });
+    const footer2 = new TextDecoder().decode(await D.readZipEntry(z2, 'word/footer1.xml', inflateRaw));
+    assert.match(footer2, /15803D/);
+    assert.ok(!/TESTSERVER|Testserver/.test(footer2));
+
+    // To beviser fra samme elev under forskellige forhold: ingen fælles felter ud over v, issuer og keyId.
+    // (Skolens server med vagt, hjemme i en skriveøkt og til en anden aflevering)
+    t.db.prepare('INSERT INTO lessons (id, class_id, started, ends_at, student_id) VALUES (7, 1, 0, 9e15, 1)').run();
+    const school = new DocStore(t.db, t.dir, {});
+    const r2 = school.submit(t.anna, write(school, t.anna, LONG + ' Hjemme.', { lesson: 7, start: 5_000_000 }).id, Object.assign({}, meta, { observed: ['skrivevindue', 'vagt'], assignmentCreated: Date.UTC(2026, 10, 22, 9, 0), issuer: 'https://holymoly.test' }), 7_000_000);
+    assert.ok(r2.certId, r2.reasons.join());
+    const p2 = school.certificate(r2.certId).payload;
+    assert.strictEqual(p2.kind, 'hjemme');
+    assert.deepStrictEqual(p2.observed, ['skrivevindue', 'vagt']);
+    assert.ok(p2.checks.includes('HolyMoly-vagten blokerede AI på computeren'));
+    assert.strictEqual(D.label(p2.kind, p2), '✓ Tastet i HolyMoly – intet indsat · hjemme');
+    const common = (a, b) => Object.keys(a).filter(k => k in b && JSON.stringify(a[k]) === JSON.stringify(b[k]));
+    assert.deepStrictEqual(common(p, p2).filter(k => !['v', 'issuer', 'keyId'].includes(k)), [], 'ingen fælles felter: ' + common(p, p2));
+    // Under de samme forhold er de fælles felter de samme som med en anden elevs bevis – intet felt er elevens eget
+    t.db.prepare("INSERT INTO students (id, class_id, name, created, enrolled) VALUES (2, 1, 'Bo Nielsen', 0, 1)").run();
+    const same = Object.assign({ observed: ['skrivevindue'], assignmentCreated: created }, meta);
+    const a3 = t.docs.certificate(t.docs.submit(t.anna, write(t.docs, t.anna, LONG + ' Igen.', { start: 9_000_000 }).id, same, 11_000_000).certId).payload;
+    const bo = { id: 2, class_id: 1 };
+    const pb = t.docs.certificate(t.docs.submit(bo, write(t.docs, bo, LONG + ' Bo.', { start: 9_000_000 }).id, Object.assign({}, same, { studentName: 'Bo Nielsen' }), 11_000_000).certId).payload;
+    for (const k of common(p, a3)) assert.ok(common(p, pb).includes(k), `${k} er fælles for Annas beviser, men ikke med Bos`);
+    assert.deepStrictEqual(common(p, a3).sort(), ['assignmentCreated', 'checks', 'issuer', 'keyId', 'kind', 'observed', 'test', 'v']);
+  } finally { t.done(); }
+});
+
+test('H: vagten tæller kun med i "observed", hvis den fulgte hele forløbet – og hjælpemidler giver "Skrivetempo ikke vurderet"', () => {
+  const t = setup();
+  try {
+    const withGuard = Object.assign({ observed: ['skrivevindue', 'vagt'] }, meta);
+    // Vagten svarede ikke et øjeblik (under grænsen for grå tid): beviset udstedes, men uden "vagt"
+    const a = write(t.docs, t.anna, LONG.slice(0, 400));
+    t.docs.observe(a.id, { color: 'grey', greyReason: 'HolyMoly-vagten svarer ikke' }, a.end + 3000);
+    t.docs.observe(a.id, green, a.end + 6000);
+    const rest = write(t.docs, t.anna, LONG, { id: a.id, start: a.end + 9000 });
+    const r = t.docs.submit(t.anna, a.id, withGuard, rest.end + 1000);
+    assert.ok(r.certId, r.reasons.join(' | '));
+    assert.deepStrictEqual(t.docs.certificate(r.certId).payload.observed, ['skrivevindue']);
+    // "Venter på HolyMoly-vagten" ved lektionsstart er ikke et hul
+    const b = write(t.docs, t.anna, LONG, { view: (x) => x < 1_010_000 ? { color: 'grey', greyReason: 'Venter på HolyMoly-vagten' } : green });
+    const rb = t.docs.submit(t.anna, b.id, withGuard, 3_000_000);
+    assert.ok(rb.certId, rb.reasons.join(' | '));
+    assert.deepStrictEqual(t.docs.certificate(rb.certId).payload.observed, ['skrivevindue', 'vagt']);
+    // Et forfalsket observed udvider ikke målingen
+    const c = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, Object.assign({}, meta, { observed: ['skrivevindue', 'vagt', 'skærm'] }), 3_000_000);
+    assert.deepStrictEqual(t.docs.certificate(c.certId).payload.observed, ['skrivevindue', 'vagt']);
+    // Uden observed (fx en ældre hub): kun skrivevinduet
+    const d = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, meta, 3_000_000);
+    assert.deepStrictEqual(t.docs.certificate(d.certId).payload.observed, ['skrivevindue']);
+    // Hjælpemidler (students.aids bygges senere): tempoet vurderes ikke
+    const e = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, Object.assign({}, meta, { aids: ['ordforslag'] }), 3_000_000);
+    const pe = t.docs.certificate(e.certId).payload;
+    assert.ok(pe.checks.includes('Skrivetempo ikke vurderet'));
+    assert.ok(!pe.checks.includes('Menneskeligt skrivetempo'));
+    assert.strictEqual(pe.assignmentCreated, null);
+  } finally { t.done(); }
+});
+
+test('H: et v2-bevis (med nameHash) verificeres og vises stadig', () => {
+  const t = setup();
+  try {
+    const doc = t.docs.save(t.anna, { id: crypto.randomUUID(), title: 'Gammel', blocks: blocksOf('Hej'), stats: {} }, green, 1, 1000).doc;
+    const payload = JSON.stringify({ v: 2, id: 'v2v2v2v2v2v2v2v2', sha256: 'abc', words: 117, submitted: 1_750_000_000_000, place: 'hjemme', checks: ['Tastet i HolyMoly med overvågning – hjemme i en skriveøkt uden opsyn'], limits: 'Beviset dækker skriveforløbet på computeren – ikke afskrift fra telefon eller papir.', issuer: 'https://holymoly.test', keyId: t.docs.keyId, nameHash: 'f'.repeat(64) });
+    const sig = crypto.sign(null, Buffer.from(payload), t.docs.privateKey).toString('base64');
+    t.db.prepare('INSERT INTO certificates (id, doc_id, payload, sig, created) VALUES (?,?,?,?,?)').run('v2v2v2v2v2v2v2v2', doc.id, payload, sig, 1_750_000_000_000);
+    const c = t.docs.certificate('v2v2v2v2v2v2v2v2');
+    assert.strictEqual(c.v, 2);
+    assert.strictEqual(c.valid, true);
+    assert.strictEqual(c.payload.place, 'hjemme');
+    assert.strictEqual(D.label(c.payload.place), '✓ Tastet i HolyMoly – intet indsat · hjemme uden opsyn');
+    t.db.prepare('UPDATE certificates SET payload = replace(payload, ?, ?) WHERE id = ?').run('"words":117', '"words":118', 'v2v2v2v2v2v2v2v2');
+    assert.strictEqual(t.docs.certificate('v2v2v2v2v2v2v2v2').valid, false);
+  } finally { t.done(); }
+  // Tjek-siden kan vise både v2 og v3 og har boksen "Hvad betyder mærket?"
+  const js = fs.readFileSync(path.join(__dirname, '..', 'server/public/bevis.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'server/public/bevis.html'), 'utf8');
+  assert.match(html, /Hvad betyder mærket\?/);
+  assert.match(html, /Hvad blev målt/);
+  assert.match(js, /HMDoc\.LIMIT_TEXT/);
+  assert.match(js, /Skrevet til en aflevering oprettet/);
+  assert.match(js, /p\.v === 3/);
+  assert.match(js, /Passer – men tilhører ikke en af dine elever/);
+  // Elev-appen og dashboardet sender mærkets observed og test med til Word-filen, og afleveringstabellen viser "Testserver"
+  const writer = fs.readFileSync(path.join(__dirname, '..', 'agent/src/writer.js'), 'utf8');
+  assert.match(writer, /place: d\.result\.place \|\| '' \}, Writer\.markInfo\(d\.result\)\)/);
+  const app = fs.readFileSync(path.join(__dirname, '..', 'server/public/app.js'), 'utf8');
+  assert.strictEqual((app.match(/place: d\.place, observed: d\.observed, test: d\.test \}/g) || []).length, 2, 'downloadWord og showDoc');
+  assert.match(app, /sub\.test \? h\('span', \{ class: 'badge'[^\n]*text: 'Testserver' \}\)/);
 });
 
 test('B: teksten i en Word-fil tjekkes mod beviset – også når Word har pakket filen igen', async () => {
@@ -287,7 +442,7 @@ test('G: serveren starter ikke, hvis signeringsnøglen mangler, men der findes b
 
 test('C + D + E: gennem serveren – offentligt uden navne, læreren ser navnet, testserver, prøve-vurdering og "Aflever alligevel"', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-proof-srv-'));
-  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, signupCode: 'k', quiet: true, requireGuard: false, publicUrl: 'https://holymoly.test', simple: true, minProofWords: 10, schoolApproval: { controller: 'Testskolen', dpo: 'dpo@test.dk', dpiaDate: '2026-12-01', approvedDate: '2026-12-02' } });
+  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, signupCode: 'k', quiet: true, requireGuard: false, publicUrl: 'https://holymoly.test', simple: true, minProofWords: 10, schoolApproval: { controller: 'Testskolen', dpo: 'dpo@test.dk', dpiaDate: '2026-12-01', approvedDate: '2026-12-02' }, dbaDate: '2026-12-03' });
   const port = await srv.listen();
   const base = 'http://127.0.0.1:' + port;
   let ck = '';
@@ -354,7 +509,18 @@ test('C + D + E: gennem serveren – offentligt uden navne, læreren ser navnet,
     // En anden lærer gør ikke
     ck = '';
     await call('POST', '/api/register', { email: 'bente', name: 'Bente', password: 'tavle-kridt-1234', signupCode: 'k', acceptTerms: true });
-    assert.strictEqual((await call('GET', '/api/bevis/' + res.certId)).owner, undefined);
+    const other = await call('GET', '/api/bevis/' + res.certId);
+    assert.strictEqual(other.owner, undefined);
+    // … men får at vide, at beviset tilhører en anden lærers elev ("Passer – men tilhører ikke en af dine elever")
+    assert.strictEqual(other.notMine, true);
+    assert.strictEqual(pub.notMine, undefined, 'ikke logget ind: intet om ejeren');
+    assert.strictEqual(own.notMine, undefined);
+    // Bevis v3 gennem serveren: testserver, kun skrivevinduet (vagten kræves ikke her), og doc-result har test og observed
+    assert.strictEqual(pub.payload.v, 3);
+    assert.strictEqual(pub.payload.test, true);
+    assert.deepStrictEqual(pub.payload.observed, ['skrivevindue']);
+    assert.strictEqual(res.test, true);
+    assert.deepStrictEqual(res.observed, ['skrivevindue']);
     ag.close();
   } finally {
     await srv.close();
