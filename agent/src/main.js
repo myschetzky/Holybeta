@@ -466,6 +466,7 @@ function accessibilityOk() {
   try { return systemPreferences.isTrustedAccessibilityClient(false); } catch (e) { return true; }
 }
 
+const PIN_ATTEMPT_TEXT = 'Nogen har prøvet at logge ind med dit navn og en forkert kode. Var det ikke dig, så sig det til din lærer.';
 function notifyStudent(body) {
   try { if (Notification.isSupported()) new Notification({ title: 'HolyMoly', body, silent: false }).show(); } catch (e) { /* */ }
 }
@@ -710,6 +711,10 @@ function startConnection() {
         pushUi();
         break;
       }
+      case 'notice':
+        // Fast besked fra serveren – teksten står her i appen, så serveren aldrig kan sende andet end de kendte beskeder
+        if (msg.kind === 'pin-attempt') notifyStudent(PIN_ATTEMPT_TEXT);
+        break;
       case 'error':
         state.error = String(msg.message || 'Fejl fra serveren');
         pushUi();
@@ -860,7 +865,9 @@ async function enrollWith(code, extra) {
   try {
     const res = await net.fetch(new URL('/api/enroll', SERVER_URL).toString(), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ code: clean }, extra)),
+      // known: nøglerne fra denne computers tilmeldinger. Er computeren allerede elevens, kommer eleven ind uden kode
+      // (også når koden er låst efter andres forkerte forsøg)
+      body: JSON.stringify(Object.assign({ code: clean, known: state.data.enrollments.map(e => e.token).filter(Boolean).slice(0, 20) }, extra)),
     });
     const data = await res.json().catch(() => ({}));
     // Klassekode: serveren beder om elevens navn eller UNI-Login (trin 2)

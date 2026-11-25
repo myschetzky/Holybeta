@@ -11,6 +11,7 @@
  *  - footerLines(mark, words): sidefodens linjer med mærket (toDocx og forseglede Word-dokumenter).
  *  - toDocx(): Word-fil (.docx) uden eksterne biblioteker.
  *  - readZipEntry() / docxText(): læs teksten i en .docx (bruges på tjek-siden i browseren).
+ *  - zipNames() / docxFooter(): filerne i en zip (Lectio) og mærket i en Word-fils sidefod (tjek-siden).
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -207,22 +208,25 @@
   const MARK = '\u2713 Tastet i HolyMoly \u2013 intet indsat';
   // Skrevet i Word gennem HolyMoly ("Skriv i Word", observed indeholder 'word')
   const WORD_MARK = '\u2713 Tastet i Word via HolyMoly \u2013 intet indsat';
-  const LIMIT_TEXT = 'M\u00e6rket viser, hvad HolyMoly m\u00e5lte p\u00e5 elevens computer. Det d\u00e6kker ikke afskrift fra telefon eller papir, og en computer, eleven selv har \u00e6ndret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler m\u00e6rket, er det ikke et tegn p\u00e5 snyd.';
-  const TEST_TEXT = 'Testserver \u2013 m\u00e5 ikke bruges til bed\u00f8mmelse. Tjek altid teksten p\u00e5 linket.';
+  // "Tjek altid teksten på linket" står på alle mærker: en sidefod og en kode kan kopieres – teksten kan ikke
+  const LIMIT_TEXT = 'M\u00e6rket viser, hvad HolyMoly m\u00e5lte p\u00e5 elevens computer. Det d\u00e6kker ikke afskrift fra telefon eller papir, og en computer, eleven selv har \u00e6ndret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler m\u00e6rket, er det ikke et tegn p\u00e5 snyd. Tjek altid teksten p\u00e5 linket.';
+  const TEST_TEXT = 'Testserver \u2013 m\u00e5 ikke bruges til bed\u00f8mmelse.';
   function label(place, opts) {
     const o = opts && typeof opts === 'object' ? opts : {};
     const p = String(place || '');
     const v3 = Array.isArray(o.observed);
     const word = v3 && o.observed.includes('word');
     let s = word ? WORD_MARK : MARK;
-    if (p) s += ' \u00b7 ' + (/hjemme/.test(p) ? (v3 ? 'hjemme' : 'hjemme uden opsyn') : 'i timen');
+    // Hjemme er et lavere niveau end i timen: ingen lærer var til stede
+    if (p) s += ' \u00b7 ' + (/hjemme/.test(p) ? (v3 ? 'hjemme, uden opsyn' : 'hjemme uden opsyn') : 'i timen');
     if (v3 && !o.observed.includes('vagt')) s += word ? ' \u00b7 kun Word' : ' \u00b7 kun skrivevinduet';
     if (o.test) s += ' \u00b7 TESTSERVER';
     return s;
   }
-  /** Grønt mærke kun, når vagten var med og beviset ikke er fra en testserver. Ellers gråt. */
+  /** Grønt mærke kun i timen, når vagten var med og beviset ikke er fra en testserver. Ellers gråt (fx hjemme, uden opsyn). */
   function markGreen(mark) {
     if (!mark || mark.test) return false;
+    if (/hjemme/.test(String(mark.place || mark.kind || ''))) return false;
     return !Array.isArray(mark.observed) || mark.observed.includes('vagt');
   }
 
@@ -440,5 +444,45 @@
     return { title: titleP ? titleP.line : '', text: variants[0], variants };
   }
 
-  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, CATEGORY_TEXT_WORD, wordKeyMargin, WORD_UNTYPED, WORD_NO_KEYS, WORD_COPILOT_ON, label, markGreen, footerLines, MARK, WORD_MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
+  /** Navnene på filerne i en zip (fx en Lectio-zip med elevernes .docx). Læser det centrale katalog. */
+  function zipNames(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('Filen er ikke en zip-fil');
+    const count = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    const dec = new TextDecoder();
+    const out = [];
+    for (let n = 0; n < count; n++) {
+      if (p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) throw new Error('Zip-filen er ødelagt');
+      const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+      out.push(dec.decode(u8.subarray(p + 46, p + 46 + nlen)));
+      p += 46 + nlen + elen + clen;
+    }
+    return out;
+  }
+
+  /**
+   * Mærket i en Word-fils sidefod (word/footer*.xml): { mark, code, url }. Det er kun det, filen påstår –
+   * tjek-siden sammenligner altid teksten med serveren, før der står grønt.
+   */
+  function docxFooter(xml) {
+    const lines = docxParagraphs(xml).map(p => normalizeText(p.text)).filter(Boolean);
+    // Koden kan stå i samme afsnit som mærket (HolyMolys egen Word-fil) – den er ikke en del af mærket
+    const mark = (lines.find(l => /^\u2713 Tastet i (HolyMoly|Word via HolyMoly)/.test(l)) || '').replace(/\s*\u00b7\s*HolyMoly HM-[\s\S]*$/, '');
+    let code = '', url = '';
+    for (const l of lines) {
+      const m = /HolyMoly (HM-[A-Z0-9_-]{8})/.exec(l);
+      if (m && !code) code = m[1];
+      const u = /Tjek: (https?:\/\/\S+)/.exec(l);
+      if (u && !url) url = u[1];
+    }
+    return { mark, code, url };
+  }
+
+  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, evaluateStats, cleanAids, PROOF, AIDS, CATEGORY_TEXT, CATEGORY_TEXT_WORD, wordKeyMargin, WORD_UNTYPED, WORD_NO_KEYS, WORD_COPILOT_ON, label, markGreen, footerLines, MARK, WORD_MARK, LIMIT_TEXT, TEST_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, zipNames, docxFooter, LIMITS };
 });

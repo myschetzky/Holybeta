@@ -54,6 +54,10 @@ const TEST_ISSUER = 'Testserver – må ikke bruges til bedømmelse';
 /* Hvorfor beviset mangler – i elevens sprog og uden tal (shared/doc.js: samme tekster i øvedokumentet) */
 const CATEGORY_TEXT = D.CATEGORY_TEXT;
 /* Kort navn til "Dette dokument kan ikke længere få mærket (kl. 10.14: AI-side)" */
+/* Tempolinjen i det signerede bevis (skrivevinduet). Ens for alle – hjælpemidler må ikke kunne aflæses. */
+const TEMPO_CHECK = 'Intet skrevet hurtigere, end et menneske kan';
+/* Lærerens egen visning: tempoet blev ikke vurderet, fordi eleven har hjælpemidler. */
+const TEMPO_NOT_ASSESSED = 'Skrivetempo ikke vurderet (eleven har hjælpemidler)';
 const CATEGORY_LABEL = { forbindelse: 'forbindelse', indsat: 'indsat tekst', tempo: 'skrivetempo', ai: 'AI-spor', hjaelpemiddel: 'diktering' };
 /*
  * Rød lampe koster kun beviset, når den kan have skrevet teksten: AI, fjernstyring, virtuel maskine og proxy/VPN
@@ -221,6 +225,7 @@ class DocStore {
       CREATE TRIGGER documents_cleanup AFTER DELETE ON documents BEGIN
         UPDATE certificates SET doc_id = '', student_name = '', class_name = '', doc_deleted = COALESCE(doc_deleted, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE doc_id = OLD.id;
         DELETE FROM assignment_submissions WHERE doc_id = OLD.id;
+        DELETE FROM assignment_history WHERE doc_id = OLD.id;
       END;
       -- Skrivelogen følger dokumentet (også hvis fremmednøglerne er slået fra)
       CREATE TRIGGER IF NOT EXISTS documents_log_cleanup AFTER DELETE ON documents BEGIN
@@ -398,6 +403,12 @@ class DocStore {
     let row = this.q.get.get(input.id);
     if (row && row.student_id !== student.id) return { ok: false, error: 'Ugyldigt dokument-id' };
     if (row && row.submitted) return { ok: false, error: 'Dokumentet er afleveret og kan ikke ændres' };
+    // Hjemme (uden opsyn) måles fokus ikke: tiden uden fokus fra en skriveøkt hjemme lægges ikke til
+    if (this._homeLesson(lessonId)) {
+      let prev = 0;
+      try { prev = num(JSON.parse((row && row.stats) || '{}').focusLostMs); } catch (e) { prev = 0; }
+      stats.focusLostMs = prev;
+    }
     const m = row ? JSON.parse(row.monitor) : Object.assign({ greenMs: 0, redMs: 0, greyMs: 0, red: [], grey: [], flags: [], lessons: [], lastTs: 0, lastLen: 0, lastColor: '', lastObs: 0, first: now }, source ? { source } : {});
     // Et dokument skrives enten i skrivevinduet eller i Word – aldrig skiftevis
     if ((m.source || '') !== source) return { ok: false, error: source ? 'Dokumentet er skrevet i HolyMoly og kan ikke fortsættes i Word' : 'Dokumentet er skrevet i Word og kan kun fortsættes i Word' };
@@ -798,6 +809,8 @@ class DocStore {
     const where = this.placeOf(row.id);
     const place = where.home ? (where.lesson ? 'lektion og hjemme' : 'hjemme') : 'lektion';
     ev.facts.place = place;
+    // Kun til læreren (documents.result) – aldrig i beviset
+    if (aids.length && JSON.parse(row.monitor).source !== 'word' && !ev.notes.includes(TEMPO_NOT_ASSESSED)) ev.notes.push(TEMPO_NOT_ASSESSED);
     if (!ev.ok && !meta.force) {
       return {
         ok: false, confirm: true, reasons: ev.reasons, notes: ev.notes, categories: ev.categories,
@@ -814,11 +827,11 @@ class DocStore {
       const word = observed.includes('word');
       const checks = [word ? 'Skrevet i Word gennem HolyMoly – ingen tekst indsat fra andre programmer' : 'Tastet i HolyMolys skrivevindue – indsæt blokeret'];
       if (observed.includes('vagt')) checks.push('HolyMoly-vagten blokerede AI på computeren');
-      const tempo = aids.length ? 'Skrivetempo ikke vurderet' : 'Menneskeligt skrivetempo';
       checks.push('Ingen rød lampe undervejs');
+      // Neutral tempolinje: den samme for alle elever, så beviset aldrig afslører hjælpemidler (ordblindhed).
       // Word med talte tastetryk: teksten passer med dem, og tempoet er vurderet som i skrivevinduet
-      if (word && ev.facts.keys) checks.push('Teksten passer med tastetrykkene i Word', tempo);
-      else checks.push(word ? 'Teksten voksede i et menneskeligt tempo' : tempo);
+      if (word && ev.facts.keys) checks.push('Teksten passer med tastetrykkene i Word', TEMPO_CHECK);
+      else checks.push(word ? 'Teksten voksede i et menneskeligt tempo' : TEMPO_CHECK);
       checks.push('Ingen ordrette fraser fra en AI-chat i teksten');
       const created = Number(meta.assignmentCreated) > 0 ? new Date(Number(meta.assignmentCreated)).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }) : null;
       // Fast rækkefølge af felter – det er præcis denne tekst der signeres (v3).
@@ -851,13 +864,22 @@ class DocStore {
     return { ok: true, title: row.title };
   }
 
+  /** Er lektionen en skriveøkt hjemme? */
+  _homeLesson(lessonId) {
+    if (!Number.isInteger(Number(lessonId))) return false;
+    try { return !!this.db.prepare("SELECT 1 FROM lessons WHERE id = ? AND (kind = 'hjemme' OR student_id IS NOT NULL)").get(Number(lessonId)); } catch (e) { return false; }
+  }
+
   /** Blev dokumentet skrevet i timen, hjemme i en skriveøkt – eller begge? */
   placeOf(id) {
     const row = this.q.get.get(String(id || ''));
-    const ids = row ? (JSON.parse(row.monitor).lessons || []).map(Number).filter(Number.isInteger) : [];
+    const m = row ? JSON.parse(row.monitor) : {};
+    const ids = (m.lessons || []).map(Number).filter(Number.isInteger);
     if (!ids.length) return { home: false, lesson: true };
     const solo = this.db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE (kind = 'hjemme' OR student_id IS NOT NULL) AND id IN (${ids.map(() => '?').join(',')})`).get(...ids).n;
-    return { home: solo > 0, lesson: solo < ids.length };
+    // homeGone: skriveøkter hjemme, der er slettet efter fristen (retention.js) – dokumentet blev stadig skrevet hjemme
+    const gone = Array.isArray(m.homeGone) ? ids.filter(i => m.homeGone.map(Number).includes(i)).length : 0;
+    return { home: solo + gone > 0, lesson: solo + gone < ids.length };
   }
 
   list(studentId) {
@@ -903,6 +925,33 @@ class DocStore {
     return { v: p.v, payload: p, signed: c.payload, sig: c.sig, publicKey: this.publicPem, valid, docDeleted };
   }
 
+  /**
+   * Tjek-siden: find beviser ud fra tekstens sha256 (indekset certificates_sha). Kun beviser udstedt af denne server.
+   * Svarer kun med kode, dato og mærke – aldrig navn, klasse eller tekst. Udløbne beviser og ugyldige signaturer tæller ikke.
+   * Returnerer [{ sha256, id, code, date, kind, observed, test }] (id er kun til at tjekke ejerskab hos kalderen).
+   */
+  findBySha(hashes) {
+    const list = [...new Set((Array.isArray(hashes) ? hashes : []).map(String).filter(h => /^[0-9a-f]{64}$/.test(h)))].slice(0, 8);
+    const q = this.db.prepare('SELECT id, payload, sig, created, expired FROM certificates WHERE text_sha256 = ? ORDER BY created DESC');
+    const out = [];
+    for (const sha of list) {
+      for (const c of q.all(sha)) {
+        if (c.expired) continue;
+        if (!crypto.verify(null, Buffer.from(c.payload), this.publicKey, Buffer.from(c.sig, 'base64'))) continue;
+        let p = {};
+        try { p = JSON.parse(c.payload); } catch (e) { continue; }
+        if (p.v !== 3 && p.v !== 2) continue;
+        const submitted = Number(p.submitted) || c.created;
+        out.push({
+          sha256: sha, id: c.id, code: 'HM-' + c.id.slice(0, 8).toUpperCase(),
+          date: new Date(submitted).toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }),
+          kind: p.v === 3 ? p.kind : p.place, observed: Array.isArray(p.observed) ? p.observed : undefined, test: p.test === true,
+        });
+      }
+    }
+    return out;
+  }
+
   /** "Slet elev": elevens beviser slettes helt (ingen gravsten). Kaldes, før eleven slettes. */
   deleteStudentCertificates(studentId) {
     return this.db.prepare('DELETE FROM certificates WHERE doc_id IN (SELECT id FROM documents WHERE student_id = ?)').run(Number(studentId)).changes;
@@ -918,4 +967,4 @@ class DocStore {
   }
 }
 
-module.exports = { DocStore, MAX_HUMAN_CPS, MIN_WORDS };
+module.exports = { DocStore, MAX_HUMAN_CPS, MIN_WORDS, TEMPO_CHECK };

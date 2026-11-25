@@ -228,8 +228,15 @@ function createServer(opts = {}) {
   // Elevkoder: 5 forsøg pr. elev, derefter ét nyt forsøg hvert 3. minut (10.000 muligheder kan ikke gættes).
   // Desuden låses koden efter PIN_MAX_FAILS forkerte forsøg i alt (gemt i databasen), til læreren nulstiller den.
   const pinRl = new U.RateLimiter(5, 1 / 180);
+  // Og pr. IP og pr. klasse, så én elev ikke kan prøve løs på hele klassens koder. Rummeligt pr. IP (en hel skole bag én NAT).
+  // Hvert forsøg med navn og kode koster, men et forsøg, der lykkes, gives tilbage – så kun forkerte forsøg tæller.
+  const pinIpRl = new U.RateLimiter(30, 1 / 60);
+  const pinClassRl = new U.RateLimiter(20, 1 / 60);
   const uniRl = new U.RateLimiter(120, 2); // UNI-Login: en hel klasse bag én skole-IP
   const apiRl = new U.RateLimiter(300, 20);
+  // Tjek-siden: opslag af en teksts sha256. Højt nok til en hel klasses filer, lavt nok til at gætte er nytteløst.
+  // Intet gemmes om opslaget (ingen IP-log).
+  const findRl = new U.RateLimiter(120, 1);
 
   // X-Forwarded-* bruges kun fra en proxy i TRUST_PROXY (ellers kan enhver forfalske sin IP-adresse)
   const proxyTrust = createProxyTrust(cfg.trustProxy, { log });
@@ -788,6 +795,21 @@ function createServer(opts = {}) {
       else if (o) c.notMine = true;
       return send(res, 200, c);
     }
+    // Tjek-siden: find et bevis ud fra tekstens sha256 (teksten læses i browseren og sendes aldrig).
+    // Svarer kun med kode, dato og mærke. Elevens egen lærer (logget ind) får også navn og link – ingen andre.
+    if (p === '/api/bevis/find' && m === 'POST') {
+      if (!findRl.take('find:' + ip)) return fail(res, 429, 'For mange opslag – vent et minut');
+      const b = await readJson(req, 4096);
+      if (!b || !Array.isArray(b.sha256) || !b.sha256.length) return fail(res, 400, 'Ugyldig forespørgsel');
+      const t = teacherFromReq(req);
+      const found = docs.findBySha(b.sha256).map((x) => {
+        const r = { sha256: x.sha256, code: x.code, date: x.date, mark: D.label(x.kind, { observed: x.observed, test: x.test }), green: D.markGreen({ place: x.kind, observed: x.observed, test: x.test }) };
+        const o = t && docs.certificateOwner(x.id);
+        if (o && ownStudent(t, o.studentId)) Object.assign(r, { id: x.id, student: o.student, class: o.class });
+        return r;
+      });
+      return send(res, 200, { found });
+    }
     if (p === '/api/student/me' && m === 'GET') {
       const st = studentFromReq(req);
       if (!st) return fail(res, 401, 'Ikke logget ind');
@@ -842,12 +864,32 @@ function createServer(opts = {}) {
           name = U.str(b.name, 80).trim().replace(/\s+/g, ' ');
           if (!name) return ask('Skriv dit fulde navn');
           if (name.length < 2 || !/\p{L}/u.test(name)) return ask('Skriv dit rigtige fulde navn');
+          // Den computer, eleven allerede er logget ind på (appen sender sine nøgler i known), kommer ind uden kode – også
+          // når koden er låst. Låsen gælder kun nye computere, så ingen kan låse en klassekammerat ude lige før en prøve.
+          const known = (Array.isArray(b.known) ? b.known : []).slice(0, 20).map(String).filter(t => t.length >= 32 && t.length <= 128);
+          if (known.length) {
+            const hashes = new Map(known.map(t => [U.sha256(t), t]));
+            const me = db.prepare('SELECT id, name, device_token_hash FROM students WHERE class_id = ? AND enrolled IS NOT NULL AND device_token_hash IS NOT NULL').all(cls.id)
+              .find(r => normName(r.name) === normName(name) && hashes.has(r.device_token_hash));
+            if (me) {
+              // Samme nøgle som før – computeren er allerede elevens, så intet skal tilbagekaldes
+              if (b.accept === true) db.prepare('UPDATE students SET terms_accepted = COALESCE(terms_accepted, ?) WHERE id = ?').run(Date.now(), me.id);
+              return send(res, 200, { token: hashes.get(me.device_token_hash), studentId: me.id, studentName: me.name, className: cls.name, teacherName: cls.teacher_name });
+            }
+          }
           // Elevens egen kode (krævet i enkel tilstand, ellers frivillig)
           pin = String(b.pin ?? '').trim();
           if (pin && !/^\d{4,6}$/.test(pin)) return ask('Koden skal være 4-6 cifre');
           if (cfg.simple && !pin) return ask(b.name && b.pin === undefined ? 'Opdater HolyMoly-appen – den nye version spørger efter din kode' : 'Vælg en kode på 4 cifre, som kun du kender');
           // Enkel tilstand: eleven accepterer vilkårene for elever i appen, før tilmeldingen går igennem
           if (cfg.simple && b.accept !== true) return ask(b.accept === undefined ? 'Opdater HolyMoly-appen – den nye version viser vilkårene' : 'Sæt flueben ved vilkårene for at tilmelde dig');
+          // Pr. IP og pr. klasse: samme svar, uanset om navnet findes (begrænsningen gælder alle navne)
+          const ipKey = 'pinip:' + ip, clsKey = 'pincls:' + cls.id;
+          if (pin) {
+            if (!pinIpRl.take(ipKey)) return ask('For mange forsøg – vent et par minutter', 429);
+            if (!pinClassRl.take(clsKey)) { pinIpRl.refund(ipKey); return ask('For mange forsøg – vent et par minutter', 429); }
+          }
+          const refundTries = () => { if (pin) { pinIpRl.refund(ipKey); pinClassRl.refund(clsKey); } };
           // Er navnet allerede tilmeldt med en kode, er det samme elev på en ny computer – men kun med den rigtige kode.
           // Har læreren nulstillet koden, skriver eleven engangskoden fra læreren (inden for 30 minutter); den bliver elevens nye kode.
           const owner = db.prepare('SELECT id, name, pin_hash, pin_reset_hash, pin_reset_until, pin_fails FROM students WHERE class_id = ? AND enrolled IS NOT NULL AND (pin_hash IS NOT NULL OR pin_reset_hash IS NOT NULL)').all(cls.id).find(r => normName(r.name) === normName(name));
@@ -856,20 +898,24 @@ function createServer(opts = {}) {
             const ask = (error, status = 400) => askRaw(error, status, { pinKnown: true });
             const resetting = !owner.pin_hash;
             if (!pin) return ask(resetting ? 'Din lærer har nulstillet din kode. Skriv koden, du har fået af din lærer.' : 'Navnet er allerede tilmeldt med en kode. Skriv din kode – eller dit efternavn, hvis du er en anden elev.');
+            // Samme svar på forkert kode, låst kode, udløbet engangskode og for mange forsøg – så svaret ikke afslører,
+            // om navnet findes, eller hvordan det står til med elevens kode. Eleven selv får besked i sin app (hub.pinAttempt).
+            const NO = 'Navnet og koden passer ikke sammen. Er du en anden elev med samme navn, så skriv dit efternavn med. Har du glemt din kode, så spørg din lærer.';
             // For mange forkerte koder i alt (gemt i databasen, så en genstart ikke nulstiller tællingen): kun læreren kan låse op
-            if (owner.pin_fails >= PIN_MAX_FAILS) return ask('Din kode er låst efter for mange forkerte forsøg. Bed din lærer om at nulstille den.', 423);
-            if (resetting && !(owner.pin_reset_until > Date.now())) return ask('Koden fra din lærer er udløbet. Bed din lærer om en ny.', 401);
-            if (!pinRl.take('pin:' + owner.id)) return ask('For mange forkerte koder – vent et par minutter, eller bed din lærer om hjælp', 429);
+            if (owner.pin_fails >= PIN_MAX_FAILS) { hub.pinAttempt(owner.id); return ask(NO, 401); }
+            if (resetting && !(owner.pin_reset_until > Date.now())) return ask(NO, 401);
+            if (!pinRl.take('pin:' + owner.id)) { hub.pinAttempt(owner.id); return ask(NO, 401); }
             if (!U.verifyPassword(pin, resetting ? owner.pin_reset_hash : owner.pin_hash)) {
               const fails = owner.pin_fails + 1;
               db.prepare('UPDATE students SET pin_fails = pin_fails + 1 WHERE id = ?').run(owner.id);
               hub.studentJoined(owner.id, cls.id, fails >= PIN_MAX_FAILS
-                ? `${owner.name}s kode er låst efter ${PIN_MAX_FAILS} forkerte forsøg. Nulstil koden, hvis det er eleven selv.`
+                ? `${owner.name}s kode er låst for nye computere efter ${PIN_MAX_FAILS} forkerte forsøg. Nulstil koden, hvis det er eleven selv.`
                 : `Nogen prøvede at logge ind som ${owner.name} med en forkert kode`);
-              if (fails >= PIN_MAX_FAILS) return ask('Din kode er låst efter for mange forkerte forsøg. Bed din lærer om at nulstille den.', 423);
-              return ask(resetting ? 'Forkert kode. Skriv koden, du har fået af din lærer.' : 'Forkert kode. Er du en anden elev med samme navn, så skriv dit efternavn med.', 401);
+              hub.pinAttempt(owner.id);
+              return ask(NO, 401);
             }
             pinRl.refund('pin:' + owner.id); // kun forkerte forsøg tæller
+            refundTries();
             const token = U.randomToken(32);
             // Ved nulstilling bliver engangskoden elevens kode (den er allerede gemt som hash)
             db.prepare('UPDATE students SET device_token_hash = ?, invite_code = NULL, invite_expires = NULL, guard_pubkey = NULL, guard_seq = 0, guard_pair_hash = NULL, terms_accepted = COALESCE(?, terms_accepted), pin_hash = COALESCE(pin_hash, pin_reset_hash), pin_reset_hash = NULL, pin_reset_until = NULL, pin_fails = 0 WHERE id = ?')
@@ -879,6 +925,7 @@ function createServer(opts = {}) {
             return send(res, 200, { token, studentId: owner.id, studentName: owner.name, className: cls.name, teacherName: cls.teacher_name });
           }
           // En ny elev vælger sin kode: de mest almindelige koder afvises
+          refundTries();
           if (pin && weakPin(pin)) return ask(WEAK_PIN_TEXT);
         }
         // Samme UNI-Login i samme klasse = samme elev (fx ny computer): den gamle computer logges ud
@@ -1072,6 +1119,7 @@ function createServer(opts = {}) {
         if (ids.some(id => !own.has(id))) return fail(res, 404, 'Eleven findes ikke');
         const r = hub.extendLesson(c.id, ids, minutes);
         if (!r.ok) return send(res, 409, { error: r.error });
+        for (const sid of Object.keys(r.until || {})) hub.auditLog(teacher.id, 'gav ekstra tid', Number(sid));
       } else return fail(res, 400, 'Ukendt handling');
       return send(res, 200, { lesson: hub._lessonInfo(c.id) });
     }
@@ -1113,7 +1161,9 @@ function createServer(opts = {}) {
       if (!asg) return fail(res, 404, 'Afleveringen findes ikke');
       if (m === 'GET') {
         // Alle elever i klassen – også dem, der ikke har afleveret
-        const rows = db.prepare(`SELECT st.id, st.name, s.doc_id, s.submitted, d.title AS doc_title, d.cert_id, d.result
+        const rows = db.prepare(`SELECT st.id, st.name, s.doc_id, s.submitted, d.title AS doc_title, d.cert_id, d.result,
+            (SELECT COUNT(*) FROM assignment_history h WHERE h.assignment_id = s.assignment_id AND h.student_id = st.id) AS previous,
+            (SELECT MIN(h.submitted) FROM assignment_history h WHERE h.assignment_id = s.assignment_id AND h.student_id = st.id) AS first_submitted
           FROM students st LEFT JOIN assignment_submissions s ON s.student_id = st.id AND s.assignment_id = ?
           LEFT JOIN documents d ON d.id = s.doc_id
           WHERE st.class_id = ? AND st.enrolled IS NOT NULL ORDER BY st.name`).all(asg.id, asg.class_id);
@@ -1127,7 +1177,9 @@ function createServer(opts = {}) {
               if (Array.isArray(res.observed)) observed = res.observed;
               if (typeof res.test === 'boolean') test = res.test;
             } catch (e) { /* */ }
-            return { id: r.id, name: r.name, submission: r.doc_id ? { docId: r.doc_id, title: r.doc_title || '', submitted: r.submitted, certId: r.cert_id || null, late: !!(asg.due && r.submitted > asg.due), reasons, place, observed, test } : null };
+            // previous: antal tidligere vedhæftninger (afleveret igen). firstSubmitted: den første aflevering.
+            return { id: r.id, name: r.name, submission: r.doc_id ? { docId: r.doc_id, title: r.doc_title || '', submitted: r.submitted, certId: r.cert_id || null, late: !!(asg.due && r.submitted > asg.due), reasons, place, observed, test,
+              previous: r.previous || 0, firstSubmitted: r.first_submitted || null } : null };
           }),
         });
       }
@@ -1173,6 +1225,8 @@ function createServer(opts = {}) {
         return send(res, 200, studentOut(db.prepare('SELECT * FROM students WHERE id = ?').get(s.id)));
       }
       if (m === 'DELETE') {
+        // Revisionssporet skrives før sletningen – derefter bliver elev-id'et et pseudonym (db.js)
+        hub.auditLog(teacher.id, 'slettede elev', s.id);
         // Slet elev: også elevens beviser (ingen gravsten – eleven skal helt væk)
         docs.deleteStudentCertificates(s.id);
         db.prepare('DELETE FROM students WHERE id = ?').run(s.id);
@@ -1195,7 +1249,7 @@ function createServer(opts = {}) {
       db.prepare('UPDATE students SET aids = ? WHERE id = ?').run(aids.length ? JSON.stringify(aids) : null, s.id);
       if (aids.join() !== before.join()) {
         const NAME = { ordforslag: 'ordforslag', diktering: 'diktering' };
-        hub._audit(s.id, aids.length ? `${teacher.name} satte hjælpemidler: ${aids.map(a => NAME[a]).join(' og ')}` : `${teacher.name} fjernede hjælpemidlerne`);
+        hub._audit(s.id, aids.length ? `${teacher.name} satte hjælpemidler: ${aids.map(a => NAME[a]).join(' og ')}` : `${teacher.name} fjernede hjælpemidlerne`, teacher.id, 'ændrede hjælpemidler');
         hub.aidsChanged(s.id);
       }
       return send(res, 200, studentOut(db.prepare('SELECT * FROM students WHERE id = ?').get(s.id)));
@@ -1210,6 +1264,7 @@ function createServer(opts = {}) {
       do code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0'); while (weakPin(code));
       db.prepare('UPDATE students SET pin_hash = NULL, pin_reset_hash = ?, pin_reset_until = ?, pin_fails = 0 WHERE id = ?').run(U.hashPassword(code), until, s.id);
       pinRl.refund('pin:' + s.id, 5);
+      hub.auditLog(teacher.id, 'nulstillede kode', s.id);
       hub.studentJoined(s.id, s.class_id, `${teacher.name} nulstillede ${s.name}s kode`);
       return send(res, 200, Object.assign(studentOut(db.prepare('SELECT * FROM students WHERE id = ?').get(s.id)), { resetCode: code }));
     }
@@ -1231,8 +1286,9 @@ function createServer(opts = {}) {
       const d = docs.full(mm[1]);
       if (!d || !ownStudent(teacher, d.studentId)) return fail(res, 404, 'Dokumentet findes ikke');
       if (!d.submitted) return fail(res, 409, 'Kan ses, når dokumentet er afleveret');
-      if (mm[2] === 'versions') return send(res, 200, { versions: docs.versions(mm[1]) });
-      if (mm[2] === 'log') return send(res, 200, docs.log(mm[1]));
+      // home: skrevet (helt eller delvist) hjemme – afspilningen viser relativ tid, ikke klokkeslæt (døgnrytmen)
+      if (mm[2] === 'versions') { hub.auditLog(teacher.id, 'afspillede dokument', d.studentId); return send(res, 200, { versions: docs.versions(mm[1]), home: /hjemme/.test(String(d.place || '')) }); }
+      if (mm[2] === 'log') { hub.auditLog(teacher.id, 'så skrivelog', d.studentId); return send(res, 200, docs.log(mm[1])); }
       if (!features.similar) return fail(res, 404, 'Ikke slået til på denne server');
       return send(res, 200, { similar: docs.similar(mm[1]) });
     }
@@ -1244,7 +1300,15 @@ function createServer(opts = {}) {
       if (!d.submitted && !(hub.lessonOf(s.class_id) && !hub.isHome(s.id))) {
         return send(res, 200, { id: d.id, studentId: d.studentId, title: d.title, words: d.words, updated: d.updated, draft: true });
       }
+      hub.auditLog(teacher.id, 'åbnede dokument', d.studentId);
       return send(res, 200, d);
+    }
+    // Dashboardet laver Word-filen i browseren – her skrives kun i revisionssporet, at læreren hentede den
+    if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})\/word$/)) && m === 'POST') {
+      const d = docs.full(mm[1]);
+      if (!d || !ownStudent(teacher, d.studentId)) return fail(res, 404, 'Dokumentet findes ikke');
+      hub.auditLog(teacher.id, 'hentede Word', d.studentId);
+      return send(res, 200, { ok: true });
     }
     // Læreren sletter en kladde (kun dokumenter, der ikke er afleveret). Elevens kopi i appen røres ikke.
     if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})$/)) && m === 'DELETE') {
@@ -1253,7 +1317,7 @@ function createServer(opts = {}) {
       if (!s) return fail(res, 404, 'Dokumentet findes ikke');
       const r = docs.deleteDraft(d.id, s.id);
       if (!r.ok) return fail(res, 409, r.error);
-      hub.docDeleted(s.id, d.id, `${teacher.name} slettede kladden "${d.title || 'Uden titel'}"`);
+      hub.docDeleted(s.id, d.id, `${teacher.name} slettede kladden "${d.title || 'Uden titel'}"`, teacher.id);
       return send(res, 200, { ok: true });
     }
     if ((mm = p.match(/^\/api\/students\/(\d+)\/events$/)) && m === 'GET') {
@@ -1269,6 +1333,7 @@ function createServer(opts = {}) {
       else if (kind === 'alerts') sql += " AND kind IN ('blocked','violation','tamper','killed','evidence','info','teacher','system','hand')";
       else if (kind === 'apps') sql += " AND kind IN ('app','killed')";
       if (lessonOnly) { sql += ' AND lesson_id = ?'; args.push(Number(lessonOnly)); }
+      hub.auditLog(teacher.id, kind === 'web' ? 'så weblog' : kind === 'apps' ? 'så programlog' : 'så logbog', s.id);
       sql += ' ORDER BY ts DESC LIMIT ?';
       args.push(limit);
       const rows = db.prepare(sql).all(...args).map(r => ({
@@ -1288,7 +1353,7 @@ function createServer(opts = {}) {
       const lines = [['Tid (UTC)', 'Lektion startet (UTC)', 'Type', 'Titel', 'Adresse', 'Program', 'Kategori', 'Blokeret', 'Skærmbillede-id']]
         .concat(rows.map(r => [iso(r.ts), iso(r.lesson_started), KIND[r.kind] || r.kind, r.title, r.url, r.app, r.category, r.blocked ? 'ja' : '', r.evidence_id || '']));
       const csv = '\ufeff' + lines.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
-      hub._audit(s.id, `${teacher.name} eksporterede elevens log`);
+      hub._audit(s.id, `${teacher.name} eksporterede elevens log`, teacher.id, 'eksporterede log');
       const fname = 'holymoly-' + s.name.replace(/[^\wæøåÆØÅ -]/g, '').replace(/\s+/g, '-').slice(0, 60) + '.csv';
       res.writeHead(200, Object.assign({}, SEC_HEADERS, {
         'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'no-store',

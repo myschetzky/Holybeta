@@ -123,7 +123,7 @@ test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
     assert.ok(r.needName && !r.token);
     r = await enroll({ code: cls.joinCode, name: 'Anna Jensen', pin: '0000' });
     assert.strictEqual(r._status, 401);
-    assert.match(r.error, /Forkert kode/);
+    assert.match(r.error, /Navnet og koden passer ikke sammen/);
 
     // Rigtig kode på en ny computer: samme elev, ny nøgle – den gamle virker ikke længere
     const again = await enroll({ code: cls.joinCode, name: 'anna jensen', pin: '4821' });
@@ -138,11 +138,13 @@ test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
     let blocked = false;
     for (let i = 0; i < 6; i++) {
       r = await enroll({ code: cls.joinCode, name: 'Anna Jensen', pin: String(1000 + i) });
-      if (r._status === 429) { blocked = true; break; }
+      // Samme svar som en forkert kode (svaret afslører ikke, at der er spærret)
+      if (i === 5) { blocked = r._status === 401 && /passer ikke sammen/.test(r.error); break; }
     }
     assert.ok(blocked, 'for mange forkerte koder spærres');
     r = await enroll({ code: cls.joinCode, name: 'Anna Jensen', pin: '4821' });
-    assert.strictEqual(r._status, 429, 'også den rigtige kode venter, når der er spærret');
+    assert.strictEqual(r._status, 401, 'også den rigtige kode venter, når der er spærret');
+    assert.ok(!r.token);
 
     // En anden elev med et andet navn kan sagtens tilmelde sig – men ikke med en kode, der er let at gætte
     for (const weak of ['1234', '1111', '2008', '1212']) {
@@ -179,7 +181,7 @@ test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
     srv.db.prepare('UPDATE students SET pin_reset_until = ? WHERE id = ?').run(Date.now() - 1000, bo);
     r = await enroll({ code: cls.joinCode, name: 'Bo Nielsen', pin: st.resetCode });
     assert.strictEqual(r._status, 401);
-    assert.match(r.error, /udløbet/);
+    assert.match(r.error, /passer ikke sammen/, 'samme svar som en forkert kode');
     assert.strictEqual((await A.call('GET', `/api/classes/${cls.id}`)).students.find(s => s.id === bo).pinReset, true);
     // En anden lærer kan ikke nulstille Bos kode
     r = await J.call('POST', `/api/students/${bo}/reset-pin`, {});
@@ -264,10 +266,11 @@ test('enkel tilstand: elevens kode låses efter 10 forkerte forsøg – også ef
     srv.db.prepare('UPDATE students SET pin_fails = 8 WHERE id = ?').run(anna);
     assert.strictEqual((await enroll({ pin: '4824' }))._status, 401);
     let r = await enroll({ pin: '4825' });
-    assert.strictEqual(r._status, 423);
-    assert.match(r.error, /låst/);
+    assert.strictEqual(r._status, 401, 'samme svar som en forkert kode');
+    assert.match(r.error, /passer ikke sammen/);
     r = await enroll({ pin: '4821' });
-    assert.strictEqual(r._status, 423, 'den rigtige kode virker heller ikke');
+    assert.strictEqual(r._status, 401, 'den rigtige kode virker heller ikke på en ny computer');
+    assert.ok(!r.token);
     const row = (await A.call('GET', `/api/classes/${cls.id}`)).students.find(s => s.id === anna);
     assert.strictEqual(row.pinLocked, true, 'læreren ser, at koden er låst');
 
@@ -276,7 +279,8 @@ test('enkel tilstand: elevens kode låses efter 10 forkerte forsøg – også ef
     srv = mk();
     base = 'http://127.0.0.1:' + await srv.listen();
     r = await enroll({ pin: '4821' });
-    assert.strictEqual(r._status, 423);
+    assert.strictEqual(r._status, 401);
+    assert.ok(!r.token);
 
     // Læreren nulstiller: engangskoden virker, og tællingen er nulstillet
     assert.strictEqual((await client(base).call('POST', `/api/students/${anna}/reset-pin`, {}))._status, 401, 'kræver login');

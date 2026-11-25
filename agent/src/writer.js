@@ -256,8 +256,18 @@ class Writer {
     } else if (msg.type === 'assignment-result') {
       const key = 'a:' + (Number(msg.assignmentId) || 0);
       const resolve = this.pending.get(key);
-      if (resolve) { this.pending.delete(key); resolve({ ok: !!msg.ok, error: String(msg.error || '') }); }
+      if (resolve) { this.pending.delete(key); resolve({ ok: !!msg.ok, error: String(msg.error || ''), receipt: Writer.cleanReceipt(msg.receipt) }); }
     }
+  }
+
+  /** Kvitteringen for en aflevering fra serveren (kun kendte felter og rimelige længder). */
+  static cleanReceipt(r) {
+    if (!r || typeof r !== 'object' || !(Number(r.at) > 0)) return null;
+    return {
+      at: Number(r.at), assignment: String(r.assignment || '').slice(0, 200), words: Math.max(0, Math.round(Number(r.words) || 0)),
+      mark: String(r.mark || '').slice(0, 160), code: String(r.code || '').slice(0, 20), late: !!r.late,
+      replaces: Number(r.replaces) > 0 ? Number(r.replaces) : null,
+    };
   }
 
   /**
@@ -391,7 +401,7 @@ class Writer {
     return { ok: true, id: d.id };
   }
 
-  /** "Gem som Word": skrivebeskyttet .docx med mærket i sidefoden, når teksten har et bevis. parent: vinduet, dialogen hører til. */
+  /** "Gem Word-fil med mærket" / "Gem kopi (uden mærke)": skrivebeskyttet .docx med mærket i sidefoden, når teksten har et bevis. parent: vinduet, dialogen hører til. */
   async exportDocx(id, parent) {
     const d = this._get(id);
     if (!d) return { ok: false, error: 'Dokumentet findes ikke' };
@@ -400,7 +410,7 @@ class Writer {
     // når teksten har et bevis. Uden vagt eller fra en testserver er mærket gråt. Filen er altid skrivebeskyttet i Word.
     const mark = certId ? Object.assign({ code: 'HM-' + certId.slice(0, 8).toUpperCase(), url: this._proofUrl(certId), place: d.result.place || '' }, Writer.markInfo(d.result)) : null;
     const safe = (d.title || 'Dokument').replace(/[\\/:*?"<>|\u0000-\u001F]/g, '').slice(0, 80) || 'Dokument';
-    const r = await dialog.showSaveDialog(parent || undefined, { title: 'Gem som Word', defaultPath: path.join(app.getPath('documents'), safe + '.docx'), filters: [{ name: 'Word-dokument', extensions: ['docx'] }] });
+    const r = await dialog.showSaveDialog(parent || undefined, { title: mark ? 'Gem Word-fil med mærket' : 'Gem kopi (uden mærke)', defaultPath: path.join(app.getPath('documents'), safe + '.docx'), filters: [{ name: 'Word-dokument', extensions: ['docx'] }] });
     if (r.canceled || !r.filePath) return { ok: false };
     try {
       fs.writeFileSync(r.filePath, D.toDocx(d.blocks, { title: d.title, author: this.o.studentName(), mark, readOnly: true }));

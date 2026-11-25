@@ -364,11 +364,14 @@
     $('title').disabled = !can;
     $('submit').disabled = !can || practice;
     $('docx').disabled = practice;
+    // Klare ord: med et bevis har Word-filen mærket i sidefoden – ellers er det en kopi uden mærke
+    const marked = !!(doc && doc.result && doc.result.certId);
+    $('docx').textContent = marked ? 'Gem Word-fil med mærket' : 'Gem kopi (uden mærke)';
     $('del').hidden = !(doc && !doc.submitted && !practice);
     const n = $('notice');
     n.classList.toggle('practice', practice);
     if (practice) { n.textContent = PRACTICE_TEXT; n.hidden = false; }
-    else if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${(doc.result.label || labelFor(doc.result.place))}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres.'; n.hidden = false; }
+    else if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${(doc.result.label || labelFor(doc.result.place))}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres. Det er ikke afleveret, før du vedhæfter det under "Afleveringer".'; n.hidden = false; }
     else if (!lessonLive) { n.textContent = 'Du kan skrive her, når din lærer har startet en lektion eller du har startet en skriveøkt.'; n.hidden = false; }
     else n.hidden = true;
     showPreview();
@@ -516,6 +519,7 @@
     const a = doc && doc.assignmentId && assignments.find(x => x.id === doc.assignmentId);
     $('confirm-asg').hidden = !a;
     if (a) $('confirm-asg').textContent = `Dokumentet bliver derefter afleveret til "${a.title}".`;
+    $('confirm-not-handed').hidden = !!a; // uden en skrivetime afleveres teksten ikke af sig selv
     $('confirm-mark').textContent = labels.base;
     const missing = Array.isArray(cats) && cats.length > 0;
     confirmForce = missing;
@@ -567,7 +571,7 @@
     const a = doc.assignmentId && assignments.find(x => x.id === doc.assignmentId);
     if (a) {
       const ar = await window.hmw.attach(a.id, doc.id);
-      attached = ar.ok ? a.title : null;
+      attached = ar.ok ? { title: a.title, receipt: ar.receipt } : null;
       if (!ar.ok) toast('Kunne ikke aflevere til "' + a.title + '": ' + (ar.error || 'ukendt fejl'));
     }
     showResult(r, attached);
@@ -585,14 +589,22 @@
       box.append(code, p, url);
       body.append(box);
     } else {
-      $('r-title').textContent = 'Afleveret uden bevis';
+      $('r-title').textContent = attachedTo ? 'Afleveret uden bevis' : 'Afsluttet uden bevis';
       const cats = r.categories || [];
       const p = document.createElement('p'); p.textContent = cats.length ? 'Dokumentet fik ikke mærket, fordi:' : 'HolyMoly kunne ikke udstede et bevis for dokumentet.';
       const ul = document.createElement('ul'); ul.className = 'why-list';
       for (const c of cats) ul.append(li(c.text));
       body.append(p, ul);
     }
-    if (attachedTo) { const p = document.createElement('p'); p.className = 'st-ok'; p.textContent = `Afleveret til "${attachedTo}".`; body.append(p); }
+    $('r-docx').textContent = r.certId ? 'Gem Word-fil med mærket' : 'Gem kopi (uden mærke)';
+    // Klare ord: er teksten afleveret til læreren – eller kun afsluttet?
+    const p = document.createElement('p');
+    if (attachedTo) {
+      p.className = 'st-ok';
+      const V = window.HMAssignmentsView;
+      p.textContent = (V && V.receiptText(attachedTo.receipt)) || `Afleveret til "${attachedTo.title}".`;
+    } else p.textContent = 'Dokumentet er afsluttet, men ikke afleveret til din lærer. Aflever det under "Afleveringer".';
+    body.append(p);
     $('result').showModal();
   }
 

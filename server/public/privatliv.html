@@ -31,6 +31,7 @@
           <tr><td>Adgangskode (kun som krypteret hash) og to-faktor-nøgle (krypteret)</td><td>Sikkert login</td><td>Til kontoen slettes</td></tr>
           <tr><td>Unilogin-id (hvis tilknyttet)</td><td>Login med Unilogin</td><td>Til kontoen slettes</td></tr>
           <tr><td>Lærer-logbog (fx "så skærmen", "frøs")</td><td>Gennemsigtighed over for eleverne</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
+          <tr><td>Revisionsspor: hvilken lærer åbnede, afspillede, hentede, eksporterede eller ændrede hvad hos hvilken elev og hvornår – uden indhold</td><td>Opdage misbrug af en lærerkonto og svare på klager</td><td><span data-cfg="retention.auditDays">365</span> dage. Slettes eleven, står der kun et pseudonym.</td></tr>
         </tbody>
       </table>
 
@@ -40,12 +41,14 @@
         <thead><tr><th>Hvad</th><th>Hvorfor</th><th>Hvor længe</th></tr></thead>
         <tbody>
           <tr><td>Navn og klasse</td><td>Vise eleven i klasseværelset</td><td>Til læreren sletter eleven eller klassen</td></tr>
-          <tr><td>Aktivt program og hjemmeside, åbne faner, kørende programmer</td><td>Lamperne og blokering af det forbudte</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
+          <tr><td>Aktivt program og hjemmeside, kørende programmer. Tilladte sider gemmes kun som værtsnavn (fx dr.dk), og vinduestitler kun for forbudte eller ukendte programmer. Af de åbne faner ser læreren kun de forbudte – resten kun som et antal.</td><td>Lamperne og blokering af det forbudte</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
           <tr><td>Skærmbilleder (når læreren tager dem – og ved forbudt brug, hvis læreren har slået det til; eleven får besked hver gang)</td><td>Dokumentation</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
           <tr><td>Kladder skrevet i HolyMoly eller i Word gennem HolyMoly (ikke afleveret)</td><td>Skrivevinduet og "Skriv i Word"</td><td><span data-cfg="retention.draftDays">60</span> dage efter seneste ændring</td></tr>
           <tr><td>Afleverede tekster</td><td>Mærket på afleveringen</td><td><span data-cfg="retention.docDays">365</span> dage efter aflevering</td></tr>
           <tr><td>Afspilning, skrivelog og skrivedetaljer (skrivestatistik, lampens grunde, indsatte udsnit og større rettelser)</td><td>Vurderingen til mærket og lærerens skrivelog</td><td><span data-cfg="retention.versionsDays">60</span> dage efter aflevering. Derefter kun minuttal.</td></tr>
           <tr><td>Beviser (uden navn)</td><td>Tjek af mærket</td><td><span data-cfg="retention.certYears">3</span> år efter aflevering</td></tr>
+          <tr><td>Skriveøkter hjemme (hvornår eleven skrev hjemme)</td><td>Mærket "hjemme" og afleveringens status</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
+          <tr><td>Hjælpemidler og ekstra tid (sat af læreren) og elevens computer (navn, styresystem, app-version)</td><td>Skrivevinduet, ekstra tid og hjælp ved fejl</td><td>Til eleven ikke har været forbundet i <span data-cfg="retention.inactiveDays">180</span> dage</td></tr>
         </tbody>
       </table>
       <p><b>Afspilning:</b> Læreren kan afspille, hvordan teksten blev til, i trin på ca. 20 sekunder. Vurderingen af skrivestatistikken til mærket er en form for profilering; den bruges kun til mærket og kun af elevens egne lærere.</p>

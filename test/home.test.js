@@ -62,7 +62,8 @@ test('skriveøkt hjemme: ingen skærm, skærmbilleder, faner eller programmer ti
     assert.strictEqual(dropped.message, 'Skriveøkt hjemme: skærmen kan ikke ses');
     assert.strictEqual(srv.hub.isHome(sid), true);
     assert.ok(!srv.hub.watchers.has(sid), 'ingen kigger med');
-    assert.strictEqual(srv.hub.studentView(sid).solo, 'Stil hjemme');
+    assert.strictEqual(srv.hub.studentView(sid).home, true);
+    assert.strictEqual(srv.hub.studentView(sid).solo, undefined, 'afleveringens titel vises ikke live');
 
     // Se skærm og Tag skærmbillede afvises
     teacher.send(JSON.stringify({ type: 'watch', studentId: sid }));

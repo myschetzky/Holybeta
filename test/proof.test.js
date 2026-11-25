@@ -71,7 +71,7 @@ test('A: mærket siger, hvad HolyMoly har set – og Word-filens sidefod har for
   const z = D.toDocx(blocks, { title: 'X', mark: { code: 'HM-ABCD1234', url: 'https://holymoly.test/bevis/abc', place: 'hjemme' } });
   const footer = new TextDecoder().decode(await D.readZipEntry(z, 'word/footer1.xml', inflateRaw));
   assert.match(footer, /✓ Tastet i HolyMoly – intet indsat · hjemme uden opsyn/);
-  assert.match(footer, /Mærket viser, hvad HolyMoly målte på elevens computer\. Det dækker ikke afskrift fra telefon eller papir, og en computer, eleven selv har ændret, eller en maskine, der taster som et menneske, kan ikke udelukkes\. Mangler mærket, er det ikke et tegn på snyd\. 6 ord\./);
+  assert.match(footer, /Mærket viser, hvad HolyMoly målte på elevens computer\. Det dækker ikke afskrift fra telefon eller papir, og en computer, eleven selv har ændret, eller en maskine, der taster som et menneske, kan ikke udelukkes\. Mangler mærket, er det ikke et tegn på snyd\. Tjek altid teksten på linket\. 6 ord\./);
   assert.ok(!/Skrevet uden AI/.test(footer));
   // Det gamle mærke står ingen steder i koden længere
   for (const f of ['shared/doc.js', 'agent/src/doc.js', 'agent/renderer/write.html', 'agent/renderer/write.js', 'agent/src/writer.js', 'server/public/app.js', 'server/public/bevis.js', 'server/public/bevis.html']) {
@@ -82,13 +82,13 @@ test('A: mærket siger, hvad HolyMoly har set – og Word-filens sidefod har for
 
 test('H: mærket v3 – "kun skrivevinduet" uden vagt, "TESTSERVER" fra en testserver, og v2 vises som før', () => {
   const only = ['skrivevindue'], both = ['skrivevindue', 'vagt'];
-  assert.strictEqual(D.label('hjemme', { observed: only }), '✓ Tastet i HolyMoly – intet indsat · hjemme · kun skrivevinduet');
+  assert.strictEqual(D.label('hjemme', { observed: only }), '✓ Tastet i HolyMoly – intet indsat · hjemme, uden opsyn · kun skrivevinduet');
   assert.match(D.label('hjemme', { observed: only }), /kun skrivevinduet/);
   assert.strictEqual(D.label('klasse', { observed: only }), '✓ Tastet i HolyMoly – intet indsat · i timen · kun skrivevinduet');
   assert.strictEqual(D.label('klasse', { observed: both }), '✓ Tastet i HolyMoly – intet indsat · i timen');
   assert.strictEqual(D.label('ekstra', { observed: both }), '✓ Tastet i HolyMoly – intet indsat · i timen');
-  assert.strictEqual(D.label('hjemme', { observed: both, test: true }), '✓ Tastet i HolyMoly – intet indsat · hjemme · TESTSERVER');
-  assert.strictEqual(D.label('lektion og hjemme', { observed: only, test: true }), '✓ Tastet i HolyMoly – intet indsat · hjemme · kun skrivevinduet · TESTSERVER');
+  assert.strictEqual(D.label('hjemme', { observed: both, test: true }), '✓ Tastet i HolyMoly – intet indsat · hjemme, uden opsyn · TESTSERVER');
+  assert.strictEqual(D.label('lektion og hjemme', { observed: only, test: true }), '✓ Tastet i HolyMoly – intet indsat · hjemme, uden opsyn · kun skrivevinduet · TESTSERVER');
   // v2 (uden observed): som før
   assert.strictEqual(D.label('hjemme'), '✓ Tastet i HolyMoly – intet indsat · hjemme uden opsyn');
   // Grønt kun med vagt og uden testserver
@@ -127,7 +127,7 @@ test('H: bevis v3 fra en testserver – intet nameHash, TESTSERVER og gråt mær
     assert.strictEqual(p.started, 1_000_000);
     assert.strictEqual(p.checks[0], 'Tastet i HolyMolys skrivevindue – indsæt blokeret');
     assert.ok(!p.checks.some(x => /vagten/.test(x)), 'ingen vagt-linje uden vagt');
-    assert.ok(p.checks.includes('Menneskeligt skrivetempo'));
+    assert.ok(p.checks.includes('Intet skrevet hurtigere, end et menneske kan'));
     // Dokumentet: full() har test og observed, og Word-filen har TESTSERVER og et gråt mærke
     const full = t.docs.full(t.db.prepare('SELECT id FROM documents WHERE cert_id = ?').get(r.certId).id);
     assert.strictEqual(full.test, true);
@@ -136,11 +136,11 @@ test('H: bevis v3 fra en testserver – intet nameHash, TESTSERVER og gråt mær
     const footer = new TextDecoder().decode(await D.readZipEntry(z, 'word/footer1.xml', inflateRaw));
     assert.match(footer, /TESTSERVER/);
     assert.match(footer, /kun skrivevinduet/);
-    assert.match(footer, /Testserver – må ikke bruges til bedømmelse\. Tjek altid teksten på linket\./);
+    assert.match(footer, /Tjek altid teksten på linket\. \d+ ord\.<[\s\S]*Testserver – må ikke bruges til bedømmelse\./);
     assert.ok(!/15803D/.test(footer), 'mærket er ikke grønt');
     assert.match(footer, /w:color w:val="6B7280"\/><w:sz w:val="18"/);
     const core = new TextDecoder().decode(await D.readZipEntry(z, 'docProps/core.xml', inflateRaw));
-    assert.match(core, /<dc:description>[^<]*TESTSERVER[^<]*Testserver – må ikke bruges til bedømmelse\. Tjek altid teksten på linket\.<\/dc:description>/);
+    assert.match(core, /<dc:description>[^<]*TESTSERVER[^<]*Tjek altid teksten på linket\. Testserver – må ikke bruges til bedømmelse\.<\/dc:description>/);
     // Med vagt og fra skolens egen server: grønt og uden testserver-linje
     const z2 = D.toDocx(full.blocks, { title: full.title, mark: { code: 'HM-X', url: 'u', place: 'lektion', observed: ['skrivevindue', 'vagt'] } });
     const footer2 = new TextDecoder().decode(await D.readZipEntry(z2, 'word/footer1.xml', inflateRaw));
@@ -157,7 +157,7 @@ test('H: bevis v3 fra en testserver – intet nameHash, TESTSERVER og gråt mær
     assert.strictEqual(p2.kind, 'hjemme');
     assert.deepStrictEqual(p2.observed, ['skrivevindue', 'vagt']);
     assert.ok(p2.checks.includes('HolyMoly-vagten blokerede AI på computeren'));
-    assert.strictEqual(D.label(p2.kind, p2), '✓ Tastet i HolyMoly – intet indsat · hjemme');
+    assert.strictEqual(D.label(p2.kind, p2), '✓ Tastet i HolyMoly – intet indsat · hjemme, uden opsyn');
     const common = (a, b) => Object.keys(a).filter(k => k in b && JSON.stringify(a[k]) === JSON.stringify(b[k]));
     assert.deepStrictEqual(common(p, p2).filter(k => !['v', 'issuer', 'keyId'].includes(k)), [], 'ingen fælles felter: ' + common(p, p2));
     // Under de samme forhold er de fælles felter de samme som med en anden elevs bevis – intet felt er elevens eget
@@ -171,7 +171,7 @@ test('H: bevis v3 fra en testserver – intet nameHash, TESTSERVER og gråt mær
   } finally { t.done(); }
 });
 
-test('H: vagten tæller kun med i "observed", hvis den fulgte hele forløbet – og hjælpemidler giver "Skrivetempo ikke vurderet"', () => {
+test('H: vagten tæller kun med i "observed", hvis den fulgte hele forløbet – og hjælpemidler giver samme neutrale tempolinje', () => {
   const t = setup();
   try {
     const withGuard = Object.assign({ observed: ['skrivevindue', 'vagt'] }, meta);
@@ -192,14 +192,19 @@ test('H: vagten tæller kun med i "observed", hvis den fulgte hele forløbet –
     const c = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, Object.assign({}, meta, { observed: ['skrivevindue', 'vagt', 'skærm'] }), 3_000_000);
     assert.deepStrictEqual(t.docs.certificate(c.certId).payload.observed, ['skrivevindue', 'vagt']);
     // Uden observed (fx en ældre hub): kun skrivevinduet
-    const d = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, meta, 3_000_000);
+    const dId = write(t.docs, t.anna, LONG).id;
+    const d = t.docs.submit(t.anna, dId, meta, 3_000_000);
     assert.deepStrictEqual(t.docs.certificate(d.certId).payload.observed, ['skrivevindue']);
-    // Hjælpemidler (students.aids bygges senere): tempoet vurderes ikke
-    const e = t.docs.submit(t.anna, write(t.docs, t.anna, LONG).id, Object.assign({}, meta, { aids: ['ordforslag'] }), 3_000_000);
+    // Hjælpemidler: tempoet vurderes ikke – men beviset er ord for ord det samme som uden (neutral tempolinje)
+    const eId = write(t.docs, t.anna, LONG).id;
+    const e = t.docs.submit(t.anna, eId, Object.assign({}, meta, { aids: ['ordforslag'] }), 3_000_000);
     const pe = t.docs.certificate(e.certId).payload;
-    assert.ok(pe.checks.includes('Skrivetempo ikke vurderet'));
-    assert.ok(!pe.checks.includes('Menneskeligt skrivetempo'));
+    assert.deepStrictEqual(pe.checks, t.docs.certificate(d.certId).payload.checks, 'samme checks med og uden hjælpemidler');
+    assert.ok(!/vurderet|hjælpemid|ordforslag|diktering/i.test(t.docs.certificate(e.certId).signed));
     assert.strictEqual(pe.assignmentCreated, null);
+    // Lærerens egen visning siger stadig, at tempoet ikke er vurderet
+    assert.ok(t.docs.full(eId).notes.includes('Skrivetempo ikke vurderet (eleven har hjælpemidler)'));
+    assert.ok(!t.docs.full(dId).notes.some(n => /ikke vurderet/.test(n)));
   } finally { t.done(); }
 });
 

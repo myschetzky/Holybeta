@@ -176,7 +176,7 @@ test('verified:overview og verified:list: afleveringer med mærket på det aflev
 
     const list = await t.handlers.get('verified:list')();
     assert.deepStrictEqual(list.map(d => d.id), ['w1', 'd2', 'd1']);
-    assert.strictEqual(list.find(d => d.id === 'd1').label, MARK + ' \u00b7 hjemme');
+    assert.strictEqual(list.find(d => d.id === 'd1').label, MARK + ' \u00b7 hjemme, uden opsyn');
     assert.strictEqual(list.find(d => d.id === 'd1').words, 5);
     assert.strictEqual(list.find(d => d.id === 'w1').source, 'word');
 

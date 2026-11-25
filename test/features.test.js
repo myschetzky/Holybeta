@@ -220,5 +220,7 @@ test('tekster: ingen løfter om "uden AI", "din egen", "kan ikke forfalskes" ell
   // Forsidens H1 er ejerens valg og står der stadig
   assert.match(fs.readFileSync(path.join(root, 'server/public/forside.html'), 'utf8'), /<h1>Elevernes bevis på, at deres tekst ikke er skrevet med AI<\/h1>/);
   // Logbogen ved aflevering bruger mærket (D.label), ikke "skrevet uden AI"
-  assert.match(fs.readFileSync(path.join(root, 'server/src/hub.js'), 'utf8'), /' – ' \+ D\.label\(/);
+  const hubSrc = fs.readFileSync(path.join(root, 'server/src/hub.js'), 'utf8');
+  assert.match(hubSrc, /const mark = doc\.cert_id \? D\.label\(/);
+  assert.match(hubSrc, /' – ' \+ mark/);
 });

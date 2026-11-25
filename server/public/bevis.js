@@ -11,7 +11,7 @@
   const WORD_RE = /[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu;
   const PLACE = { lektion: 'I timen', hjemme: 'Hjemme uden opsyn', 'lektion og hjemme': 'I timen og hjemme uden opsyn' };
   // v3: kind. Ekstra tid efter timen vises som "I timen" (forlængelsen står aldrig på beviset).
-  const KIND = { klasse: 'I timen', ekstra: 'I timen', hjemme: 'Hjemme' };
+  const KIND = { klasse: 'I timen', ekstra: 'I timen', hjemme: 'Hjemme, uden opsyn (et lavere niveau end i timen)' };
   const fmtDate = (d) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString('da-DK', { day: 'numeric', month: 'long', year: 'numeric' }) : ''; };
 
   async function sha256(text) {
@@ -36,7 +36,8 @@
   let notMine = false; // en indlogget lærer ser et bevis, der tilhører en anden lærers elev
 
   async function load() {
-    if (!id) { $('loading').hidden = true; $('missing').hidden = false; return; }
+    // Uden id: upload først – træk filerne (eller Lectios zip) ind og find beviserne
+    if (!id) { $('loading').hidden = true; $('find').hidden = false; return; }
     let c;
     try {
       const r = await fetch('/api/bevis/' + id, { credentials: 'same-origin' });
@@ -120,16 +121,24 @@
 
     let t;
     $('text').addEventListener('input', () => { clearTimeout(t); t = setTimeout(checkPasted, 250); });
-    $('file').addEventListener('change', () => { const f = $('file').files[0]; if (f) checkFile(f); });
+    $('file').addEventListener('change', () => pick($('file').files));
     const drop = $('drop');
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => {
       e.preventDefault();
       drop.classList.remove('over');
-      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-      if (f) checkFile(f);
+      pick(e.dataTransfer && e.dataTransfer.files);
     });
+  }
+
+  /** Én Word-fil tjekkes mod dette bevis. Flere filer eller en zip tjekkes i tabellen nedenfor. */
+  function pick(list) {
+    const files = [...(list || [])];
+    if (!files.length) return;
+    if (files.length === 1 && !/\.zip$/i.test(files[0].name)) return checkFile(files[0]);
+    $('find').hidden = false;
+    checkMany(files);
   }
   // En fil sluppet ved siden af feltet må ikke åbne filen i browseren
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -212,6 +221,132 @@
       show(!!hit, { text: hit || variants[0] || '' });
     } catch (e) { fail(e.message); }
   }
+
+  /* ---------- Mange filer: upload først, opslag på serveren ud fra tekstens sha256 ---------- */
+  const MAX_FILES = 200;
+
+  /** Pak en zip (fx fra Lectio) ud til dens .docx-filer: [{ name, bytes }]. */
+  async function docxFromZip(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const names = HMDoc.zipNames(bytes).filter(n => /\.docx$/i.test(n) && !/(^|\/)(__MACOSX\/|~\$|\.)/.test(n));
+    const out = [];
+    for (const n of names.slice(0, MAX_FILES)) out.push({ name: n.split('/').pop(), bytes: await HMDoc.readZipEntry(bytes, n, inflateRaw, 30 * 1024 * 1024) });
+    return out;
+  }
+
+  /** Læs en Word-fil lokalt: tekstens varianter, deres sha256 og mærket i sidefoden (kun det, filen påstår). */
+  async function readDocx(bytes) {
+    const xml = await HMDoc.readZipEntry(bytes, 'word/document.xml', inflateRaw);
+    if (!xml) throw new Error('Ikke en Word-fil (.docx)');
+    const doc = HMDoc.docxText(new TextDecoder().decode(xml));
+    const hashes = [];
+    for (const v of doc.variants) if (v) hashes.push(await sha256(v));
+    let foot = { mark: '', code: '', url: '' };
+    for (const n of HMDoc.zipNames(bytes).filter(n => /^word\/footer\d*\.xml$/.test(n))) {
+      const f = HMDoc.docxFooter(new TextDecoder().decode(await HMDoc.readZipEntry(bytes, n, inflateRaw)));
+      if (f.code || f.mark) { foot = f; break; }
+    }
+    return { hashes, foot };
+  }
+
+  async function lookup(hashes) {
+    const r = await fetch('/api/bevis/find', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sha256: hashes }) });
+    const x = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(x.error || 'Serveren svarede ikke');
+    return x.found || [];
+  }
+
+  function cell(text, cls) {
+    const td = document.createElement('td');
+    if (cls) td.className = cls;
+    if (text instanceof Node) td.append(text); else td.textContent = text;
+    return td;
+  }
+
+  /** Én række: fil (eller elevens navn for elevens egen lærer), mærke, teksten passer, udstedt her – og evt. en advarsel. */
+  function row(name, res) {
+    const tr = document.createElement('tr');
+    const first = document.createElement('div');
+    first.textContent = name;
+    if (res.hit && res.hit.student) {
+      const who = document.createElement('div');
+      who.className = 'muted small';
+      who.textContent = res.hit.student + (res.hit.class ? ' · ' + res.hit.class : '');
+      first.append(who);
+    }
+    for (const w of res.warn || []) {
+      const p = document.createElement('div');
+      p.className = 'match warn small';
+      p.textContent = w;
+      first.append(p);
+    }
+    let mark;
+    if (res.hit) {
+      mark = document.createElement('div');
+      mark.textContent = `${res.hit.mark} · ${res.hit.code} · ${fmtDate(res.hit.date)}`;
+      if (res.hit.id) { const a = document.createElement('a'); a.href = '/bevis/' + res.hit.id; a.target = '_blank'; a.rel = 'noopener'; a.textContent = ' Se beviset'; mark.append(a); }
+    } else mark = res.error || (res.foot && res.foot.mark ? 'Filen påstår: ' + res.foot.mark : 'Intet mærke');
+    tr.append(cell(first), cell(mark),
+      cell(res.error ? '–' : res.hit ? 'Ja' : res.foot && res.foot.code ? 'Nej' : '–', res.hit ? 'match ok' : res.foot && res.foot.code ? 'match bad' : ''),
+      cell(res.error ? '–' : res.hit ? 'Ja' : 'Nej'));
+    return tr;
+  }
+
+  async function checkOne(name, bytes) {
+    try {
+      const { hashes, foot } = await readDocx(bytes);
+      const found = await lookup(hashes);
+      // Den mest sandsynlige variant først (samme rækkefølge som docxText)
+      const hit = hashes.map(h => found.find(f => f.sha256 === h)).find(Boolean) || null;
+      const warn = [];
+      let other = '';
+      try { if (foot.url) { const u = new URL(foot.url); if (u.host !== location.host) other = u.host; } } catch (e) { /* ugyldigt link i sidefoden */ }
+      if (other) warn.push(`Sidefoden peger på en anden server (${other}). Tjek filen dér.`);
+      if (hit && foot.code && foot.code !== hit.code) warn.push(`Sidefoden har koden ${foot.code}, men teksten hører til ${hit.code}.`);
+      if (!hit && foot.code && !other) warn.push(`Sidefoden har koden ${foot.code}, men teksten passer ikke til et bevis her. Den er ændret, eller koden er kopieret.`);
+      return { hit, foot, warn };
+    } catch (e) {
+      return { error: e && e.message ? e.message : 'Filen kunne ikke læses' };
+    }
+  }
+
+  async function checkMany(list) {
+    const rows = $('many-rows');
+    rows.replaceChildren();
+    $('many-wrap').hidden = false;
+    let done = 0, hits = 0, total = 0;
+    const status = () => { $('many-status').textContent = `${done} af ${total} filer tjekket · ${hits} med bevis fra denne server`; };
+    const items = [];
+    for (const f of [...list]) {
+      if (/\.zip$/i.test(f.name)) {
+        try { for (const x of await docxFromZip(f)) items.push(x); } catch (e) { rows.append(row(f.name, { error: e.message || 'Zip-filen kunne ikke læses' })); }
+      } else if (/\.docx$/i.test(f.name)) items.push({ name: f.name, file: f });
+      else rows.append(row(f.name, { error: 'Ikke en Word-fil (.docx) eller zip' }));
+      if (items.length >= MAX_FILES) break;
+    }
+    total = items.length;
+    status();
+    for (const it of items.slice(0, MAX_FILES)) {
+      let res;
+      if (it.file && it.file.size > 30 * 1024 * 1024) res = { error: 'Filen er for stor' };
+      else res = await checkOne(it.name, it.bytes || new Uint8Array(await it.file.arrayBuffer()));
+      if (res.hit) hits++;
+      done++;
+      rows.append(row(it.name, res));
+      status();
+    }
+  }
+
+  const many = $('many');
+  many.addEventListener('change', () => { if (many.files.length) checkMany(many.files); });
+  const mdrop = $('many-drop');
+  mdrop.addEventListener('dragover', (e) => { e.preventDefault(); mdrop.classList.add('over'); });
+  mdrop.addEventListener('dragleave', () => mdrop.classList.remove('over'));
+  mdrop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    mdrop.classList.remove('over');
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) checkMany(e.dataTransfer.files);
+  });
 
   load();
 })();

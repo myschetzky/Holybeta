@@ -175,6 +175,17 @@ function open(dataDir) {
       submitted INTEGER NOT NULL,
       PRIMARY KEY (assignment_id, student_id)
     );
+    -- Tidligere vedhæftninger (en aflevering overskrives aldrig i det skjulte). Kun dokument-id, bevis-id og tider –
+    -- ingen tekstkopi. Følger dokumentet (slette-triggeren i docs.js) og DOC_RETENTION_DAYS (retention.js).
+    CREATE TABLE IF NOT EXISTS assignment_history (
+      assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      doc_id TEXT NOT NULL,
+      cert_id TEXT,
+      submitted INTEGER NOT NULL,
+      replaced INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assignment_history_a ON assignment_history(assignment_id, student_id);
     CREATE TABLE IF NOT EXISTS trial_claims (
       who TEXT PRIMARY KEY,
       created INTEGER NOT NULL
@@ -205,6 +216,12 @@ function open(dataDir) {
   if (!lc.has('assignment_id')) db.exec('ALTER TABLE lessons ADD COLUMN assignment_id INTEGER');
   if (!lc.has('end_reason')) db.exec('ALTER TABLE lessons ADD COLUMN end_reason TEXT');
   if (!lc.has('device_hash')) db.exec('ALTER TABLE lessons ADD COLUMN device_hash TEXT');
+  // Hvornår elevens app sidst var forbundet (frist for inaktive elever, retention.js). Eksisterende elever regnes som set nu.
+  const stc = new Set(db.prepare('PRAGMA table_info(students)').all().map(c => c.name));
+  if (!stc.has('last_seen')) {
+    db.exec('ALTER TABLE students ADD COLUMN last_seen INTEGER');
+    db.prepare('UPDATE students SET last_seen = ?').run(Date.now());
+  }
   // Ekstra tid: samme lektion (samme id) varer længere for enkelte elever
   db.exec(`CREATE TABLE IF NOT EXISTS lesson_extensions (
     lesson_id INTEGER NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
@@ -248,6 +265,29 @@ function open(dataDir) {
   if (!sc.has('created')) db.exec('ALTER TABLE sessions ADD COLUMN created INTEGER');
   // Serverens egne kørsler: hvornår den startede, og hvornår den sidst var i live. Hullerne imellem er serverens nedetid
   // (tæller ikke mod elevens skrive-bevis, se docs.js _observe).
+  // Revisionsspor: hvilken lærer gjorde hvad ved hvilken elev og hvornår – uden indhold (ingen titler, tekst eller adresser).
+  // Kun til at tilføje: rækker kan ikke ændres, og de kan kun slettes efter fristen (retention.js AUDIT_DAYS sætter
+  // meta.audit_purge_before). Slettes eleven, erstattes elev-id'et af et pseudonym (det samme for alle elevens rækker).
+  db.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    teacher_id INTEGER,
+    action TEXT NOT NULL,
+    student_id INTEGER,
+    student_ref TEXT
+  );
+  CREATE INDEX IF NOT EXISTS audit_log_ts ON audit_log(ts);
+  CREATE INDEX IF NOT EXISTS audit_log_student ON audit_log(student_id);
+  CREATE TRIGGER IF NOT EXISTS audit_log_no_update BEFORE UPDATE ON audit_log
+    WHEN NEW.id IS NOT OLD.id OR NEW.ts IS NOT OLD.ts OR NEW.teacher_id IS NOT OLD.teacher_id OR NEW.action IS NOT OLD.action
+      OR OLD.student_id IS NULL OR NEW.student_id IS NOT NULL OR NEW.student_ref IS NULL
+  BEGIN SELECT RAISE(ABORT, 'audit_log kan kun tilføjes'); END;
+  CREATE TRIGGER IF NOT EXISTS audit_log_no_delete BEFORE DELETE ON audit_log
+    WHEN OLD.ts >= COALESCE((SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'audit_purge_before'), 0)
+  BEGIN SELECT RAISE(ABORT, 'audit_log kan kun slettes efter fristen'); END;
+  CREATE TRIGGER IF NOT EXISTS audit_log_pseudonym AFTER DELETE ON students BEGIN
+    UPDATE audit_log SET student_id = NULL, student_ref = (SELECT 'slettet-' || lower(hex(randomblob(6)))) WHERE student_id = OLD.id;
+  END;`);
   db.exec(`CREATE TABLE IF NOT EXISTS server_runs (start INTEGER NOT NULL, last_alive INTEGER NOT NULL, clean INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS server_runs_start ON server_runs(start);`);
   return db;

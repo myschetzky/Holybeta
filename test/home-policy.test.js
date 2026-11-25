@@ -33,7 +33,7 @@ function ws(url, headers) {
 }
 const blocks = (text) => [{ t: 'h1', r: [{ x: 'Stil' }] }, { t: 'p', r: [{ x: text }] }];
 
-test('hjemme: fast profil, ingen nav/app, kun værtsnavne, "Skriver hjemme" og ingen billeder', async () => {
+test('hjemme: fast profil, ingen nav/app, kun værtsnavne, kun farve og kategori og ingen billeder', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-homepol-'));
   const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, signupCode: 'k', quiet: true, requireGuard: false });
   const port = await srv.listen();
@@ -88,12 +88,12 @@ test('hjemme: fast profil, ingen nav/app, kun værtsnavne, "Skriver hjemme" og i
     const red = await teacher.wait(m => m.type === 'student' && m.student.studentId === sid && m.student.color === 'red');
     assert.strictEqual(red.student.url, '');
     assert.strictEqual(red.student.app, '');
-    assert.strictEqual(red.student.activity, 'Skriver hjemme');
+    assert.strictEqual(red.student.activity, '', 'kun farve og kategori – ikke "Skriver hjemme"');
     assert.deepStrictEqual(red.student.violations.map(v => v.text), ['AI / chatbots'], 'kun kategorien – og kun ai/remote/vm');
     const v = srv.hub.studentView(sid);
     assert.strictEqual(v.url, '');
     assert.strictEqual(v.app, '');
-    assert.strictEqual(v.activity, 'Skriver hjemme');
+    assert.strictEqual(v.activity, '');
     assert.strictEqual(srv.hub.detail.get(sid), undefined);
 
     agent.send(JSON.stringify({ type: 'events', seq: 1, items: [

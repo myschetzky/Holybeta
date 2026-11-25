@@ -7,6 +7,7 @@
  *   npm run enkel -- godkend <brugernavn> godkender en ny lærer (når ingen kollega kan gøre det)
  *   npm run enkel -- overdrag             registrerer, at skolens IT har overtaget driften (kræver SCHOOL_OPERATED=1)
  *   npm run enkel -- aktive               er der lektioner eller skriveøkter i gang? (exit 1 = ja; bruges af scripts/opdater.sh)
+ *   npm run enkel -- revisionsspor [dage] revisionssporet (lærerhandlinger uden indhold) som CSV på stdout (standard: 365 dage)
  *
  * Lærere opretter sig med navn, brugernavn og adgangskode (den første med opsætningskoden, som skrives her ved start).
  * Elever skriver klassekoden, deres navn og en kode på 4 cifre i HolyMoly-appen. Lektioner kræver skolens ja:
@@ -85,6 +86,22 @@ if (process.argv[2] === 'aktive') {
   if (extra) parts.push(`${extra} ${extra === 1 ? 'elev' : 'elever'} med ekstra tid`);
   console.log('I gang: ' + parts.join(', ') + '.');
   process.exit(1);
+}
+
+if (process.argv[2] === 'revisionsspor') {
+  // Til den driftsansvarlige (klager, mistanke om en kapret lærerkonto): hvem gjorde hvad hos hvilken elev – uden indhold.
+  // Elevens navn står kun med, så længe eleven findes. En slettet elev står som et pseudonym.
+  const days = Number(process.argv[3] || 365);
+  if (!Number.isFinite(days) || days <= 0) { console.error('Skriv antal dage:  npm run enkel -- revisionsspor 90'); process.exit(1); }
+  const db = require('../server/src/db.js').open(DATA_DIR);
+  const rows = db.prepare(`SELECT a.ts, a.teacher_id, t.name AS teacher, a.action, a.student_id, a.student_ref, s.name AS student, c.name AS class
+    FROM audit_log a LEFT JOIN teachers t ON t.id = a.teacher_id LEFT JOIN students s ON s.id = a.student_id LEFT JOIN classes c ON c.id = s.class_id
+    WHERE a.ts >= ? ORDER BY a.ts, a.id`).all(Date.now() - days * 86400_000);
+  const cell = (v) => { const x = v == null ? '' : String(v); return /[;"\r\n]/.test(x) || /^[=+\-@]/.test(x) ? '"' + x.replace(/"/g, '""').replace(/^([=+\-@])/, "'$1") + '"' : x; };
+  const out = [['Tid (UTC)', 'Lærer-id', 'Lærer', 'Handling', 'Elev-id', 'Elev', 'Klasse'].join(';')];
+  for (const r of rows) out.push([new Date(r.ts).toISOString(), r.teacher_id, r.teacher, r.action, r.student_id ?? r.student_ref, r.student, r.class].map(cell).join(';'));
+  process.stdout.write('\ufeff' + out.join('\r\n') + '\r\n');
+  process.exit(0);
 }
 
 const { createServer } = require('../server/src/index.js');

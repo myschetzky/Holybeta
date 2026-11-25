@@ -594,9 +594,9 @@
         flag = v.online && v.greyReason ? v.activity : '';
       }
       if (!flag && v.lastAttempt && Date.now() - v.lastAttempt.ts < 5 * 60_000) flag = 'Forsøgte: ' + v.lastAttempt.text;
-      // Skriveøkt uden for timen
-      if (v.solo) flag = 'Skriver hjemme: ' + v.solo;
-      return { act, flag, home: !!v.solo };
+      // Skriveøkt hjemme: kun farve og kategori på tegningen (serveren sender hverken "Skriver hjemme" eller titlen)
+      if (v.home) flag = '';
+      return { act, flag };
     }
 
     function updateDesk(id) {
@@ -618,7 +618,6 @@
       act.textContent = t.act;
       act.classList.toggle('code', !!t.code);
       d.querySelector('.flag').textContent = t.flag;
-      d.classList.toggle('home', !!t.home && !state.editing);
       d.title = s.name + ' – ' + t.act + (t.flag ? '\n' + t.flag : '');
     }
 
@@ -889,11 +888,17 @@
     /* ---- afleveringer: læreren lægger en opgave ud, eleverne vedhæfter et dokument skrevet i HolyMoly ---- */
     const fmtDue = (ts) => new Date(ts).toLocaleString('da-DK', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
     const localInput = (ts) => { const d = new Date(ts); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+    /** "Afleveret igen 24. nov. 22.14 (efter fristen, 1 tidligere)" – en aflevering skiftes aldrig ud i det skjulte. */
+    function submittedText(sub) {
+      if (!sub.previous) return fmtDateTime(sub.submitted) + (sub.late ? ' · efter fristen' : '');
+      return `Afleveret igen ${fmtDateTime(sub.submitted)} (${sub.late ? 'efter fristen, ' : ''}${sub.previous} tidligere${sub.firstSubmitted ? ', første ' + fmtDateTime(sub.firstSubmitted) : ''})`;
+    }
     async function downloadWord(docId) {
       const d = await api('/api/docs/' + docId);
       // Mærket med det, der blev målt (observed) og "TESTSERVER" – samme tekst og farve som elevens egen Word-fil
       const mark = d.certId ? { code: 'HM-' + d.certId.slice(0, 8).toUpperCase(), url: `${location.origin}/bevis/${d.certId}`, place: d.place, observed: d.observed, test: d.test } : null;
       const blob = new Blob([HMDoc.toDocx(d.blocks, { title: d.title, mark, readOnly: true })], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      api('/api/docs/' + docId + '/word', { method: 'POST' }).catch(() => {}); // revisionssporet
       const a = h('a', { href: URL.createObjectURL(blob), download: (d.title || 'Dokument').replace(/[\\/:*?"<>|]/g, '') + '.docx' });
       document.body.append(a); a.click(); a.remove();
     }
@@ -949,11 +954,11 @@
         const rows = a.students.map((s) => {
           const sub = s.submission;
           const status = !sub ? h('span', { class: 'muted', text: 'Ikke afleveret' })
-            : h('div', {}, h('div', { text: sub.title || 'Uden titel' }), h('div', { class: 'muted small', text: fmtDateTime(sub.submitted) + (sub.place === 'hjemme' ? ' · skrevet hjemme' : sub.place === 'lektion og hjemme' ? ' · skrevet i timen og hjemme' : '') + (sub.late ? ' · efter fristen' : '') }));
+            : h('div', {}, h('div', { text: sub.title || 'Uden titel' }), h('div', { class: 'muted small', text: submittedText(sub) + (sub.place === 'hjemme' ? ' · skrevet hjemme' : sub.place === 'lektion og hjemme' ? ' · skrevet i timen og hjemme' : '') }));
           // Uden bevis er ikke en anklage: neutral grå tekst (årsagen står i elevens dokument under Dokumenter)
           // Fra en testserver: badge 'Testserver' i stedet for et grønt mærke. Uden vagt: gråt mærke med "kun skrivevinduet".
           const mark = !sub ? null : sub.certId ? (sub.test ? h('span', { class: 'badge', title: HMDoc.label(sub.place, { observed: sub.observed, test: true }), text: 'Testserver' })
-            : h('span', { class: 'badge' + (HMDoc.markGreen({ observed: sub.observed }) ? ' green' : ''), text: HMDoc.label(sub.place, { observed: sub.observed }) }))
+            : h('span', { class: 'badge' + (HMDoc.markGreen({ place: sub.place, observed: sub.observed }) ? ' green' : ''), text: HMDoc.label(sub.place, { observed: sub.observed }) }))
             : h('span', { class: 'muted small', title: (sub.reasons || []).join('; '), text: 'Uden bevis' });
           const acts = sub ? h('div', { class: 'row-actions start' },
             sub.docId ? h('button', { class: 'btn small', type: 'button', text: 'Skrivelog', 'aria-label': `Skrivelog for ${s.name}`, onclick: () => { view = { kind: 'log', id: a.id, docId: sub.docId, name: s.name, title: sub.title }; render(); } }) : null,
@@ -1188,7 +1193,7 @@
     }
     // Skriveøkt hjemme: skærm, skærmbilleder, faner og programmer kan ikke ses (serveren afviser det også)
     const HOME_MSG = 'Skriveøkt hjemme: skærmen kan ikke ses';
-    function isHome(id) { const v = state.views.get(id); return !!(v && v.solo); }
+    function isHome(id) { const v = state.views.get(id); return !!(v && v.home); }
     /** Kig med på den åbne elev – men aldrig, mens eleven skriver hjemme. */
     function watchOpen(screen) {
       const id = state.open;
@@ -1232,18 +1237,18 @@
       $('#d-hand').hidden = !v.hand;
       $('#d-freeze').disabled = !(state.lesson && state.lesson.live);
       if (rw) rw.updateDrawer(id);
-      const home = !!v.solo;
+      const home = !!v.home;
       const shot = $('#d-shot');
       shot.disabled = home || !(state.lesson && state.lesson.live && v.online);
-      shot.title = home ? 'Eleven skriver hjemme. Der tages ingen skærmbilleder af skærmen derhjemme.' : '';
+      shot.title = home ? 'Uden for timen tages der ingen skærmbilleder.' : '';
       const full = $('#d-fullscreen');
       full.disabled = home;
-      full.title = home ? 'Eleven skriver hjemme. Skærmen kan ikke ses.' : '';
+      full.title = home ? 'Skærmen kan ikke ses uden for timen.' : '';
       watchOpen(Number($('#d-screen-sel').value) || 0);
       const msg = $('#d-screen-msg');
       if (home) {
         msg.hidden = false;
-        msg.textContent = 'Skriveøkt hjemme: skærmen kan ikke ses. Du ser kun, at eleven skriver, og hvad HolyMoly har blokeret.';
+        msg.textContent = 'Skærmen kan ikke ses uden for timen. Du ser kun lampens farve og kategori.';
         $('#d-screen').removeAttribute('src');
         $('#d-screen').hidden = true;
         $('#d-screen-sel').hidden = true;
@@ -1269,7 +1274,7 @@
         const v = state.views.get(id) || {};
         const d = state.detail || { tabs: [], apps: [] };
         const secs = [];
-        if (v.solo) secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Skriver hjemme' }), h('p', { class: 'muted small', text: `Skriveøkt til "${v.solo}". Skærm, faner og programmer vises ikke, når eleven skriver hjemme.` })));
+        if (v.home) secs.push(h('div', { class: 'sec' }, h('p', { class: 'muted small', text: 'Skærm, faner og programmer vises ikke uden for timen. Kun lampens farve og kategori.' })));
         if (v.violations && v.violations.length) {
           secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Lige nu' }), ...v.violations.map(x => h('div', { class: 'violation', text: x.text }))));
         }
@@ -1277,14 +1282,18 @@
           secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Overvågning ikke komplet' }), ...v.degraded.map(x => h('div', { class: 'violation grey', text: x.text }))));
         }
         // Hjemme vises intet aktivt vindue – kun at eleven skriver
-        if (!v.solo) secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Aktivt vindue' }), h('div', { text: v.activity || '–' }), v.url ? h('div', { class: 'muted small', text: v.url }) : null,
+        if (!v.home) secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Aktivt vindue' }), h('div', { text: v.activity || '–' }), v.url ? h('div', { class: 'muted small', text: v.url }) : null,
           v.app && !v.url ? appButtons(v.app) : null));
         if (v.ext) secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Browser-udvidelse' }), h('div', { class: 'small', text: v.ext.connected ? 'Aktiv i: ' + (v.ext.browsers.join(', ') || '–') : 'Ikke forbundet' })));
-        if (!v.solo) secs.push(h('div', { class: 'sec' }, h('h3', { text: `Åbne faner (${d.tabs.length})` }),
+        // Serveren sender kun forbudte faner med adresse og titel – resten er et antal (dataminimering)
+        const okTabs = Number(d.allowedTabs) || 0;
+        if (!v.home) secs.push(h('div', { class: 'sec' }, h('h3', { text: `Åbne faner (${d.tabs.length + okTabs})` }),
           d.tabs.length ? h('ul', { class: 'list' }, ...d.tabs.map(t => {
-            const r = t.blocked;
-            return h('li', {}, h('div', { class: 'main' }, h('div', { class: 'title', text: (t.active ? '▶ ' : '') + (t.title || hostOf(t.url)) }), h('div', { class: 'url', text: t.url })), t.browser ? h('span', { class: 'badge', text: t.browser }) : null);
-          })) : h('p', { class: 'muted small', text: 'Ingen data endnu.' })));
+            return h('li', {}, h('div', { class: 'main' }, h('div', { class: 'title', text: (t.active ? '▶ ' : '') + (t.title || hostOf(t.url)) }), h('div', { class: 'url', text: t.url })),
+              t.category ? h('span', { class: 'badge red', text: t.category }) : null, t.browser ? h('span', { class: 'badge', text: t.browser }) : null);
+          })) : null,
+          okTabs ? h('p', { class: 'muted small', text: `${okTabs} tilladte ${okTabs === 1 ? 'fane' : 'faner'}` }) : null,
+          !d.tabs.length && !okTabs ? h('p', { class: 'muted small', text: 'Ingen data endnu.' }) : null));
         body.replaceChildren(...secs);
         return;
       }
@@ -1384,6 +1393,7 @@
       const word = h('button', { class: 'btn small', text: 'Hent som Word', onclick: () => {
         const mark = d.certId ? { code: proofCode(d.certId), url: `${location.origin}/bevis/${d.certId}`, place: d.place, observed: d.observed, test: d.test } : null;
         const blob = new Blob([HMDoc.toDocx(d.blocks, { title: d.title, author: d.studentName || '', mark, readOnly: true })], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        api('/api/docs/' + d.id + '/word', { method: 'POST' }).catch(() => {}); // revisionssporet
         const a = h('a', { href: URL.createObjectURL(blob), download: (d.title || 'Dokument').replace(/[\\/:*?"<>|]/g, '') + '.docx' });
         document.body.append(a); a.click(); a.remove();
       } });
@@ -1420,6 +1430,11 @@
       const r = await api(`/api/docs/${docId}/versions`);
       const v = r.versions;
       if (v.length < 2) return;
+      // Skrevet hjemme: relativ skrivetid (minut 0, 1, …) i stedet for klokkeslæt, så døgnrytmen ikke kan aflæses.
+      // Pauser over 5 minutter tæller som 5 minutter.
+      const rel = [0];
+      for (let i = 1; i < v.length; i++) rel.push(rel[i - 1] + Math.min(5 * 60_000, Math.max(0, v[i].ts - v[i - 1].ts)));
+      const at = (i) => (r.home ? `minut ${Math.round(rel[i] / 60_000)}` : fmtTime(v[i].ts));
       const view = h('div', { class: 'replay-text' });
       const when = h('span', { class: 'muted small' });
       const range = h('input', { type: 'range', min: 0, max: v.length - 1, value: v.length - 1, 'aria-label': 'Tidspunkt i skriveforløbet' });
@@ -1432,7 +1447,7 @@
         let a = 0; while (a < prev.length && a < cur.text.length && prev[a] === cur.text[a]) a++;
         let z = 0; while (z < prev.length - a && z < cur.text.length - a && prev[prev.length - 1 - z] === cur.text[cur.text.length - 1 - z]) z++;
         view.replaceChildren(document.createTextNode(cur.text.slice(0, a)), h('mark', { text: cur.text.slice(a, cur.text.length - z) }), document.createTextNode(cur.text.slice(cur.text.length - z)));
-        when.textContent = `${fmtTime(cur.ts)} · ${cur.text.length} tegn · version ${i + 1} af ${v.length}`;
+        when.textContent = `${at(i)} · ${cur.text.length} tegn · version ${i + 1} af ${v.length}`;
       };
       const play = h('button', { class: 'btn small', type: 'button', text: '▶ Afspil', onclick: () => {
         if (timer) { clearInterval(timer); timer = null; play.textContent = '▶ Afspil'; return; }

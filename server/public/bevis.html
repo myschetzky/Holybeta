@@ -22,7 +22,7 @@
       <dl class="proof-facts" id="facts"></dl>
       <div class="proof-meaning" id="meaning">
         <h2>Hvad betyder mærket?</h2>
-        <p id="limit-text">Mærket viser, hvad HolyMoly målte på elevens computer. Det dækker ikke afskrift fra telefon eller papir, og en computer, eleven selv har ændret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler mærket, er det ikke et tegn på snyd.</p>
+        <p id="limit-text">Mærket viser, hvad HolyMoly målte på elevens computer. Det dækker ikke afskrift fra telefon eller papir, og en computer, eleven selv har ændret, eller en maskine, der taster som et menneske, kan ikke udelukkes. Mangler mærket, er det ikke et tegn på snyd. Tjek altid teksten på linket.</p>
         <dl class="proof-facts"><dt>Hvad blev målt</dt><dd id="observed">–</dd></dl>
         <p class="small" id="observed-text" hidden></p>
         <p class="small" id="asg-created" hidden></p>
@@ -36,8 +36,8 @@
         <h2>Passer teksten til beviset?</h2>
         <p class="muted small">Beviset gælder én bestemt tekst. Vælg elevens Word-fil, eller træk den herind. Filen læses kun i din browser – den sendes ingen steder hen.</p>
         <label class="proof-drop" id="drop">
-          <input type="file" id="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
-          <span id="drop-text">Træk Word-filen (.docx) herind, eller klik for at vælge den</span>
+          <input type="file" id="file" multiple accept=".docx,.zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip">
+          <span id="drop-text">Træk Word-filen (.docx) herind, eller klik for at vælge den. Flere filer eller en zip tjekkes nedenfor.</span>
         </label>
         <p id="match" class="match" hidden></p>
         <dl class="proof-facts" id="file-facts" hidden></dl>
@@ -58,6 +58,22 @@
         <pre id="signed"></pre>
         <pre id="pubkey"></pre>
       </details>
+    </section>
+    <section class="proof" id="find" hidden>
+      <h1>Tjek afleveringer</h1>
+      <p>Træk elevernes Word-filer herind, eller hele zip-filen fra Lectio. Filerne læses kun i din browser. Kun et fingeraftryk af teksten (sha256) sendes til serveren, som svarer med kode, dato og mærke.</p>
+      <label class="proof-drop" id="many-drop">
+        <input type="file" id="many" multiple accept=".docx,.zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip">
+        <span>Træk Word-filer (.docx) eller en zip herind, eller klik for at vælge dem</span>
+      </label>
+      <p class="muted small" id="many-status" aria-live="polite"></p>
+      <div class="table-wrap" id="many-wrap" hidden>
+        <table class="table" id="many-table">
+          <thead><tr><th scope="col">Fil</th><th scope="col">Mærke</th><th scope="col">Teksten passer</th><th scope="col">Udstedt af denne server</th></tr></thead>
+          <tbody id="many-rows"></tbody>
+        </table>
+      </div>
+      <p class="muted small">Der står kun ja, når teksten i filen er præcis den, beviset gælder for. En sidefod og en kode kan kopieres – teksten kan ikke. Mangler mærket, er det ikke et tegn på snyd.</p>
     </section>
     <section class="proof" id="missing" hidden>
       <div class="proof-head bad">✗ Dette id er aldrig udstedt her</div>

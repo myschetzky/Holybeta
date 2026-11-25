@@ -41,7 +41,7 @@ function write(docs, student, fullText, start, id = crypto.randomUUID(), step = 
 
 test('frister: standardtal, miljøvariabler og beskrivelsen', () => {
   const R = RET.fromEnv({}, {});
-  assert.deepStrictEqual({ ...R, maxVersions: undefined }, { draftDays: 60, versionsDays: 60, docDays: 365, certYears: 3, logDays: 30, backupDays: 14, maxVersions: undefined });
+  assert.deepStrictEqual({ ...R, maxVersions: undefined }, { draftDays: 60, versionsDays: 60, docDays: 365, certYears: 3, logDays: 30, backupDays: 14, inactiveDays: 180, auditDays: 365, maxVersions: undefined });
   const E = RET.fromEnv({}, { DRAFT_DAYS: '10', VERSIONS_DAYS: '20', DOC_RETENTION_DAYS: '200', CERT_YEARS: '5', LOG_RETENTION_DAYS: '14', BACKUP_DAYS: '0' });
   assert.deepStrictEqual([E.draftDays, E.versionsDays, E.docDays, E.certYears, E.logDays, E.backupDays], [10, 20, 200, 5, 14, 0]);
   // Vrøvl giver standarden
@@ -68,7 +68,8 @@ test('frister: oprydning med falsk tid – kladder, afspilning, detaljer, dokume
   const count = (sql, ...a) => db.prepare(sql).get(...a).n;
 
   // Dag 59: intet slettes
-  assert.deepStrictEqual(RET.purge(db, R, t0 + 59 * DAY), { drafts: 0, versions: 0, events: 0, reduced: 0, documents: 0, expired: 0 });
+  const p59 = RET.purge(db, R, t0 + 59 * DAY);
+  assert.deepStrictEqual([p59.drafts, p59.versions, p59.events, p59.reduced, p59.documents, p59.expired], [0, 0, 0, 0, 0, 0]);
   // Dag 61: den gamle kladde og afspilningen er væk; skrivedetaljerne er kun minuttal
   const p61 = RET.purge(db, R, t0 + 61 * DAY);
   assert.strictEqual(p61.drafts, 1);
@@ -104,6 +105,73 @@ test('frister: oprydning med falsk tid – kladder, afspilning, detaljer, dokume
   assert.strictEqual(count("SELECT COUNT(*) AS n FROM certificates WHERE payload != '' OR text_sha256 IS NOT NULL"), 0);
   db.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('frister: inaktive elever, skriveøkter hjemme og computerens fingeraftryk – og describe() viser dem', () => {
+  const { dir, db, docs, anna } = setup();
+  try {
+    const R = RET.fromEnv({}, {});
+    assert.strictEqual(RET.fromEnv({}, { INACTIVE_STUDENT_DAYS: '30' }).inactiveDays, 30);
+    assert.strictEqual(RET.fromEnv({ inactiveStudentDays: 7 }, {}).inactiveDays, 7);
+    const t0 = 1_700_000_000_000;
+    // To elever: Anna er inaktiv (sidst set t0), Bo er set for nylig
+    db.prepare("INSERT INTO students (id, class_id, name, created, enrolled) VALUES (2, 1, 'Bo', 0, 1)").run();
+    const upd = db.prepare('UPDATE students SET aids = ?, device_info = ?, last_seen = ? WHERE id = ?');
+    upd.run('["ordforslag"]', '{"os":"Windows"}', t0, 1);
+    upd.run('["diktering"]', '{"os":"Windows"}', t0 + 170 * DAY, 2);
+    db.prepare("INSERT INTO lessons (id, class_id, started, ends_at, ended) VALUES (10, 1, ?, ?, ?)").run(t0, t0 + 3600_000, t0 + 3600_000);
+    db.prepare('INSERT INTO lesson_extensions (lesson_id, student_id, ends_at) VALUES (10, 1, ?), (10, 2, ?)').run(t0 + 200 * DAY, t0 + 200 * DAY);
+    // Skriveøkter hjemme: en afsluttet (lukket), en afbrudt ('drop') og en, der stadig kører
+    const home = db.prepare("INSERT INTO lessons (id, class_id, started, ends_at, ended, student_id, kind, end_reason, device_hash) VALUES (?, 1, ?, ?, ?, ?, 'hjemme', ?, 'abcd')");
+    home.run(20, t0, t0 + 3 * 3600_000, t0 + 3600_000, 1, 'lukket');
+    home.run(21, t0, t0 + 3 * 3600_000, t0 + 3600_000, 2, 'drop');
+    home.run(22, t0 + 40 * DAY, t0 + 41 * DAY, null, 2, null);
+    // En kladde skrevet i skriveøkt 20 (hjemme) – afleveres efter, at rækken er slettet
+    const draft = write(docs, anna, SENT.repeat(9).trim(), t0 + 1000);
+    db.prepare('UPDATE documents SET monitor = json_set(monitor, \'$.lessons\', json(\'[20]\')) WHERE id = ?').run(draft);
+    assert.deepStrictEqual(docs.placeOf(draft), { home: true, lesson: false });
+
+    // Dag 0,5: fingeraftrykket på den lukkede økt er væk med det samme, den afbrudte beholder det et døgn
+    let p = RET.purge(db, R, t0 + 12 * 3600_000);
+    const hash = (id) => db.prepare('SELECT device_hash AS h FROM lessons WHERE id = ?').get(id).h;
+    assert.strictEqual(hash(20), null);
+    assert.strictEqual(hash(21), 'abcd');
+    p = RET.purge(db, R, t0 + 2 * DAY);
+    assert.strictEqual(hash(21), null);
+    assert.strictEqual(hash(22), 'abcd', 'en økt, der kører, beholder sit fingeraftryk');
+
+    // Dag 31: de afsluttede skriveøkter hjemme er slettet – kladden er stadig "hjemme"
+    p = RET.purge(db, R, t0 + 31 * DAY);
+    assert.strictEqual(p.homeLessons, 2);
+    assert.deepStrictEqual(db.prepare("SELECT id FROM lessons WHERE kind = 'hjemme' ORDER BY id").all().map(r => r.id), [22]);
+    assert.deepStrictEqual(docs.placeOf(draft), { home: true, lesson: false });
+    assert.ok(db.prepare('SELECT id FROM lessons WHERE id = 10').get(), 'klassens lektion bliver');
+
+    // Dag 181: Anna er inaktiv – hjælpemidler, computer og ekstra tid er væk. Bo beholder sine.
+    p = RET.purge(db, R, t0 + 181 * DAY);
+    assert.strictEqual(p.inactive, 1);
+    const st = (id) => db.prepare('SELECT aids, device_info FROM students WHERE id = ?').get(id);
+    assert.deepStrictEqual({ ...st(1) }, { aids: null, device_info: null });
+    assert.deepStrictEqual({ ...st(2) }, { aids: '["diktering"]', device_info: '{"os":"Windows"}' });
+    assert.deepStrictEqual(db.prepare('SELECT student_id FROM lesson_extensions').all().map(r => r.student_id), [2]);
+    // Udløbet ekstra tid slettes for alle
+    RET.purge(db, R, t0 + 202 * DAY);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM lesson_extensions').get().n, 0);
+
+    // describe() (til /privatliv og /vilkaar-elev) viser de nye frister
+    const items = RET.describe(R);
+    assert.ok(items.find(x => x.key === 'inactiveDays' && /180 dage/.test(x.text) && /Hjælpemidler/.test(x.what)));
+    assert.match(items.find(x => x.key === 'logDays').what, /skriveøkter hjemme/);
+    assert.strictEqual(RET.publicInfo(R).inactiveDays, 180);
+    const priv = fs.readFileSync(path.join(__dirname, '..', 'server/public/privatliv.html'), 'utf8');
+    assert.match(priv, /data-cfg="retention\.inactiveDays"/);
+  } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('frister: en skriveøkt, der lukkes, mister computerens fingeraftryk med det samme', () => {
+  const hub = fs.readFileSync(path.join(__dirname, '..', 'server/src/hub.js'), 'utf8');
+  assert.match(hub, /device_hash = CASE WHEN \? = \\'drop\\' THEN device_hash ELSE NULL END/);
+  assert.match(hub, /UPDATE students SET device_info = \?, last_seen = \? WHERE id = \?/);
 });
 
 test('frister: ved aflevering beholdes højst 120 versioner (første og sidste med)', () => {

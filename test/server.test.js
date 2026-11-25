@@ -178,7 +178,7 @@ test('fuldt forløb: lærer, klasse, elev, lektion, status, frys, live, log', as
   assert.strictEqual(img.headers.get('content-type'), 'image/jpeg');
 
   // Eksport af elevens log (CSV) – beskyttet mod formel-injektion
-  agent.send(JSON.stringify({ type: 'events', seq: 4, items: [{ kind: 'nav', url: 'https://x.dk/', title: '=HYPERLINK("http://ond.dk")', ts: Date.now() }] }));
+  agent.send(JSON.stringify({ type: 'events', seq: 4, items: [{ kind: 'violation', url: 'https://x.dk/', title: '=HYPERLINK("http://ond.dk")', ts: Date.now() }] }));
   await waitFor(agent, m => m.type === 'ack' && m.seq === 4);
   const csvRes = await fetch(base + `/api/students/${anna.id}/export.csv`, { headers: { Cookie: cookie } });
   assert.strictEqual(csvRes.status, 200);

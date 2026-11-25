@@ -39,7 +39,9 @@ npm run enkel
 - Med koden kan eleven logge ind igen på en anden computer. Den gamle computer logges ud.
 - Skriver nogen et navn, der allerede er tilmeldt, kræves den rigtige kode. Efter 5 forkerte forsøg venter man et par minutter, og læreren kan se forsøget i elevens log.
 - Har eleven glemt koden: læreren slår *Rediger borde* til, klikker på eleven og vælger **Nulstil kode**. Læreren får en engangskode på 6 cifre. Inden for 30 minutter skriver eleven klassekoden, sit navn og engangskoden i appen. Engangskoden er derefter elevens kode, og eleven beholder sin plads, sin log og sine dokumenter.
-- Efter 10 forkerte forsøg er elevens kode låst, indtil læreren nulstiller den.
+- Efter 10 forkerte forsøg er elevens kode låst for nye computere, indtil læreren nulstiller den. Den computer, eleven allerede er logget ind på, virker stadig – også uden kode. Så kan en klassekammerat ikke låse eleven ude lige før en prøve.
+- Forkerte forsøg tæller også pr. IP-adresse (30, rummeligt for en hel skole bag én adresse) og pr. klasse (20). Derefter venter man et par minutter.
+- Svaret er det samme, uanset om navnet findes, koden er forkert, eller koden er låst. Eleven selv får en fast besked i appen: "Nogen har prøvet at logge ind med dit navn og en forkert kode."
 - Meget lette koder (1111, 1234, årstal osv.) kan ikke vælges.
 
 ## Elev-appen kræver https
@@ -95,6 +97,14 @@ HolyMoly bruger SQLite: én fil, `holymoly.db`, i datamappen. Der er ingen separ
 - Skærmbilleder ligger i `evidence/` ved siden af.
 - En kopi kan åbnes med ethvert SQLite-værktøj, fx DB Browser for SQLite.
 
+## Revisionsspor
+
+Serveren gemmer, hvilken lærer der gjorde hvad hos hvilken elev og hvornår (fx åbnede et dokument, afspillede, hentede Word, så weblog eller faner, gav ekstra tid, ændrede hjælpemidler, eksporterede, slettede eller nulstillede en kode). Der gemmes intet indhold. Sporet kan kun tilføjes til, og det slettes efter `AUDIT_DAYS` (365). Slettes en elev, står der kun et pseudonym.
+
+```bash
+npm run enkel -- revisionsspor 90 > revisionsspor.csv
+```
+
 ## Indstillinger
 
 | Variabel | Standard | |
@@ -107,7 +117,9 @@ HolyMoly bruger SQLite: én fil, `holymoly.db`, i datamappen. Der er ingen separ
 | `VERSIONS_DAYS` | 60 | Afspilning og skrivedetaljer slettes så mange dage efter aflevering |
 | `DOC_RETENTION_DAYS` | 365 | Afleverede dokumenter slettes så mange dage efter aflevering (beviset bliver uden navn) |
 | `CERT_YEARS` | 3 | Beviser kan tjekkes så mange år; derefter svarer tjek-siden "udløbet" |
-| `LOG_RETENTION_DAYS` | 30 | Hændelser, skærmbilleder og lampernes tidslinje |
+| `LOG_RETENTION_DAYS` | 30 | Hændelser, skærmbilleder, lampernes tidslinje og skriveøkter hjemme |
+| `AUDIT_DAYS` | 365 | Revisionssporet (lærerhandlinger uden indhold) slettes så mange dage efter |
+| `INACTIVE_STUDENT_DAYS` | 180 | Hjælpemidler, ekstra tid og computeroplysninger slettes, når eleven ikke har været forbundet så mange dage |
 | `REQUIRE_GUARD` | 1 | `0`: elever kan være grønne uden HolyMoly-vagten (kun til test) |
 
 ## Ny elev-app

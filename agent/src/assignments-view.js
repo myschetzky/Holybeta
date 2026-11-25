@@ -126,11 +126,24 @@
     const d = new Date(ts);
     return `${d.getDate()}. ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
   }
-  /** Resultatet af en aflevering: 'Afleveret kl. 10.14' eller serverens fejltekst. */
+  /**
+   * Kvitteringen fra serveren (assignment-result): serverens tid, opgave, ordantal, mærke, bevis-kode og
+   * hvilken aflevering den erstatter. Ingen ny signatur – kun det, serveren har registreret.
+   */
+  function receiptText(rc) {
+    if (!rc || !num(rc.at)) return '';
+    const parts = [`Afleveret til "${str(rc.assignment, 200)}" ${fmtDue(rc.at)} (serverens tid)`];
+    parts.push(`${num(rc.words)} ord`);
+    parts.push(rc.code ? `${str(rc.mark, 160)} · ${str(rc.code, 20)}` : 'uden mærke');
+    if (rc.late) parts.push('efter fristen');
+    if (num(rc.replaces)) parts.push(`erstatter afleveringen fra ${fmtDue(rc.replaces)}`);
+    return 'Kvittering: ' + parts.join(' · ') + '.';
+  }
+  /** Resultatet af en aflevering: kvitteringen (eller 'Afleveret kl. 10.14' fra en ældre server) – eller serverens fejltekst. */
   function attachResult(r, now) {
-    if (r && r.ok) return { ok: true, text: `Afleveret kl. ${hhmm(now)}` };
+    if (r && r.ok) return { ok: true, text: receiptText(r.receipt) || `Afleveret kl. ${hhmm(now)}` };
     return { ok: false, text: str((r && r.error) || 'Kunne ikke aflevere. Prøv igen.', 300) };
   }
 
-  return { UNMARKED_NOTE, MARK, isPast, split, where, status, normalizeDocs, verified, forAttach, writable, hhmm, fmtDue, fmtDate, attachResult };
+  return { UNMARKED_NOTE, MARK, isPast, split, where, status, normalizeDocs, verified, forAttach, writable, hhmm, fmtDue, fmtDate, attachResult, receiptText };
 });

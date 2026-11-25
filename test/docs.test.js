@@ -356,8 +356,11 @@ test('skriveøkt: en aflevering skrives hjemme med HolyMoly aktiv – kun på el
     await new Promise(r => setTimeout(r, 150));
     assert.ok(!bo.msgs.some(m => m.type === 'lesson' && m.live), 'kun elevens egen computer');
     assert.strictEqual((await call('GET', `/api/classes/${cls.id}`)).lesson.live, false, 'klassen har ingen lektion');
-    assert.strictEqual(srv.hub.studentView(anna.studentId).solo, 'Stil hjemme', 'læreren ser "Skriver hjemme" på bordet');
-    assert.strictEqual(srv.hub.studentView(bo.studentId).solo, undefined);
+    // Klasse-tegningen viser hverken "Skriver hjemme" eller afleveringens titel – kun at skærmen ikke kan ses (home)
+    assert.strictEqual(srv.hub.studentView(anna.studentId).solo, undefined);
+    assert.strictEqual(srv.hub.studentView(anna.studentId).home, true);
+    assert.ok(!JSON.stringify(srv.hub.studentView(anna.studentId)).includes('Stil hjemme'));
+    assert.strictEqual(srv.hub.studentView(bo.studentId).home, undefined);
     const classes = await call('GET', '/api/classes');
     assert.strictEqual(classes[0].openAssignments, 2);
     assert.ok(['Stil hjemme', 'Stil i timen'].includes(classes[0].nextAssignment.title));
@@ -538,9 +541,10 @@ test('hjælpemidler: med aids=[ordforslag] bliver hurtige tastetryk, byger og j�
     assert.deepStrictEqual(r.reasons, []);
     assert.ok(r.notes.some(n => /hurtigere, end en finger/.test(n) && /hjælpemidler/.test(n)), r.notes.join('|'));
     assert.ok(r.notes.some(n => /maskinelt jævnt/.test(n)));
-    // Beviset siger "Skrivetempo ikke vurderet" – og nævner intet hjælpemiddel
+    // Beviset har den neutrale tempolinje (som alle andre) – og nævner intet hjælpemiddel
     const c = docs.certificate(r.certId);
-    assert.ok(c.payload.checks.includes('Skrivetempo ikke vurderet'));
+    assert.ok(c.payload.checks.includes('Intet skrevet hurtigere, end et menneske kan'));
+    assert.ok(!/vurderet/.test(c.signed));
     assert.ok(!/ordforslag|diktering|hjælpemiddel/i.test(c.signed), c.signed);
     // Serverens eget vækst-tjek gælder stadig med hjælpemidler
     const fast = crypto.randomUUID();

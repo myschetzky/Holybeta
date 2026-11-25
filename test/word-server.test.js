@@ -67,7 +67,7 @@ test('Word: med vagten bliver observed ["word", "vagt"], og mærket er grønt', 
     const { id, t } = writeWord(docs, anna, SENT.repeat(9).trim());
     const r = docs.submit(anna, id, Object.assign({ observed: ['skrivevindue', 'vagt'] }, meta), t + 1000);
     assert.deepStrictEqual(r.observed, ['word', 'vagt']);
-    assert.strictEqual(D.label('hjemme', { observed: r.observed }), '✓ Tastet i Word via HolyMoly – intet indsat · hjemme');
+    assert.strictEqual(D.label('hjemme', { observed: r.observed }), '✓ Tastet i Word via HolyMoly – intet indsat · hjemme, uden opsyn');
     assert.strictEqual(D.markGreen({ observed: r.observed }), true);
     assert.ok(docs.certificate(r.certId).payload.checks.includes('HolyMoly-vagten blokerede AI på computeren'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -238,7 +238,7 @@ test('Word med tastetryk: ærlig skrivning med autokorrektur består, og beviset
     assert.ok(r.ok && r.certId, JSON.stringify(r.reasons));
     const c = docs.certificate(r.certId);
     assert.ok(c.payload.checks.includes('Teksten passer med tastetrykkene i Word'), c.payload.checks.join());
-    assert.ok(c.payload.checks.includes('Menneskeligt skrivetempo'));
+    assert.ok(c.payload.checks.includes('Intet skrevet hurtigere, end et menneske kan'), 'neutral tempolinje – ens for alle elever');
     assert.ok(!c.payload.checks.includes('Teksten voksede i et menneskeligt tempo'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

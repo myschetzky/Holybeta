@@ -79,7 +79,7 @@ function register(opts) {
     if (!aid || !docId) return { ok: false, error: 'Vælg et dokument' };
     const fn = typeof writer.attachVerified === 'function' ? writer.attachVerified.bind(writer) : writer.attach.bind(writer);
     const r = await fn(aid, docId);
-    return { ok: !!(r && r.ok), error: String((r && r.error) || ''), at: Date.now() };
+    return { ok: !!(r && r.ok), error: String((r && r.error) || ''), at: Date.now(), receipt: (r && r.receipt) || null };
   });
 
   ipcMain.handle('verified:open', (_e, id) => {
