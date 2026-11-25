@@ -2,8 +2,9 @@ html, body { margin: 0; height: 100%; background: #101317; color: #eceef2; font:
 body { display: grid; place-items: center; }
 [hidden] { display: none !important; }
 .box { text-align: center; max-width: 720px; padding: 24px; }
-.ico { font-size: 64px; }
-h1 { font-size: 34px; margin: 8px 0; }
+/* Ingen ikon: overskriften siger det hele. En tynd blå streg samler blikket (samme blå som bjælken i Gennemgang) */
+h1 { font-size: 34px; margin: 0 0 12px; }
+h1::before { content: ""; display: block; width: 48px; height: 3px; margin: 0 auto 20px; border-radius: 99px; background: #6d8dff; }
 .msg { font-size: 24px; color: #c7d2fe; white-space: pre-wrap; margin: 0; }
 
 /* Gennemgang: rolig standby, læsbar fra den anden ende af lokalet */
@@ -15,3 +16,4 @@ h1 { font-size: 34px; margin: 8px 0; }
 .bar { height: 10px; border-radius: 99px; background: #262b35; overflow: hidden; }
 .fill { height: 100%; width: 100%; border-radius: 99px; background: #6d8dff; transition: width 1s linear; }
 .left-text { font-size: clamp(20px, 2.2vw, 28px); color: #eceef2; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .fill { transition: none; } }

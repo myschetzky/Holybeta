@@ -37,6 +37,7 @@
         <p class="muted small">Beviset gælder én bestemt tekst. Vælg elevens Word-fil, eller træk den herind. Filen læses kun i din browser – den sendes ingen steder hen.</p>
         <label class="proof-drop" id="drop">
           <input type="file" id="file" multiple accept=".docx,.zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip">
+          <span class="btn drop-btn" aria-hidden="true">Vælg Word-fil</span>
           <span id="drop-text">Træk Word-filen (.docx) herind, eller klik for at vælge den. Flere filer eller en zip tjekkes nedenfor.</span>
         </label>
         <p id="match" class="match" hidden></p>
@@ -64,6 +65,7 @@
       <p>Træk elevernes Word-filer herind, eller hele zip-filen fra Lectio. Filerne læses kun i din browser. Kun et fingeraftryk af teksten (sha256) sendes til serveren, som svarer med kode, dato og mærke.</p>
       <label class="proof-drop" id="many-drop">
         <input type="file" id="many" multiple accept=".docx,.zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip">
+        <span class="btn primary drop-btn" aria-hidden="true">Vælg filer</span>
         <span>Træk Word-filer (.docx) eller en zip herind, eller klik for at vælge dem</span>
       </label>
       <p class="muted small" id="many-status" aria-live="polite"></p>

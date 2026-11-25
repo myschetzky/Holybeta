@@ -108,7 +108,8 @@
   }
 
   function gettingStarted() {
-    const step = (n, title, body) => h('li', {}, h('span', { class: 'step-n', text: String(n) }), h('div', {}, h('b', { text: title }), h('div', { class: 'muted small' }, ...body)));
+    // Trin 1 er det næste skridt (markeret), resten venter – fremgangen er synlig (goal-gradient)
+    const step = (n, title, body) => h('li', { class: n === 1 ? 'now' : '' , 'aria-current': n === 1 ? 'step' : null }, h('span', { class: 'step-n', text: String(n) }), h('div', {}, h('b', { text: title }), h('div', { class: 'muted small' }, ...body)));
     return h('section', { class: 'card onboard reveal' },
       h('h2', { text: 'Kom i gang på 5 minutter' }),
       h('ol', { class: 'steps' },

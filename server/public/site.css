@@ -1,14 +1,41 @@
 /* HolyMoly – forside, priser, jura og hent-side. Enkel og saglig: hvid baggrund, én blå accentfarve,
-   grøn/rød/grå kun til lampernes betydning. Ingen ikoner, farveforløb eller pynt. */
+   grøn/rød/grå kun til lampernes betydning. Ingen ikoner, farveforløb eller pynt.
+   Design-tokens samlet her (samme navne og skala som app.css – se docs/DESIGN.md). */
 :root {
-  --bg: #ffffff; --alt: #f5f6f8; --text: #111827; --muted: #4b5563; --line: #e3e6eb;
-  --accent: #2f5bea; --accent-dark: #2448c4; --green: #16a34a; --red: #dc2626; --grey: #9ca3af;
+  /* Farver – lyst tema (standard) */
+  --bg: #ffffff; --alt: #f5f6f8; --text: #111827; --muted: #4b5563; --line: #e3e6eb; --line-strong: #c5cad3;
+  --accent: #2f5bea; --accent-dark: #2448c4; --accent-ink: #ffffff;
+  --green: #16a34a; --green-text: #15803d; --red: #dc2626; --red-text: #b91c1c; --grey: #9ca3af;
+  --note-bg: #fff8e6; --note-line: #f1d58a;
+  --tex: var(--accent);   /* teksturernes blæk: kun HolyMoly-blå */
+  --tex-alpha: .16;       /* konturlinjer i hero */
+
+  /* Afstande: 4-punkts skala */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px; --s9: 88px;
+  /* Radier */
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-pill: 999px;
+  /* Skygger */
+  --sh-1: 0 1px 2px rgba(17,24,39,.04), 0 12px 32px rgba(17,24,39,.08);
+  /* Typografi */
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --fs-xs: 14px; --fs-sm: 15px; --fs-base: 17px; --fs-md: 18px; --fs-lead: 19px;
+
   --w: 1080px;
   color-scheme: light;
 }
+/* Mørkt tema: vælges i lærer-dashboardet (Indstillinger) og gælder også her. Lyst er standard. */
+:root[data-hm-theme="dark"] {
+  --bg: #111317; --alt: #171a1f; --text: #eceef2; --muted: #a3aab5; --line: #2b3039; --line-strong: #3d4450;
+  --accent: #7d9bff; --accent-dark: #9bb2ff; --accent-ink: #0b1020;
+  --green-text: #4ade80; --red-text: #f87171; --grey: #6b7280;
+  --note-bg: #2a2410; --note-line: #6b5a1e;
+  --tex-alpha: .22;
+  --sh-1: 0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.35);
+  color-scheme: dark;
+}
 * { box-sizing: border-box; }
 html { scroll-padding-top: 72px; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+body { margin: 0; background: var(--bg); color: var(--text); font: var(--fs-base)/1.6 var(--font); -webkit-font-smoothing: antialiased; }
 a { color: var(--accent); }
 img { max-width: 100%; height: auto; display: block; }
 h1, h2, h3 { margin: 0; line-height: 1.2; text-wrap: balance; letter-spacing: -.01em; }
@@ -26,9 +53,9 @@ p { margin: 0; }
 .skip:focus { left: 8px; }
 
 /* knapper */
-.btn { display: inline-flex; align-items: center; justify-content: center; padding: 11px 18px; border-radius: 6px; font: 600 16px/1.2 inherit; font-family: inherit; text-decoration: none; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; white-space: nowrap; transition: background-color .15s, border-color .15s; }
-.btn:hover { border-color: #c5cad3; background: var(--alt); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 11px 18px; border-radius: var(--r-sm); font: 600 16px/1.2 inherit; font-family: inherit; text-decoration: none; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; white-space: nowrap; transition: background-color .15s, border-color .15s; }
+.btn:hover { border-color: var(--line-strong); background: var(--alt); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); }
 .btn.small { padding: 8px 14px; font-size: 15px; }
 .btn.plain { border-color: transparent; background: none; }
@@ -55,7 +82,26 @@ p { margin: 0; }
 @media (max-width: 480px) { .head-cta .btn.primary { display: none; } }
 
 /* hero */
-.hero { padding: 72px 0 0; display: grid; gap: 48px; }
+.hero { padding: 72px 0 0; display: grid; gap: 48px; position: relative; isolation: isolate; }
+/* Tekstur: konturlinjer (et topografisk kort = overblik) i HolyMoly-blå, til højre og bag luften – aldrig bag brødtekst.
+   SVG'en bruges som maske, så farven følger temaet. Fades ud mod teksten og slås fra ved høj kontrast. */
+.hero::before {
+  content: ""; position: absolute; z-index: -1; top: 0; right: 0; width: min(62vw, 860px); height: 520px; pointer-events: none;
+  background: var(--tex); opacity: var(--tex-alpha);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 480' fill='none' stroke='%23000' stroke-width='1.2'%3E%3Cpath d='M590 166Q595 170 594 175Q594 180 588 182Q581 185 576 186Q570 188 565 188Q560 189 555 188Q550 188 543 188Q536 187 532 184Q527 180 530 175Q532 170 534 166Q536 163 538 159Q539 155 544 152Q548 149 554 148Q560 148 566 149Q572 150 575 154Q578 157 581 160Q584 163 590 166Z'/%3E%3Cpath d='M628 162Q641 170 638 181Q635 192 620 198Q606 203 594 206Q583 210 572 211Q560 212 548 212Q536 212 520 211Q504 210 495 201Q486 192 492 181Q498 170 502 162Q505 154 508 144Q510 134 522 128Q533 123 546 121Q560 119 573 122Q586 125 593 133Q600 141 608 147Q616 153 628 162Z'/%3E%3Cpath d='M671 156Q690 170 682 187Q674 204 652 212Q630 221 613 226Q596 232 578 234Q560 236 540 236Q521 237 496 236Q471 234 460 218Q449 203 458 186Q467 170 469 156Q471 143 476 128Q480 113 499 104Q518 96 539 94Q560 91 580 96Q600 101 610 114Q621 126 636 134Q652 143 671 156Z'/%3E%3Cpath d='M716 150Q739 170 724 192Q709 215 682 226Q654 238 632 246Q609 255 584 257Q560 259 532 262Q505 265 472 262Q438 258 427 236Q416 213 426 192Q437 170 436 151Q434 132 442 112Q451 91 476 80Q502 70 531 66Q560 62 586 71Q612 80 626 96Q641 111 666 121Q692 131 716 150Z'/%3E%3Cpath d='M762 144Q788 170 766 197Q743 224 710 240Q678 255 650 266Q622 277 591 280Q560 283 524 288Q488 294 446 288Q405 282 396 252Q387 221 396 196Q406 170 400 146Q394 121 408 96Q421 70 454 57Q487 44 524 39Q560 34 592 48Q623 61 642 78Q662 96 699 107Q736 118 762 144Z'/%3E%3Cpath d='M808 137Q834 170 804 202Q773 234 738 254Q702 273 668 286Q634 299 597 304Q560 308 515 317Q470 326 422 315Q374 304 368 266Q362 229 367 200Q372 170 362 139Q353 108 372 78Q391 48 432 32Q472 17 516 12Q560 7 596 26Q633 44 660 62Q686 80 734 92Q783 104 808 137Z'/%3E%3Cpath d='M855 130Q877 170 840 206Q803 242 765 266Q727 290 687 306Q647 321 604 328Q560 335 506 347Q451 359 399 341Q347 323 343 280Q339 236 337 203Q335 170 322 132Q309 95 336 62Q362 28 409 9Q456 -10 508 -14Q560 -18 601 5Q642 28 677 44Q712 61 772 75Q833 89 855 130Z'/%3E%3Cpath d='M900 122Q916 170 874 210Q832 251 792 280Q752 308 706 325Q659 342 610 354Q560 365 496 379Q432 393 378 367Q323 341 320 292Q318 242 306 206Q294 170 280 126Q265 82 300 44Q334 7 388 -16Q441 -38 500 -39Q560 -40 605 -14Q650 13 696 26Q742 39 813 56Q884 73 900 122Z'/%3E%3Cpath d='M263 336Q263 340 260 342Q258 345 256 348Q254 350 251 352Q248 354 244 356Q240 357 235 358Q230 358 226 355Q223 352 224 348Q224 345 223 342Q222 340 220 337Q219 334 221 331Q223 328 226 326Q230 323 235 323Q240 323 244 326Q247 328 251 328Q255 329 259 331Q263 333 263 336Z'/%3E%3Cpath d='M298 331Q296 340 291 347Q286 354 281 360Q276 366 268 370Q260 375 250 380Q240 385 226 386Q213 386 206 378Q200 369 200 360Q201 352 196 346Q191 340 188 332Q186 324 192 316Q197 309 206 304Q216 298 228 298Q240 299 249 304Q258 309 268 310Q279 312 290 317Q300 322 298 331Z'/%3E%3Cpath d='M332 326Q327 340 320 351Q313 362 306 372Q298 382 286 390Q273 397 256 406Q240 414 218 414Q197 414 188 399Q179 384 178 372Q177 359 168 350Q158 340 156 327Q154 314 162 302Q171 290 186 282Q201 273 220 275Q240 277 254 283Q269 289 288 290Q306 292 321 302Q336 311 332 326Z'/%3E%3Cpath d='M364 320Q356 340 348 355Q340 370 330 384Q320 398 303 409Q286 420 263 433Q240 446 211 444Q182 441 172 419Q161 397 156 382Q151 366 137 353Q123 340 122 322Q121 304 133 288Q145 271 166 260Q187 248 214 252Q240 257 260 263Q281 269 308 270Q336 271 354 286Q371 301 364 320Z'/%3E%3C/svg%3E") right -40px top -30px / 860px auto no-repeat, linear-gradient(to right, transparent 0 38%, #000 78%);
+  -webkit-mask-composite: source-in;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 480' fill='none' stroke='%23000' stroke-width='1.2'%3E%3Cpath d='M590 166Q595 170 594 175Q594 180 588 182Q581 185 576 186Q570 188 565 188Q560 189 555 188Q550 188 543 188Q536 187 532 184Q527 180 530 175Q532 170 534 166Q536 163 538 159Q539 155 544 152Q548 149 554 148Q560 148 566 149Q572 150 575 154Q578 157 581 160Q584 163 590 166Z'/%3E%3Cpath d='M628 162Q641 170 638 181Q635 192 620 198Q606 203 594 206Q583 210 572 211Q560 212 548 212Q536 212 520 211Q504 210 495 201Q486 192 492 181Q498 170 502 162Q505 154 508 144Q510 134 522 128Q533 123 546 121Q560 119 573 122Q586 125 593 133Q600 141 608 147Q616 153 628 162Z'/%3E%3Cpath d='M671 156Q690 170 682 187Q674 204 652 212Q630 221 613 226Q596 232 578 234Q560 236 540 236Q521 237 496 236Q471 234 460 218Q449 203 458 186Q467 170 469 156Q471 143 476 128Q480 113 499 104Q518 96 539 94Q560 91 580 96Q600 101 610 114Q621 126 636 134Q652 143 671 156Z'/%3E%3Cpath d='M716 150Q739 170 724 192Q709 215 682 226Q654 238 632 246Q609 255 584 257Q560 259 532 262Q505 265 472 262Q438 258 427 236Q416 213 426 192Q437 170 436 151Q434 132 442 112Q451 91 476 80Q502 70 531 66Q560 62 586 71Q612 80 626 96Q641 111 666 121Q692 131 716 150Z'/%3E%3Cpath d='M762 144Q788 170 766 197Q743 224 710 240Q678 255 650 266Q622 277 591 280Q560 283 524 288Q488 294 446 288Q405 282 396 252Q387 221 396 196Q406 170 400 146Q394 121 408 96Q421 70 454 57Q487 44 524 39Q560 34 592 48Q623 61 642 78Q662 96 699 107Q736 118 762 144Z'/%3E%3Cpath d='M808 137Q834 170 804 202Q773 234 738 254Q702 273 668 286Q634 299 597 304Q560 308 515 317Q470 326 422 315Q374 304 368 266Q362 229 367 200Q372 170 362 139Q353 108 372 78Q391 48 432 32Q472 17 516 12Q560 7 596 26Q633 44 660 62Q686 80 734 92Q783 104 808 137Z'/%3E%3Cpath d='M855 130Q877 170 840 206Q803 242 765 266Q727 290 687 306Q647 321 604 328Q560 335 506 347Q451 359 399 341Q347 323 343 280Q339 236 337 203Q335 170 322 132Q309 95 336 62Q362 28 409 9Q456 -10 508 -14Q560 -18 601 5Q642 28 677 44Q712 61 772 75Q833 89 855 130Z'/%3E%3Cpath d='M900 122Q916 170 874 210Q832 251 792 280Q752 308 706 325Q659 342 610 354Q560 365 496 379Q432 393 378 367Q323 341 320 292Q318 242 306 206Q294 170 280 126Q265 82 300 44Q334 7 388 -16Q441 -38 500 -39Q560 -40 605 -14Q650 13 696 26Q742 39 813 56Q884 73 900 122Z'/%3E%3Cpath d='M263 336Q263 340 260 342Q258 345 256 348Q254 350 251 352Q248 354 244 356Q240 357 235 358Q230 358 226 355Q223 352 224 348Q224 345 223 342Q222 340 220 337Q219 334 221 331Q223 328 226 326Q230 323 235 323Q240 323 244 326Q247 328 251 328Q255 329 259 331Q263 333 263 336Z'/%3E%3Cpath d='M298 331Q296 340 291 347Q286 354 281 360Q276 366 268 370Q260 375 250 380Q240 385 226 386Q213 386 206 378Q200 369 200 360Q201 352 196 346Q191 340 188 332Q186 324 192 316Q197 309 206 304Q216 298 228 298Q240 299 249 304Q258 309 268 310Q279 312 290 317Q300 322 298 331Z'/%3E%3Cpath d='M332 326Q327 340 320 351Q313 362 306 372Q298 382 286 390Q273 397 256 406Q240 414 218 414Q197 414 188 399Q179 384 178 372Q177 359 168 350Q158 340 156 327Q154 314 162 302Q171 290 186 282Q201 273 220 275Q240 277 254 283Q269 289 288 290Q306 292 321 302Q336 311 332 326Z'/%3E%3Cpath d='M364 320Q356 340 348 355Q340 370 330 384Q320 398 303 409Q286 420 263 433Q240 446 211 444Q182 441 172 419Q161 397 156 382Q151 366 137 353Q123 340 122 322Q121 304 133 288Q145 271 166 260Q187 248 214 252Q240 257 260 263Q281 269 308 270Q336 271 354 286Q371 301 364 320Z'/%3E%3C/svg%3E") right -40px top -30px / 860px auto no-repeat, linear-gradient(to right, transparent 0 38%, #000 78%);
+  mask-composite: intersect;
+}
+/* Beta-forsiden: halvtone-prikker (prøvetryk) i stedet for kortet – tydeligt en anden, mere nøgtern side */
+.beta-hero::before {
+  width: min(52vw, 640px); height: 420px; opacity: 1; -webkit-mask: none; mask: none;
+  background: radial-gradient(circle, color-mix(in srgb, var(--tex) calc(var(--tex-alpha) * 140%), transparent) 0 1.4px, transparent 1.8px) 0 0 / 14px 14px;
+  -webkit-mask-image: radial-gradient(ellipse at 100% 0, #000 0, transparent 70%);
+  mask-image: radial-gradient(ellipse at 100% 0, #000 0, transparent 70%);
+}
+@media (max-width: 700px) { .hero::before { width: 100%; height: 280px; opacity: calc(var(--tex-alpha) * .7); } .beta-hero::before { opacity: .7; } }
+@media (prefers-contrast: more) { .hero::before { display: none; } }
 .kicker { font-size: 15px; color: var(--muted); margin-bottom: 14px; }
 .hero h1 { max-width: 820px; }
 .lead { font-size: 19px; color: var(--muted); max-width: 680px; margin-top: 18px; }
@@ -63,7 +109,7 @@ p { margin: 0; }
 .actions.tight { margin-top: 4px; }
 .note { font-size: 15px; color: var(--muted); margin-top: 14px; }
 .shot { margin: 0; }
-.shot img { border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 1px 2px rgba(17,24,39,.04), 0 12px 32px rgba(17,24,39,.08); }
+.shot img { border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--sh-1); }
 .shot figcaption { font-size: 14px; color: var(--muted); margin-top: 12px; }
 @media (max-width: 700px) { .hero { padding-top: 40px; gap: 32px; } }
 
@@ -85,7 +131,7 @@ p { margin: 0; }
 @media (max-width: 860px) { .split { grid-template-columns: 1fr; gap: 32px; } }
 
 .list { margin: 0; padding: 0 0 0 20px; display: grid; gap: 8px; color: var(--muted); }
-.list li::marker { color: #9aa3b2; }
+.list li::marker { color: var(--grey); }
 
 /* lamper */
 .lamps { margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
@@ -129,13 +175,16 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .beta-box p { color: var(--text); }
 .beta-box.emergency { border-left-color: var(--red); }
 .beta-box.status.test { border-left-color: var(--grey); }
+.check-progress { display: flex; align-items: center; gap: var(--s4); margin: 0 0 var(--s5); font-size: var(--fs-sm); color: var(--muted); }
+.check-progress .bar { flex: 1; max-width: 240px; height: 6px; border-radius: var(--r-pill); background: var(--line); overflow: hidden; }
+.check-progress .bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .6s ease; }
 .checklist { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
 .checklist li { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .checklist .mark { font-weight: 700; color: var(--muted); }
 .checklist .state { color: var(--muted); font-size: 15px; }
-.checklist li.ok .mark { color: #15803d; }
-.checklist li.missing .mark { color: var(--red); }
-.checklist li.missing .state { color: var(--red); }
+.checklist li.ok .mark { color: var(--green-text); }
+.checklist li.missing .mark { color: var(--red-text); }
+.checklist li.missing .state { color: var(--red-text); }
 
 /* spørgsmål */
 .faq { border-top: 1px solid var(--line); }
@@ -176,7 +225,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .doc th, .doc td { text-align: left; border-bottom: 1px solid var(--line); padding: 10px 8px 10px 0; vertical-align: top; }
 .doc th { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .t-scroll { overflow-x: auto; }
-.draft-note { background: #fff8e6; border: 1px solid #f1d58a; border-radius: 6px; padding: 12px 16px; margin-bottom: 28px; font-size: 15px; }
+.draft-note { background: var(--note-bg); border: 1px solid var(--note-line); border-radius: 6px; padding: 12px 16px; margin-bottom: 28px; font-size: 15px; }
 .toc { border: 1px solid var(--line); border-radius: 6px; padding: 16px 20px; margin-bottom: 28px; }
 .toc ol { margin: 6px 0 0; }
 .toc li { margin: 4px 0; }
@@ -196,7 +245,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .q-grid label { display: grid; gap: 6px; font-size: 15px; font-weight: 600; }
 .q-grid input, .q-grid select { font: inherit; font-weight: 400; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
 @media (max-width: 600px) { .q-grid { grid-template-columns: 1fr; } }
-.quote { border: 1px solid var(--line); border-radius: 8px; padding: 40px 44px; background: #fff; color: #111827; font-size: 15px; }
+/* Tilbuddet er et papirdokument: altid lyst, også i mørkt tema (egne tokens) */
+.quote { --text: #111827; --muted: #4b5563; --line: #e3e6eb; border: 1px solid var(--line); border-radius: var(--r-md); padding: 40px 44px; background: #fff; color: var(--text); font-size: var(--fs-sm); }
 .q-head { display: flex; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--line); padding-bottom: 20px; }
 .q-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 19px; }
 .q-from { color: var(--muted); font-size: 14px; margin-top: 6px; }

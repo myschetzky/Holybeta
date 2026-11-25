@@ -367,9 +367,14 @@
     // Klare ord: med et bevis har Word-filen mærket i sidefoden – ellers er det en kopi uden mærke
     const marked = !!(doc && doc.result && doc.result.certId);
     $('docx').textContent = marked ? 'Gem Word-fil med mærket' : 'Gem kopi (uden mærke)';
+    // Én primær knap: "Afslut dokument", mens der skrives – bagefter er Word-filen med mærket det næste skridt
+    const done = !!(doc && doc.submitted);
+    $('submit').hidden = done;
+    $('docx').classList.toggle('primary', done && marked);
     $('del').hidden = !(doc && !doc.submitted && !practice);
     const n = $('notice');
     n.classList.toggle('practice', practice);
+    n.classList.toggle('sealed', !practice && !!(doc && doc.submitted)); // afsluttet: roligt og neutralt, ikke en advarsel
     if (practice) { n.textContent = PRACTICE_TEXT; n.hidden = false; }
     else if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${(doc.result.label || labelFor(doc.result.place))}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres. Det er ikke afleveret, før du vedhæfter det under "Afleveringer".'; n.hidden = false; }
     else if (!lessonLive) { n.textContent = 'Du kan skrive her, når din lærer har startet en lektion eller du har startet en skriveøkt.'; n.hidden = false; }
@@ -395,15 +400,24 @@
     const kort = cats.find(c => c.key === 'kort');
     return kort ? shortText(kort) : '';
   }
+  /** Fremdriftsbjælken mod beviset: kun når "for kort" er det eneste, der mangler (ellers er tallet ligegyldigt) */
+  function showGoal(c) {
+    $('goal').hidden = !c;
+    if (!c) return;
+    const need = c.need || 100;
+    $('goal-fill').style.width = Math.round((Math.min(wordsNow(), need) / need) * 100) + '%';
+  }
   function showPreview() {
     const el = $('preview');
     const pv = doc && !doc.submitted && (lessonLive || doc.practice) ? doc.preview : null;
-    if (!pv) { el.hidden = true; return; }
+    el.classList.remove('ok');
+    if (!pv) { el.hidden = true; showGoal(null); return; }
     const cats = Array.isArray(pv.categories) ? pv.categories : [];
     el.hidden = false;
-    if (!cats.length) { el.textContent = doc.practice ? 'Øvedokument: skriveforløbet ser fint ud' : 'Beviset er i orden indtil videre'; el.title = ''; return; }
+    if (!cats.length) { el.textContent = doc.practice ? 'Øvedokument: skriveforløbet ser fint ud' : 'Beviset er i orden indtil videre'; el.title = ''; el.classList.add('ok'); showGoal(null); return; }
     el.textContent = previewLine(cats);
     el.title = cats.map(c => (c.key === 'kort' ? shortText(c) : c.text)).join('\n');
+    showGoal(cats.length === 1 && cats[0].key === 'kort' ? cats[0] : null);
   }
   function fillDocs(list) {
     const sel = $('docs');
@@ -535,9 +549,12 @@
           : 'Afleverer du, kan teksten ikke længere ændres.';
       $('confirm-note').textContent = note;
     }
-    $('confirm-no').textContent = 'Annuller';
-    $('confirm-yes').textContent = missing ? 'Aflever uden mærke' : 'Afslut';
-    $('confirm').showModal();
+    // Mangler mærket, er den sikre vej standard: "Skriv videre" er den blå knap og har fokus
+    $('confirm-no').textContent = missing ? 'Skriv videre' : 'Annuller';
+    $('confirm-yes').textContent = missing ? 'Aflever uden mærke' : a ? 'Afslut og aflever' : 'Afslut';
+    $('confirm-no').classList.toggle('primary', missing);
+    $('confirm-yes').classList.toggle('primary', !missing);
+    $('confirm').showModal(); // fokus på den første knap: den sikre vej
   }
   $('submit').addEventListener('click', () => {
     if (!editable() || doc.practice) return;
@@ -581,13 +598,15 @@
     const body = $('r-body');
     body.replaceChildren();
     if (r.certId) {
-      $('r-title').textContent = r.label || labelFor(r.place);
+      // Kvitteringen: et ark med mærket som stempel, koden og linket – og forklaringen under
+      $('r-title').textContent = attachedTo ? 'Dokumentet er afleveret' : 'Dokumentet er afsluttet';
       const box = document.createElement('div'); box.className = 'cert';
+      const mark = document.createElement('div'); mark.className = 'cert-mark'; mark.textContent = r.label || labelFor(r.place);
       const code = document.createElement('div'); code.className = 'code'; code.textContent = 'HM-' + r.certId.slice(0, 8).toUpperCase();
-      const p = document.createElement('p'); p.textContent = 'Dokumentet har fået mærket. Det står også i sidefoden, når du gemmer det som Word. Beviset dækker skriveforløbet på computeren – ikke afskrift fra telefon eller papir. Koden og linket kan bruges til at tjekke det.';
       const url = document.createElement('div'); url.className = 'url'; url.textContent = r.url || '';
-      box.append(code, p, url);
-      body.append(box);
+      box.append(mark, code, url);
+      const p = document.createElement('p'); p.className = 'cert-note'; p.textContent = 'Dokumentet har fået mærket. Det står også i sidefoden, når du gemmer det som Word. Beviset dækker skriveforløbet på computeren – ikke afskrift fra telefon eller papir. Koden og linket kan bruges til at tjekke det.';
+      body.append(box, p);
     } else {
       $('r-title').textContent = attachedTo ? 'Afleveret uden bevis' : 'Afsluttet uden bevis';
       const cats = r.categories || [];
@@ -624,20 +643,21 @@
     const all = (await window.hmw.state()).docs;
     const docs = all.filter(d => d.submitted);
     const ul = $('asg-list');
-    if (!assignments.length) { ul.replaceChildren(el('li', 'empty', 'Din lærer har ikke lagt nogen afleveringer ud.')); return; }
+    if (!assignments.length) { ul.replaceChildren(el('li', 'empty', 'Din lærer har ikke lagt nogen afleveringer ud. Du kan stadig skrive et dokument og øve dig.')); return; }
     ul.replaceChildren(...assignments.map((a) => {
       const li = el('li');
       li.dataset.asg = String(a.id); // word-writer.js sætter "Skriv i Word" ind her
       const late = a.due && Date.now() > a.due && !a.submission;
       li.append(el('div', 'head', null));
-      li.firstChild.append(el('span', 't', a.title), el('span', 'meta' + (late ? ' late' : ''), (a.className ? a.className + ' · ' : '') + (a.due ? 'Frist ' + fmtDue(a.due) : 'Ingen frist')));
+      li.firstChild.append(el('span', 't', a.title), el('span', 'meta' + (late ? ' late' : ''), (a.className ? a.className + ' · ' : '') + (a.due ? 'Frist ' + fmtDue(a.due) : 'Ingen frist') + (late ? ' · overskredet' : '')));
       if (a.description) li.append(el('div', 'desc', a.description));
       if (a.submission) li.append(el('div', 'st' + (a.submission.certified ? ' ok' : ''), `Afleveret: "${a.submission.title || 'Uden titel'}"` + (a.submission.certified ? ' – ' + labels.base : ' – uden bevis')));
       const row = el('div', 'row');
       const canHome = a.home && !lessonLive && !(a.due && Date.now() > a.due);
       // Har eleven en kladde til afleveringen, fortsætter knappen den (i stedet for et nyt dokument)
       const draft = all.find(d => d.assignmentId === a.id && !d.submitted);
-      const write = el('button', 'btn', draft ? `Fortsæt kladde (${draft.words || 0} ord)` : canHome ? 'Skriv hjemme' : 'Skriv besvarelse');
+      // En påbegyndt kladde er det oplagte næste skridt: den er listens blå knap
+      const write = el('button', draft ? 'btn primary' : 'btn', draft ? `Fortsæt kladde (${draft.words || 0} ord)` : canHome ? 'Skriv hjemme' : 'Skriv besvarelse');
       write.type = 'button';
       write.disabled = !lessonLive && !canHome;
       write.title = lessonLive || canHome ? '' : (a.home ? 'Fristen er overskredet' : 'Denne aflevering skrives i timen, når din lærer har startet en lektion');
@@ -654,13 +674,18 @@
         await openFor(a.id);
       });
       row.append(write);
-      if (a.home) li.append(el('div', 'muted', 'Må skrives hjemme. ' + HOME_TEXT));
+      if (a.home) {
+        // Hvad HolyMoly gør hjemme: ét klik væk i stedet for et langt afsnit ved hver aflevering
+        const more = el('details', 'home-more');
+        more.append(el('summary', null, 'Må skrives hjemme – hvad ser HolyMoly?'), el('p', 'muted', HOME_TEXT));
+        li.append(more);
+      }
       if (docs.length) {
         const sel = el('select');
         sel.setAttribute('aria-label', 'Vælg dokument');
         for (const d of docs) { const o = el('option', null, (d.title || 'Uden titel') + (d.certId ? ' ✓' : ' (uden bevis)')); o.value = d.id; sel.append(o); }
         if (a.submission) sel.value = a.submission.docId;
-        const att = el('button', 'btn primary', a.submission ? 'Skift dokument' : 'Vedhæft');
+        const att = el('button', 'btn', a.submission ? 'Skift dokument' : 'Vedhæft');
         att.type = 'button';
         att.addEventListener('click', async () => {
           att.disabled = true;
@@ -669,7 +694,7 @@
           toast(r.ok ? `Afleveret til "${a.title}"` : (r.error || 'Kunne ikke aflevere'));
         });
         row.append(sel, att);
-      } else row.append(el('span', 'muted', 'Afslut et dokument for at kunne vedhæfte det.'));
+      } else row.append(el('span', 'muted', 'Når du har afsluttet et dokument, kan du vedhæfte det her.'));
       li.append(row);
       return li;
     }));

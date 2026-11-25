@@ -124,6 +124,16 @@
     const changed = Array.isArray(info.configChanged) ? info.configChanged : [];
     const ja = !missing.size;
     set(list.querySelector('[data-key="KONFIG"]'), ja && !changed.length, !ja ? 'Venter på skolens ja' : changed.length ? 'Ændret siden DPIA: ' + changed.map(k => FEATURE_NAME[k] || k).join(', ') : 'Uændret');
+    // Fremgang mod skolens ja (goal-gradient): "4 af 6 er på plads"
+    const prog = document.getElementById('beta-progress');
+    const items = list.querySelectorAll ? [...list.querySelectorAll('li')] : [];
+    if (prog && items.length) {
+      const done = items.filter(li => li.className === 'ok').length;
+      const t = document.getElementById('beta-progress-text'), bar = document.getElementById('beta-progress-bar');
+      if (t) t.textContent = done === items.length ? `Alle ${items.length} er på plads` : `${done} af ${items.length} er på plads`;
+      if (bar) bar.style.width = Math.round(done / items.length * 100) + '%';
+      prog.hidden = false;
+    }
   }
 
   /* ---------- funktionerne, der er slået til på denne server (/privatliv og /vilkaar-elev) ---------- */

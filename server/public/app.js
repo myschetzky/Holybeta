@@ -399,6 +399,23 @@
       ({ help: () => { location.href = '/hjaelp.html'; }, prefs: showPrefs, edit: () => setEditing(true), auto: autoLayout, joincode: showJoinCode, report: () => showReport(), assignments: () => showAssignments(), links: () => showLinks(), settings: showSettings, rename: renameClass, delete: deleteClass })[act]();
     });
     $('#edit-done').addEventListener('click', () => setEditing(false));
+
+    // Skuffen: sjældne handlinger (eksport, hjælpemidler, uden HolyMoly) ligger under "Flere valg" (progressive disclosure).
+    // Knapperne flyttes kun i DOM'en – id'er og hændelser er de samme.
+    const moreMenu = h('div', { class: 'menu more-menu', id: 'd-more-menu', role: 'menu', hidden: true });
+    const moreBtn = h('button', { class: 'btn', type: 'button', id: 'd-more', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'd-more-menu', text: 'Flere valg' });
+    for (const sel of ['#d-export', '#d-aids', '#d-other']) {
+      const it = $(sel);
+      if (!it) continue;
+      it.className = 'menu-item';
+      it.setAttribute('role', 'menuitem');
+      moreMenu.append(it);
+    }
+    const closeMore = () => { moreMenu.hidden = true; moreBtn.setAttribute('aria-expanded', 'false'); };
+    moreBtn.addEventListener('click', (e) => { e.stopPropagation(); const open = moreMenu.hidden; moreMenu.hidden = !open; moreBtn.setAttribute('aria-expanded', String(open)); });
+    moreMenu.addEventListener('click', closeMore);
+    document.addEventListener('click', closeMore);
+    $('#d-close').before(h('div', { class: 'menu-wrap more-wrap' }, moreBtn, moreMenu));
     $('#join-btn').addEventListener('click', showJoinCode);
     updateJoinUi();
 
@@ -582,9 +599,11 @@
       wrap.replaceChildren();
       sizeDesks();
       $('#room-empty').hidden = state.students.size > 0;
-      for (const s of state.students.values()) {
+      // DOM-rækkefølgen følger bordene (forfra, venstre mod højre) – det er den, skærmlæsere og smalle skærme bruger
+      const inRoom = [...state.students.values()].sort((a, b) => (Math.round(a.y * 20) - Math.round(b.y * 20)) || (a.x - b.x));
+      for (const s of inRoom) {
         const d = h('button', { class: 'desk', dataset: { id: s.id }, type: 'button' },
-          h('div', { class: 'row' }, h('i', { class: 'lamp grey' }), h('span', { class: 'name', text: s.name }), h('span', { class: 'hand-badge', title: 'Rakte hånden op', 'aria-label': 'Rakte hånden op', hidden: true }, '✋')),
+          h('div', { class: 'row' }, h('i', { class: 'lamp grey' }), h('span', { class: 'name', text: s.name }), h('span', { class: 'hand-badge', title: 'Rakte hånden op', hidden: true }, 'Hånd op')),
           h('div', { class: 'act' }),
           h('div', { class: 'flag' }),
         );
@@ -633,7 +652,7 @@
       d.querySelector('.lamp').className = 'lamp ' + color;
       d.classList.toggle('red', color === 'red' && !state.editing);
       d.classList.toggle('frozen', !!(v && v.frozen));
-      // ✋ Eleven har rakt hånden op
+      // Hånd op: eleven har rakt hånden op
       const hand = !!(v && v.hand && !state.editing);
       d.classList.toggle('hand', hand);
       d.querySelector('.hand-badge').hidden = !hand;
@@ -667,13 +686,14 @@
         if (c === 'green') g++; else if (c === 'red') r++; else gr++;
       }
       const el = $('#counts');
+      // Samme farveprik som lamperne (men ikke klassen .lamp – den tæller kun bordene)
       el.replaceChildren(...[
-        h('span', {}, h('b', { text: g }), ' OK'),
-        h('span', {}, h('b', { text: r, style: r ? 'color:var(--red)' : '' }), r === 1 ? ' rød' : ' røde'),
-        h('span', {}, h('b', { text: gr }), ' grå'),
-        hands ? h('span', { class: 'hands-count', title: 'Elever der har rakt hånden op' }, '✋ ', h('b', { text: hands })) : null,
+        h('span', {}, h('i', { class: 'dot green' }), h('b', { text: g }), ' OK'),
+        h('span', { class: r ? 'has-red' : '' }, h('i', { class: 'dot red' }), h('b', { text: r }), r === 1 ? ' rød' : ' røde'),
+        h('span', {}, h('i', { class: 'dot grey' }), h('b', { text: gr }), ' grå'),
+        hands ? h('span', { class: 'hands-count', title: 'Elever der har rakt hånden op' }, 'Hånd op: ', h('b', { text: hands })) : null,
       ].filter(Boolean));
-      document.title = (hands ? '✋ ' : '') + (r ? `(${r}) ` : '') + state.cls.name + ' – HolyMoly';
+      document.title = (hands ? '(Hånd op) ' : '') + (r ? `(${r}) ` : '') + state.cls.name + ' – HolyMoly';
     }
 
     function updateLessonUi() {
@@ -887,7 +907,7 @@
           const notes = [];
           if (s.violations) notes.push(`${s.violations} fund`);
           if (s.attempts) notes.push(`${s.attempts} blokerede forsøg`);
-          if (s.hands) notes.push(`✋ ${s.hands}`);
+          if (s.hands) notes.push(`hånd op ${s.hands}`);
           if (other) notes.push('Uden HolyMoly (andet udstyr)');
           if (s.submitted) notes.push(`${s.submitted} afleveret${s.certified ? ` (${s.certified} med bevis)` : ''}`);
           return h('tr', {},
@@ -1024,7 +1044,8 @@
       state.asgRefresh = () => { if (view.kind === 'list' || view.kind === 'one') render(); };
       await render();
       $('#dlg').classList.add('wide');
-      await dialog({ title: 'Afleveringer – ' + state.cls.name, body: box, actions: [{ label: 'Luk', kind: 'primary', value: true }] });
+      // Én primær handling: "Ny aflevering" (eller "Gem") inde i dialogen – Luk er neutral
+      await dialog({ title: 'Afleveringer – ' + state.cls.name, body: box, actions: [{ label: 'Luk', value: true }] });
       $('#dlg').classList.remove('wide');
       state.asgRefresh = null;
     }
@@ -1625,6 +1646,7 @@
       window.removeEventListener('resize', sizeDesks);
       clearInterval(state.lessonTimer);
       document.removeEventListener('click', closeMenu);
+      document.removeEventListener('click', closeMore);
       document.removeEventListener('keydown', onKey);
       if (rw) rw.cleanup();
       cleanupInfo();

@@ -120,7 +120,7 @@
         <div class="info-pop" id="info-pop" role="dialog" aria-label="Sådan virker HolyMoly" hidden></div>
       </div>
       <div class="menu-wrap">
-        <button class="btn ghost" id="menu-btn" aria-haspopup="true">⋯</button>
+        <button class="btn ghost" id="menu-btn" aria-haspopup="true" aria-label="Flere valg for klassen" title="Flere valg for klassen">⋯</button>
         <div class="menu" id="menu" hidden>
           <button data-act="edit">Rediger klasseværelse</button>
           <button data-act="auto">Auto-placér bordene</button>
@@ -158,7 +158,8 @@
         <span><i class="lamp grey"></i>Ikke bekræftet (fx appen er lukket)</span>
         <span><i class="lamp idle"></i>Forbundet, ingen lektion</span>
         <span><i class="lamp other"></i>Uden HolyMoly (andet udstyr)</span>
-        <span>❄ Frosset</span>
+        <span><i class="mark-hand" aria-hidden="true"></i>Hånd op</span>
+        <span><i class="mark-frozen" aria-hidden="true"></i>Frosset</span>
       </div>
     </main>
     <aside class="drawer" id="drawer" hidden>
@@ -171,7 +172,7 @@
         <div class="spacer"></div>
         <a class="btn ghost" id="d-export" title="Hent elevens log som regneark (CSV)">Eksportér log</a>
         <button class="btn" id="d-shot">Tag skærmbillede</button>
-        <button class="btn hand-btn" id="d-hand" hidden title="Eleven har rakt hånden op">✋ Tag hånden ned</button>
+        <button class="btn hand-btn" id="d-hand" hidden title="Eleven har rakt hånden op">Tag hånden ned</button>
         <button class="btn" id="d-wrong" hidden title="Marker, at den røde lampe var forkert (gemmes uden navn)">Var det forkert?</button>
         <button class="btn" id="d-extra" hidden>+ tid</button>
         <button class="btn" id="d-aids" title="Ordforslag og diktering til elever med fx ordblindhed">Hjælpemidler</button>
@@ -196,7 +197,7 @@
       </div>
       <div class="tab-body" id="d-body"></div>
     </aside>
-    <div class="toast" id="toast" hidden></div>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
   </template>
 
   <template id="tpl-guide">
@@ -214,7 +215,7 @@
         <li><i class="lamp red"></i><span><b>Rød</b> – bekræftet forbudt, fx AI, sociale medier, spil eller forsøg på at snyde HolyMoly. Hvad det er, står under navnet.</span></li>
         <li><i class="lamp grey"></i><span><b>Grå</b> – ikke bekræftet. HolyMoly har ikke kontakt til elevens computer lige nu, fx fordi appen er lukket, computeren er offline, eller eleven mangler at give en tilladelse. Årsagen står under navnet. Grå tæller aldrig som godkendt.</span></li>
         <li><i class="lamp idle"></i><span><b>Grøn ring</b> – forbundet, men ingen lektion. Intet overvåges.</span></li>
-        <li><i class="guide-freeze">❄</i><span><b>Frosset</b> – du har låst elevens skærm med en besked.</span></li>
+        <li><i class="mark-frozen guide-mark" aria-hidden="true"></i><span><b>Frosset</b> – du har låst elevens skærm med en besked.</span></li>
       </ul>
     </div>
   </template>

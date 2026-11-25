@@ -9,7 +9,15 @@
 | Login | Lærer: brugernavn + adgangskode. Elev: klassekode + navn + egen kode | E-mail, to-faktor og Unilogin |
 | Server | Skolens egen (fx Proxmox), se [docs/PROXMOX.md](docs/PROXMOX.md) | Hostet |
 
-Serveren starter selv i enkel tilstand (`server/edition.json`). Kom i gang med [docs/ENKEL.md](docs/ENKEL.md).
+Serveren starter selv i enkel tilstand (`server/edition.json`).
+
+## Kom i gang på skolen
+
+1. **Følg [docs/SKOLESTART.md](docs/SKOLESTART.md)** – én side med trinene for ledelse/DPO, IT, lærere og elever.
+2. **Hent filerne** under [Releases](https://github.com/myschetzky/Holybeta/releases): elev-app til Windows (`.exe`) og Mac (`.pkg`), browser-udvidelserne, serveren til Windows og hele kildekoden som zip.
+3. **Serveren** kører i Docker på skolens egen maskine – se [docs/PROXMOX.md](docs/PROXMOX.md) og [docs/ENKEL.md](docs/ENKEL.md).
+
+Udgivelserne er markeret *pre-release* og er ikke kodesigneret endnu, så Windows og macOS kan advare første gang.
 
 **Før rigtige elever:** skolens ledelse skal have sagt ja, skolens DPO skal have set databehandleraftalen, og skolen skal drive serveren. Indtil da er det en testserver, og beviserne siger "Testserver – må ikke bruges til bedømmelse". Ikke til prøver eller eksamen.
 

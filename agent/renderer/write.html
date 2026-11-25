@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
   <title>Skriv i HolyMoly</title>
+  <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="write.css">
 </head>
 <body>
@@ -63,10 +64,12 @@
     <span id="words">0 ord</span>
     <span id="saved"></span>
     <span id="aids" class="aids" title="Din lærer har slået hjælpemidler til for dig. De står ikke på mærket." hidden></span>
+    <!-- Fremdrift mod beviset (100 ord): bjælken følger teksten "Bevis: N af 100 ord" ved siden af -->
+    <span id="goal" class="goal" aria-hidden="true" hidden><span class="goal-fill" id="goal-fill"></span></span>
     <span id="preview" class="preview" hidden></span>
     <span id="lamp" class="lamp" role="status" aria-live="polite" hidden><span class="lamp-dot" aria-hidden="true"></span><span class="lamp-text"></span></span>
     <span class="spacer"></span>
-    <button class="btn" id="del" hidden>Slet kladde</button>
+    <button class="btn quiet" id="del" hidden>Slet kladde</button>
     <button class="btn" id="docx">Gem kopi (uden mærke)</button>
     <button class="btn primary" id="submit">Afslut dokument</button>
   </footer>
@@ -92,7 +95,7 @@
     <form method="dialog">
       <h2>Slet kladden?</h2>
       <p>Teksten slettes på computeren og hos HolyMoly. Det kan ikke fortrydes.</p>
-      <div class="actions"><button class="btn" value="no">Annuller</button><button class="btn primary" value="yes">Slet kladde</button></div>
+      <div class="actions"><button class="btn primary" value="no">Behold kladden</button><button class="btn danger" value="yes">Slet kladde</button></div>
     </form>
   </dialog>
 
@@ -100,7 +103,7 @@
     <form method="dialog">
       <h2 id="r-title"></h2>
       <div id="r-body"></div>
-      <div class="actions"><button class="btn" id="r-docx" type="button">Gem Word-fil med mærket</button><button class="btn primary" value="ok">Luk</button></div>
+      <div class="actions"><button class="btn" id="r-docx" type="button">Gem Word-fil med mærket</button><button class="btn primary" value="ok" autofocus>Luk</button></div>
     </form>
   </dialog>
   <dialog id="asg" class="wide">
@@ -108,7 +111,7 @@
       <h2>Afleveringer</h2>
       <p class="muted">Vælg en aflevering, og vedhæft et dokument, du har skrevet og afsluttet i HolyMoly.</p>
       <ul class="asg-list" id="asg-list"></ul>
-      <div class="actions"><button class="btn primary" value="ok">Luk</button></div>
+      <div class="actions"><button class="btn" value="ok">Luk</button></div>
     </form>
   </dialog>
 

@@ -25,7 +25,16 @@
     $('word-note').hidden = !s.word.active;
     $('word-note').textContent = 'Du har et Word-dokument åbent. Tryk "Tekst færdig" i Word, når du er færdig.';
     const ul = $('list');
-    if (!s.items.length) { ul.replaceChildren(el('li', 'empty', 'Du har ingen dokumenter endnu.')); return; }
+    // Én primær knap: i en tom liste er "Skriv i …" øverst det næste skridt – ellers står det ved hvert dokument
+    const empty = !s.items.length;
+    $('new-word').classList.toggle('primary', empty && s.word.available);
+    $('new-holymoly').classList.toggle('primary', empty && !s.word.available);
+    if (empty) {
+      const li = el('li', 'empty');
+      li.append(el('p', 't', 'Du har ingen dokumenter endnu.'), el('p', 'muted', s.word.available ? 'Tryk "Skriv i Word" eller "Skriv i HolyMoly" øverst for at begynde. Dokumentet kommer så her.' : 'Tryk "Skriv i HolyMoly" øverst for at begynde. Dokumentet kommer så her.'));
+      ul.replaceChildren(li);
+      return;
+    }
     ul.replaceChildren(...s.items.map((it) => {
       const li = el('li');
       li.dataset.key = it.key;
@@ -43,13 +52,16 @@
           for (const t of it.targets) { const o = el('option', null, t.text + (t.current ? ' – afleveret' : '')); o.value = t.id; sel.append(o); }
           const cur = it.targets.find(t => t.current);
           if (cur) sel.value = String(cur.id);
-          const b = el('button', 'btn primary', s.texts.attach);
+          // Afsluttet, men ikke afleveret: "Vedhæft til aflevering" er dokumentets næste skridt
+        const b = el('button', !it.attachedTo ? 'btn primary' : 'btn', s.texts.attach);
           b.type = 'button';
           b.addEventListener('click', () => run(b, { id: 'attach', key: it.key, assignmentId: Number(sel.value) }, 'Vedhæftet til afleveringen'));
           row.append(sel, b);
           continue;
         }
-        const b = el('button', 'btn', s.texts[id] || id);
+        // En kladde venter: "Fortsæt i Word" / "Åbn i HolyMoly" er dokumentets næste skridt (Zeigarnik)
+        const next = it.kind === 'kladde' && (id === 'continue' || id === 'writer');
+        const b = el('button', next ? 'btn primary' : 'btn', s.texts[id] || id);
         b.type = 'button';
         b.dataset.action = id;
         b.addEventListener('click', () => run(b, { id, key: it.key }));

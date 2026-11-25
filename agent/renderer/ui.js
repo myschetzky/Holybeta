@@ -51,6 +51,7 @@
     $('enroll-cancel').textContent = nameStep ? 'Tilbage' : 'Annuller';
     if (nameStep) $('enroll-cancel').hidden = false;
     $('enroll-title').textContent = nameStep ? 'Hvad hedder du?' : 'Skriv klassekoden';
+    $('enroll-step').textContent = nameStep ? 'Trin 2 af 2' : 'Trin 1 af 2';
     $('enroll-help').textContent = nameStep
       ? `Du tilmelder dig ${className}${teacherName ? ' hos ' + teacherName : ''}. ` + (askPin ? 'Skriv dit fulde navn og vælg en kode på 4-6 cifre. Med koden kan du logge ind igen på en anden computer.' : typed ? 'Skriv dit fulde navn, så din lærer kan se, det er dig.' : 'Log ind med UNI-Login, så din lærer kan se, det er dig.')
       : 'Koden får du af din lærer. Du skal kun gøre det én gang.';
@@ -147,7 +148,8 @@
       return li;
     }));
     // "Skriv i HolyMoly" – under lektionen (så kan HolyMoly bevise, at teksten er elevens egen)
-    $('lesson-btns').hidden = !(s.conn === 'online' && s.lesson);
+    const inLesson = s.conn === 'online' && !!s.lesson;
+    $('lesson-btns').hidden = !inLesson;
     // "Skriv i Word" kun når broen siger supported og Word findes. "Min HolyMoly" altid.
     $('write-word').hidden = !s.word;
     $('mine-btns').hidden = !s.enrollments.length;
@@ -167,13 +169,15 @@
       return li;
     }));
     // "Ræk hånden op": læreren ser ✋ på dit bord
-    $('hand').textContent = s.hand ? 'Tag hånden ned' : '✋ Ræk hånden op';
+    $('hand').textContent = s.hand ? 'Tag hånden ned' : 'Ræk hånden op';
     $('hand').setAttribute('aria-pressed', String(!!s.hand));
     $('hand').classList.toggle('up', !!s.hand);
     // Afleveringer fra læreren (også uden for lektionen)
     const open = s.assignmentsOpen || 0;
     $('assign').hidden = !(s.enrollments.length && open);
     $('assign-text').textContent = open === 1 ? 'Du har 1 aflevering, der mangler.' : `Du har ${open} afleveringer, der mangler.`;
+    // Uden lektion er afleveringerne det næste skridt: så er "Se afleveringer" skærmens ene primære knap
+    $('assign-btn').classList.toggle('primary', !inLesson);
     $('hint').textContent = ok ? 'Alt er klar. HolyMoly lægger sig nede i hjørnet og kører i baggrunden.' : '';
   }
 

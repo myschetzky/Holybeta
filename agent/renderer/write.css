@@ -1,68 +1,92 @@
-:root { --bg: #eef0f3; --panel: #fff; --text: #16181d; --muted: #6b7280; --line: #e3e5ea; --accent: #2f5bea; --green: #16a34a; --red: #dc2626; color-scheme: light; }
+/* Skrivevinduet. Tokens: tokens.css. Beslutninger: docs/DESIGN-APP.md */
+:root { --bg: var(--hm-grey-100); --panel: var(--hm-grey-0); --text: var(--hm-grey-900); --muted: #6b7280; --line: var(--hm-grey-200); --accent: var(--hm-blue); --green: var(--hm-green); --red: var(--hm-red); color-scheme: light; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { display: grid; grid-template-rows: auto auto 1fr auto; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 [hidden] { display: none !important; }
-.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; white-space: nowrap; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn { border: 1px solid var(--hm-grey-300); background: var(--panel); color: var(--text); border-radius: var(--r-2); padding: 6px var(--s-3); font: inherit; cursor: pointer; white-space: nowrap; }
+.btn:hover { border-color: var(--hm-grey-500); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:hover { background: #2549c9; border-color: #2549c9; }
+/* Sjældne eller farlige handlinger træder tilbage (men er stadig synlige) */
+.btn.quiet { border-color: transparent; background: transparent; color: var(--hm-grey-700); text-decoration: underline; text-underline-offset: 2px; padding-inline: var(--s-2); }
+.btn.quiet:hover { color: var(--hm-red-ink); border-color: transparent; }
+.btn.danger { color: var(--hm-red-ink); border-color: color-mix(in srgb, var(--hm-red) 45%, var(--line)); }
+.btn.danger:hover { background: #fef2f2; border-color: var(--hm-red-ink); }
 .btn:disabled { opacity: .5; cursor: default; }
 
-.bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
-#title { flex: 1; min-width: 0; border: 0; font: 600 17px/1.3 inherit; padding: 6px 4px; background: transparent; color: var(--text); }
+.bar { display: flex; align-items: center; gap: 10px; padding: var(--s-2) 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+#title { flex: 1; min-width: 0; border: 0; font: 600 17px/1.3 inherit; padding: 6px var(--s-1); background: transparent; color: var(--text); }
 #title:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 6px; }
-#docs { max-width: 220px; font: inherit; padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+#docs { max-width: 220px; font: inherit; padding: 5px 6px; border: 1px solid var(--hm-grey-300); border-radius: var(--r-2); background: var(--panel); }
 
-.tools { display: flex; align-items: center; gap: 4px; padding: 6px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.tools button { border: 1px solid transparent; background: transparent; border-radius: 6px; padding: 4px 9px; font: inherit; cursor: pointer; color: var(--text); }
+.tools { display: flex; align-items: center; gap: var(--s-1); padding: 6px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.tools button { border: 1px solid transparent; background: transparent; border-radius: var(--r-1); padding: var(--s-1) 9px; font: inherit; cursor: pointer; color: var(--text); }
 .tools button:hover { background: var(--bg); }
 .tools button.on { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
 .tools .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
 .spacer { flex: 1; }
-.shield { font-size: 12px; color: #15803d; border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line)); border-radius: 99px; padding: 2px 10px; }
+.shield { font-size: 12px; color: var(--hm-green-ink); border: 1px solid color-mix(in srgb, var(--green) 35%, var(--line)); border-radius: 99px; padding: 2px 10px; }
 .shield::before { content: "✓ "; }
 
-.page-wrap { overflow: auto; padding: 24px 16px 40px; display: grid; justify-items: center; align-content: start; gap: 12px; }
+/* Bordet (filt) og arket (papir): eleven skriver på et ark, ikke i en formular */
+.page-wrap { overflow: auto; padding: var(--s-5) var(--s-4) 40px; display: grid; justify-items: center; align-content: start; gap: var(--s-3); background: var(--bg) var(--tex-felt); }
 .notice { width: min(820px, 100%); background: #fff7e6; border: 1px solid #f2d39b; color: #7a4b00; border-radius: 10px; padding: 10px 14px; }
-.notice.write-lesson { background: #eef3ff; border-color: #c7d5fb; color: #1e3a8a; }
-.page { width: min(820px, 100%); min-height: 1000px; background: var(--panel); box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.06); padding: 72px 80px; }
-#editor { outline: none; min-height: 800px; font: var(--ed-size, 16px)/var(--ed-lh, 1.6) Calibri, Carlito, "Segoe UI", system-ui, sans-serif; color: #111; caret-color: var(--accent); }
-#editor:empty::before { content: attr(data-placeholder); color: #9ca3af; }
-#editor h1 { font-size: 26px; margin: 18px 0 8px; }
-#editor h2 { font-size: 20px; margin: 16px 0 6px; }
+.notice.write-lesson { background: var(--hm-blue-50); border-color: var(--hm-blue-200); color: var(--hm-blue-ink); }
+.page { width: min(820px, 100%); min-height: 1000px; background: var(--hm-paper) var(--tex-paper); border: 1px solid rgba(0,0,0,.05); border-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 10px 28px rgba(15,23,42,.07); padding: 72px 80px; }
+/* Teksten står på ren papirfarve: kornet ses kun i arkets margener og toner blødt ud mod skriftfeltet */
+#editor { background: var(--hm-paper); box-shadow: 0 0 28px 20px var(--hm-paper); outline: none; min-height: 800px; font: var(--ed-size, 16px)/var(--ed-lh, 1.6) Calibri, Carlito, "Segoe UI", system-ui, sans-serif; color: #111; caret-color: var(--accent); }
+#editor:empty::before { content: attr(data-placeholder); color: #6b7280; }
+#editor h1 { font-size: 26px; margin: 18px 0 var(--s-2); }
+#editor h2 { font-size: 20px; margin: var(--s-4) 0 6px; }
 #editor p { margin: 0 0 10px; }
 #editor[contenteditable="false"] { color: #374151; }
 
-.status { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
-.toast { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); background: #111827; color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 14px; max-width: 90vw; }
+.status { display: flex; align-items: center; gap: 14px; padding: var(--s-2) 14px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.toast { position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%); background: #111827; color: #fff; padding: 9px var(--s-4); border-radius: 10px; font-size: 14px; max-width: 90vw; }
 
-dialog { border: 0; border-radius: 14px; padding: 22px 24px; width: min(520px, 92vw); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+dialog { border: 0; border-radius: 14px; padding: 22px var(--s-5); width: min(520px, 92vw); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+dialog::backdrop { background: rgba(15, 23, 42, .35); }
 dialog h2 { margin: 0 0 10px; font-size: 19px; }
-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-.cert { border: 1px solid color-mix(in srgb, var(--green) 40%, var(--line)); background: color-mix(in srgb, var(--green) 7%, #fff); border-radius: 10px; padding: 12px 14px; }
+dialog .actions { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-4); }
+
+/* Kvitteringen efter "Afslut": et ark med mærket som stempel – roligt, ingen fejring */
+.cert { display: grid; gap: 6px; justify-items: start; border: 1px solid var(--hm-grey-300); border-radius: 10px; padding: 14px var(--s-4); background: var(--hm-paper) var(--tex-paper); box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.cert .cert-mark { font-weight: 700; font-size: 15px; color: var(--hm-green-ink); border: 1.5px solid currentColor; border-radius: var(--r-1); padding: 3px 10px; }
 .cert .code { font: 700 18px/1.3 ui-monospace, Menlo, monospace; letter-spacing: .04em; }
-.cert .url { font-size: 13px; color: var(--muted); word-break: break-all; user-select: all; }
+.cert .url { font-size: 13px; color: var(--hm-grey-500); word-break: break-all; user-select: all; }
+.cert-note { color: var(--hm-grey-700); font-size: 13px; }
+.st-ok { font-weight: 600; }
 .why { color: var(--red); }
 .why li, .notes li { margin: 3px 0; }
 .notes { color: var(--muted); font-size: 13px; }
 .aids { white-space: nowrap; }
 .preview { max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview.ok { color: var(--hm-green-ink); }
 .why-list li { margin: 3px 0; }
+/* Fremdrift mod beviset: blå (ikke grøn/rød) – det er en vej, ikke en karakter */
+.goal { flex: none; width: 72px; height: 6px; border-radius: 99px; background: var(--hm-grey-200); overflow: hidden; margin-right: -6px; }
+.goal-fill { display: block; height: 100%; width: 0; border-radius: 99px; background: var(--hm-blue); transition: width .4s ease; }
+@media (prefers-reduced-motion: reduce) { .goal-fill { transition: none; } }
 
-.count { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--red); color: #fff; font-size: 12px; font-weight: 700; text-align: center; }
+.count { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 99px; background: var(--hm-blue); color: #fff; font-size: 12px; font-weight: 700; text-align: center; }
 .muted { color: var(--muted); }
 dialog.wide { width: min(680px, 94vw); }
-.asg-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; max-height: 60vh; overflow: auto; }
-.asg-list li { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 6px; }
+.asg-list { list-style: none; margin: var(--s-3) 0 0; padding: 0; display: grid; gap: 10px; max-height: 60vh; overflow: auto; }
+.asg-list li { border: 1px solid var(--line); border-radius: 10px; padding: var(--s-3) 14px; display: grid; gap: 6px; }
 .asg-list .head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
 .asg-list .t { font-weight: 650; font-size: 15px; }
 .asg-list .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
-.asg-list .meta.late { color: var(--red); }
+.asg-list .meta.late { color: var(--hm-grey-700); font-weight: 600; } /* overskredet: står i teksten – ingen alarmfarve */
 .asg-list .desc { white-space: pre-wrap; color: #374151; font-size: 13px; }
 .asg-list .st { font-size: 13px; }
-.asg-list .st.ok { color: var(--green); }
-.asg-list .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.asg-list select { font: inherit; padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; max-width: 320px; }
-.empty { color: var(--muted); padding: 8px 0; }
+.asg-list .st.ok { color: var(--hm-green-ink); }
+.asg-list .row { display: flex; gap: var(--s-2); flex-wrap: wrap; align-items: center; }
+.asg-list select { font: inherit; padding: 5px 6px; border: 1px solid var(--hm-grey-300); border-radius: var(--r-2); max-width: 320px; }
+.home-more summary { cursor: pointer; color: var(--hm-blue-ink); font-size: 13px; }
+.home-more p { margin: 6px 0 0; font-size: 13px; }
+.empty { color: var(--muted); padding: var(--s-6) var(--s-3); text-align: center; background-color: var(--panel); background-image: var(--tex-empty); border-radius: 10px; }
+.asg-list li.empty { border-style: dashed; }
 /* Elevens egen lampe i footeren: symbol + tekst (farven er aldrig det eneste tegn) */
 .lamp { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 52%; color: var(--text); }
 .lamp .lamp-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -72,14 +96,15 @@ dialog.wide { width: min(680px, 94vw); }
 .lamp.red .lamp-text { color: var(--red); }
 .notice.lost { background: #f3f4f6; border-color: #d1d5db; color: #374151; }
 /* Visning (tekststørrelse og linjeafstand) og tastaturfokus */
-.tools button:focus-visible, .btn:focus-visible, #docs:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tools button:focus-visible, .btn:focus-visible, #docs:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .tools button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
 .view-wrap { position: relative; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.view-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 10px 12px; display: grid; gap: 8px; min-width: 300px; }
+.view-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 10px var(--s-3); display: grid; gap: var(--s-2); min-width: 300px; }
 .view-row { display: flex; align-items: center; gap: 6px; }
 .view-label { flex: 1; }
 .view-val { min-width: 44px; text-align: center; font-variant-numeric: tabular-nums; }
 .view-help { margin: 0; font-size: 12px; color: var(--muted); }
+.notice.sealed { background: var(--hm-paper) var(--tex-paper); border-color: var(--hm-grey-300); color: var(--hm-grey-700); }
 .notice.practice { background: #eefaf1; border-color: #b7e2c3; color: #14532d; }
-@media print { .bar, .tools, .status { display: none; } }
+@media print { .bar, .tools, .status { display: none; } .page { background: #fff; box-shadow: none; border: 0; } }

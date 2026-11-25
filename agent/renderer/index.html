@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
   <title>HolyMoly</title>
+  <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="ui.css">
   <link rel="stylesheet" href="afleveringer.css">
 </head>
@@ -24,6 +25,7 @@
 
     <!-- Første gang: kode fra læreren -->
     <section id="enroll" hidden>
+      <p class="step" id="enroll-step">Trin 1 af 2</p>
       <h1 id="enroll-title">Skriv klassekoden</h1>
       <p class="muted" id="enroll-help">Koden får du af din lærer. Du skal kun gøre det én gang.</p>
       <form id="enroll-form">
@@ -60,19 +62,21 @@
         <b>Lektionens links</b>
         <ul id="links-list"></ul>
       </div>
+      <!-- Én primær handling: "Skriv i HolyMoly" i en lektion – ellers "Se afleveringer", hvis noget mangler (ui.js) -->
+      <div class="row-btns" id="lesson-btns" hidden>
+        <button class="btn primary" id="write" type="button">Skriv i HolyMoly</button>
+        <button class="btn" id="write-word" type="button" hidden>Skriv i Word</button>
+        <button class="btn" id="hand" type="button" aria-pressed="false">Ræk hånden op</button>
+      </div>
       <div class="assign" id="assign" hidden>
         <span id="assign-text"></span>
         <button class="btn small" id="assign-btn" type="button">Se afleveringer</button>
       </div>
-      <div class="row-btns" id="lesson-btns" hidden>
-        <button class="btn primary" id="write" type="button">Skriv i HolyMoly</button>
-        <button class="btn primary" id="write-word" type="button" hidden>Skriv i Word</button>
-        <button class="btn" id="hand" type="button" aria-pressed="false">✋ Ræk hånden op</button>
-      </div>
-      <button class="btn" id="afl-btn" type="button">Afleveringer</button>
-      <div class="row-btns" id="mine-btns" hidden>
+      <!-- Navigation: altid de samme to knapper, samme sted -->
+      <nav class="row-btns nav" id="mine-btns" aria-label="Mine sider" hidden>
+        <button class="btn" id="afl-btn" type="button">Afleveringer</button>
         <button class="btn" id="mine" type="button">Min HolyMoly</button>
-      </div>
+      </nav>
       <p class="error small" id="word-error" role="alert" hidden></p>
       <p class="muted small" id="hint"></p>
     </section>
@@ -145,6 +149,12 @@
     <form method="dialog" id="afl-attach-form">
       <h2 id="afl-attach-h">Aflever</h2>
       <p class="muted small" id="afl-attach-meta"></p>
+      <!-- Kvittering: et roligt slut-øjeblik efter aflevering (afleveringer.js) -->
+      <div class="afl-receipt" id="afl-attach-receipt" tabindex="-1" hidden>
+        <p class="afl-receipt-k">Afleveret</p>
+        <p class="afl-receipt-t" id="afl-receipt-title"></p>
+        <p class="afl-receipt-m" id="afl-receipt-mark"></p>
+      </div>
       <p class="afl-note" id="afl-attach-late" hidden>Afleveres efter fristen.</p>
       <p class="small" id="afl-attach-now" hidden></p>
       <fieldset class="afl-choices" id="afl-attach-marked">

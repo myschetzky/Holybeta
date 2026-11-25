@@ -1,0 +1,42 @@
+/*
+ * Fælles tokens for elev-appens vinduer (docs/DESIGN-APP.md).
+ * Én farvetone (HolyMoly-blå) + neutrale grå. Grøn og rød bruges KUN til status (lampe, mærke) – aldrig som pynt.
+ * Teksturer er svage SVG-data-URI'er (ingen filer, ingen eksterne kald) og slås fra ved prefers-contrast: more.
+ */
+:root {
+  /* Farver */
+  --hm-blue: #2f5bea;
+  --hm-blue-ink: #1e3a8a;     /* blå tekst på lys flade (10:1) */
+  --hm-blue-50: #eef3ff;
+  --hm-blue-200: #c7d5fb;
+  --hm-grey-0: #fff;
+  --hm-grey-50: #f4f5f7;
+  --hm-grey-100: #eef0f3;
+  --hm-grey-200: #e3e5ea;
+  --hm-grey-300: #d1d5db;
+  --hm-grey-500: #5c6370;     /* dæmpet tekst (5.9:1 på hvid) */
+  --hm-grey-700: #374151;
+  --hm-grey-900: #16181d;
+  --hm-green: #16a34a;        /* kun flader/symboler */
+  --hm-green-ink: #15803d;    /* grøn tekst (5:1) */
+  --hm-red: #dc2626;
+  --hm-red-ink: #b91c1c;
+  --hm-paper: #fffefb;        /* arket i skrivevinduet: varm hvid */
+
+  /* Afstande: 4/8/12/16/24/32 */
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 24px; --s-6: 32px;
+  --r-1: 6px; --r-2: 8px; --r-3: 12px;
+
+  /* Teksturer */
+  /* Papir: fin fiberstøj, ca. 3 % – ændrer ikke kontrasten målbart */
+  --tex-paper: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='p'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .45 0 0 0 0 .38 0 0 0 0 .28 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23p)'/%3E%3C/svg%3E");
+  /* Filt: bordet under arket (grovere og kold grå) */
+  --tex-felt: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.55' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .2 0 0 0 0 .24 0 0 0 0 .32 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23f)'/%3E%3C/svg%3E");
+  /* Kvadratisk prikgitter: tomme tilstande ("her kommer noget") */
+  --tex-dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12'%3E%3Crect x='5' y='5' width='1.6' height='1.6' fill='%235c6370' fill-opacity='.28'/%3E%3C/svg%3E");
+  /* Tom tilstand: prikgitteret toner ud mod midten, så teksten altid står på hvid flade (aldrig tekstur bag tekst) */
+  --tex-empty: radial-gradient(ellipse 72% 62% at 50% 50%, #fff 58%, rgba(255,255,255,0) 100%), var(--tex-dots);
+}
+@media (prefers-contrast: more) {
+  :root { --tex-paper: none; --tex-felt: none; --tex-dots: none; }
+}

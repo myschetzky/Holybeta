@@ -74,7 +74,7 @@
   function fill(tableId, list, empty, now) {
     const tb = $(tableId).tBodies[0];
     if (!list.length) {
-      const td = el('td', 'muted', empty);
+      const td = el('td', 'muted afl-empty', empty);
       td.colSpan = 4;
       const tr = el('tr'); tr.append(td);
       tb.replaceChildren(tr);
@@ -85,7 +85,7 @@
   function render() {
     const now = Date.now();
     const g = V.split(data.assignments, now);
-    fill('afl-open-table', g.open, 'Ingen åbne afleveringer lige nu.', now);
+    fill('afl-open-table', g.open, 'Ingen åbne afleveringer lige nu. Når din lærer lægger en ud, står den her.', now);
     $('afl-past').hidden = !g.past.length;
     $('afl-past-h').textContent = g.pastTitle;
     $('afl-past-cap').textContent = g.pastTitle === 'Afleveret' ? 'Afleverede afleveringer, hvor fristen er passeret' : 'Afleveringer, hvor fristen er passeret';
@@ -219,11 +219,26 @@
     $('afl-attach-more').open = unmarked.some(d => d.id === current);
     $('afl-attach-result').textContent = '';
     $('afl-attach-result').className = 'afl-result';
-    $('afl-attach-cancel').textContent = 'Annuller';
+    showReceipt(null);
     updateAttachBtn();
     $('afl-attach').showModal();
     const first = $('afl-attach-form').querySelector('input[name="afl-doc"]:checked') || fm.querySelector('input') || $('afl-attach-more').querySelector('summary');
     if (first) first.focus();
+  }
+  /* Kvitteringen: valgene forsvinder, og tilbage står det afleverede dokument med mærket og tidspunktet */
+  // showAttach sætter 'efter fristen' og 'du har afleveret' på ny, før kvitteringen nulstilles
+  function showReceipt(d) {
+    const on = !!d;
+    $('afl-attach-receipt').hidden = !on;
+    for (const id of ['afl-attach-marked', 'afl-attach-more']) $(id).hidden = on;
+    if (on) for (const id of ['afl-attach-late', 'afl-attach-now']) $(id).hidden = true;
+    $('afl-attach-go').hidden = on;
+    $('afl-attach-cancel').textContent = on ? 'Luk' : 'Annuller';
+    $('afl-attach-cancel').classList.toggle('primary', on);
+    if (!on) return;
+    $('afl-receipt-title').textContent = d.title || 'Uden titel';
+    $('afl-receipt-mark').textContent = d.certId ? d.label : 'Uden mærke';
+    $('afl-receipt-mark').classList.toggle('ok', !!d.certId);
   }
   function updateAttachBtn() { $('afl-attach-go').disabled = !$('afl-attach-form').querySelector('input[name="afl-doc"]:checked'); }
   $('afl-attach-form').addEventListener('change', updateAttachBtn);
@@ -241,7 +256,9 @@
     $('afl-attach-result').className = 'afl-result ' + (res.ok ? 'ok' : 'err');
     $('afl-attach-result').textContent = res.text;
     if (res.ok) {
-      $('afl-attach-cancel').textContent = 'Luk';
+      const d = (data.docs || []).find(x => x.id === sel.value) || { title: sel.closest('label') ? sel.closest('label').querySelector('.t').textContent : '' };
+      showReceipt(d);
+      $('afl-attach-cancel').focus();
       say(`${a.title || 'Uden titel'}: ${res.text}`);
       refreshSoon();
     } else updateAttachBtn();

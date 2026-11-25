@@ -37,6 +37,7 @@
     $('mole').setAttribute('aria-label', 'Muldvarpen: ' + st.text);
     $('mole').hidden = !view.status;
     $('bubble-text').textContent = st.text;
+    $('bubble-sym').textContent = st.symbol || { green: '✓', red: '✗', grey: '?' }[color];
     $('bubble-notes').replaceChildren(...(st.notes || []).map(li));
     $('bubble').className = 'bubble hit ' + color;
     if (st.text !== liveText) { liveText = st.text; $('live').textContent = st.text; }
