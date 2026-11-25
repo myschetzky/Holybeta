@@ -90,6 +90,8 @@ function createAccounts(ctx) {
     if (cfg.verifyEmail && !t.email_verified) return 'verify';
     if (cfg.require2fa && !sess.mfa) return '2fa';
     if (cfg.licensing && !t.school_id) return 'school';
+    // Enkel tilstand: en ny lærer skal godkendes af en kollega (lærerkoden kan være nået ud til en elev)
+    if (cfg.simple && !t.approved) return 'approval';
     return null;
   }
   function price(students, years = 1) {
@@ -121,8 +123,8 @@ function createAccounts(ctx) {
     return {
       id: t.id, email: isUniOnly(t) ? null : t.email, name: t.name, uniLinked: !!t.uni_id, uniOnly: isUniOnly(t),
       verified: !!t.email_verified, totp: !!t.totp_secret, require2fa: cfg.require2fa, needs: needs(t, sess), simple: cfg.simple,
-      teacherCode: cfg.simple && !cfg.signupCode ? simpleTeacherCode() : null,
-      teacherCodeExpires: cfg.simple && !cfg.signupCode ? teacherCodeExpires() : null,
+      // Lærerkoden vises først efter et klik ("Vis kode") og gælder 30 minutter
+      teacherCodeOn: cfg.simple && !cfg.signupCode, approved: !!t.approved,
       school: school ? { id: school.id, name: school.name, role: t.role } : null,
       license: school ? licenseOf(school.id) : null, licensing: cfg.licensing,
       platformAdmin: isPlatformAdmin(t, sess),
@@ -155,29 +157,31 @@ function createAccounts(ctx) {
   const sessionsOf = (teacherId, exceptHash) => {
     if (exceptHash) db.prepare('DELETE FROM sessions WHERE teacher_id = ? AND token_hash != ?').run(teacherId, exceptHash);
     else db.prepare('DELETE FROM sessions WHERE teacher_id = ?').run(teacherId);
+    // Åbne klasseværelser fra de andre sessioner lukkes med det samme (ikke først ved næste genforbindelse)
+    if (ctx.closeTeacher) ctx.closeTeacher(teacherId, exceptHash);
   };
   /** Længde + blokliste (NIST SP 800-63B-4): almindelige/lækkede adgangskoder og lærerens eget navn/e-mail. */
   /* Enkel tilstand: den første lærer opretter sig frit. Derefter kræves lærerkoden, som alle lærere kan se under Konto,
      så en elev ikke kan oprette sig som lærer på en offentlig server. TEACHER_SIGNUP_CODE går forud. */
   const metaGet = (key) => (db.prepare('SELECT value FROM meta WHERE key = ?').get(key) || {}).value ?? null;
   const metaSet = (key, value) => db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, String(value));
-  // Lærerkoden udløber efter 14 dage og skiftes så automatisk, næste gang den vises eller bruges
-  const TEACHER_CODE_DAYS = 14;
-  function simpleTeacherCode(rotate = false) {
+  // Lærerkoden gælder 30 minutter fra den vises. Derefter laves en ny, næste gang en lærer klikker "Vis kode".
+  const TEACHER_CODE_MS = 30 * 60_000;
+  /** Den gyldige lærerkode, eller null (ingen eller udløbet). */
+  function currentTeacherCode() {
     const code = metaGet('teacher_code');
-    let created = Number(metaGet('teacher_code_created'));
-    // Kode fra før udløbet fandtes: regnes fra nu
-    if (code && !created) { created = Date.now(); metaSet('teacher_code_created', created); }
-    if (code && !rotate && Date.now() - created < TEACHER_CODE_DAYS * DAY) return code;
-    const v = U.inviteCode();
-    metaSet('teacher_code', v);
-    metaSet('teacher_code_created', Date.now());
-    if (code && !rotate) log('Lærerkoden var udløbet og er skiftet');
-    return v;
-  }
-  function teacherCodeExpires() {
     const created = Number(metaGet('teacher_code_created'));
-    return created ? created + TEACHER_CODE_DAYS * DAY : null;
+    return code && created && Date.now() - created < TEACHER_CODE_MS ? code : null;
+  }
+  /** "Vis kode": den gyldige kode – eller en ny (rotate = altid en ny, så den gamle holder op med at virke). */
+  function showTeacherCode(rotate = false) {
+    let code = rotate ? null : currentTeacherCode();
+    if (!code) {
+      code = U.inviteCode();
+      metaSet('teacher_code', code);
+      metaSet('teacher_code_created', Date.now());
+    }
+    return { teacherCode: code, expires: Number(metaGet('teacher_code_created')) + TEACHER_CODE_MS };
   }
   const hasTeachers = () => !!db.prepare('SELECT 1 FROM teachers LIMIT 1').get();
   /* Enkel tilstand: den første lærer skal bruge en engangs-opsætningskode, som kun står i serverens log
@@ -193,7 +197,8 @@ function createAccounts(ctx) {
   }
   function signupCodeNow() {
     if (cfg.signupCode) return cfg.signupCode;
-    if (cfg.simple) return hasTeachers() ? simpleTeacherCode() : setupCode();
+    // Ingen gyldig lærerkode: en værdi, som ingen kode kan passe med (koden skal stadig kræves)
+    if (cfg.simple) return hasTeachers() ? (currentTeacherCode() || 'udløbet') : setupCode();
     return '';
   }
   function checkPassword(pw, who = {}) {
@@ -273,6 +278,7 @@ function createAccounts(ctx) {
     return codes;
   }
   function deleteTeacher(t) {
+    if (ctx.closeTeacher) ctx.closeTeacher(t.id);
     for (const c of db.prepare('SELECT * FROM classes WHERE teacher_id = ?').all(t.id)) deleteClassFully(c);
     db.prepare('DELETE FROM teachers WHERE id = ?').run(t.id);
     if (t.school_id && !db.prepare('SELECT 1 FROM teachers WHERE school_id = ?').get(t.school_id)) db.prepare('DELETE FROM schools WHERE id = ?').run(t.school_id);
@@ -296,11 +302,12 @@ function createAccounts(ctx) {
       }
       const firstTeacher = cfg.simple && !cfg.signupCode && !hasTeachers();
       const needCode = signupCodeNow();
-      const codeOk = cfg.signupCode ? String(b.signupCode || '') === cfg.signupCode : U.normalizeCode(b.signupCode) === U.normalizeCode(needCode);
+      const want = U.normalizeCode(needCode);
+      const codeOk = cfg.signupCode ? String(b.signupCode || '') === cfg.signupCode : !!want && U.normalizeCode(b.signupCode) === want;
       if (needCode && !invite && !codeOk) {
         return fail(res, 403, cfg.signupCode ? 'Forkert skolekode'
           : firstTeacher ? 'Forkert opsætningskode. Den første lærer bruger opsætningskoden fra serverens log ("Opsætningskode til første lærer").'
-            : 'Forkert lærerkode – den står under Konto hos en kollega, der allerede bruger HolyMoly'), true;
+            : 'Forkert eller udløbet lærerkode. Bed en kollega om en ny under Konto (Vis kode).'), true;
       }
       if (!cfg.signupOpen && !cfg.signupCode && !invite) return fail(res, 403, 'Oprettelse er lukket – du skal inviteres af din skole'), true;
       const email = U.str(b.email, 200).trim().toLowerCase();
@@ -321,9 +328,12 @@ function createAccounts(ctx) {
       let schoolId = null, role = 'teacher';
       if (invite && schoolRow(invite.school_id)) { schoolId = invite.school_id; role = invite.role === 'admin' ? 'admin' : 'teacher'; }
       else if (schoolName) { schoolId = createSchool(schoolName, email).id; role = 'admin'; }
-      const r = db.prepare('INSERT INTO teachers (email, name, pass_hash, created, email_verified, school_id, role, terms_accepted) VALUES (?,?,?,?,?,?,?,?)')
-        .run(email, name, U.hashPassword(pw), Date.now(), verified, schoolId, role, b.acceptTerms ? Date.now() : null);
+      // Enkel tilstand: kun den første lærer (opsætningskoden) er godkendt med det samme. De næste godkendes af en kollega.
+      const approved = !cfg.simple || !db.prepare('SELECT 1 FROM teachers WHERE approved IS NOT NULL LIMIT 1').get() ? Date.now() : null;
+      const r = db.prepare('INSERT INTO teachers (email, name, pass_hash, created, email_verified, school_id, role, terms_accepted, approved) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(email, name, U.hashPassword(pw), Date.now(), verified, schoolId, role, b.acceptTerms ? Date.now() : null, approved);
       const id = Number(r.lastInsertRowid);
+      if (!approved) log('Ny lærer venter på godkendelse', id);
       if (firstTeacher) db.prepare("DELETE FROM meta WHERE key = 'setup_code'").run(); // engangskode
       if (invite) db.prepare('DELETE FROM tokens WHERE token_hash = ?').run(invite.token_hash);
       if (invite && schoolId) secLog(teacherRow(id), 'admin', `${name} sluttede sig til skolen via en invitation${role === 'admin' ? ' (som administrator)' : ''}`, req);
@@ -332,7 +342,7 @@ function createAccounts(ctx) {
       if (schoolName && !invite) notifySales('Ny skole i prøveperiode: ' + schoolName, [`${name} <${email}> har oprettet ${schoolName}.`, `Prøveperioden løber ${cfg.trialDays} dage.`]);
       setSession(req, res, id, 0);
       log('Ny lærer oprettet', id, schoolName ? '(ny skole)' : invite ? '(inviteret)' : '');
-      return send(res, 200, { ok: true, verify: !verified, setup2fa: cfg.require2fa }), true;
+      return send(res, 200, { ok: true, verify: !verified, setup2fa: cfg.require2fa, pending: !approved }), true;
     }
     if (p === '/api/login' && m === 'POST') {
       const b = await readJson(req);
@@ -441,6 +451,8 @@ function createAccounts(ctx) {
   // så den må intet sætte op (to-faktor, skole, invitation), før e-mailen er bekræftet.
   const OPEN_ALWAYS = new Set(['/api/me', '/api/logout', '/api/account', '/api/account/verify/resend']);
   function isOpenWhenNeeds(p, need) {
+    // Venter på en kollegas godkendelse: kun "hvem er jeg" og log ud
+    if (need === 'approval') return p === '/api/me' || p === '/api/logout';
     if (OPEN_ALWAYS.has(p)) return true;
     if (need === 'verify') return false;
     if (need === '2fa') return p.startsWith('/api/account/2fa/');
@@ -468,11 +480,31 @@ function createAccounts(ctx) {
       securityMail(req, t, 'Din adgangskode til HolyMoly er ændret', 'Adgangskoden til din HolyMoly-konto blev ændret');
       return send(res, 200, { ok: true }), true;
     }
-    if (p === '/api/account/teacher-code' && m === 'POST') {
+    if ((p === '/api/account/teacher-code' || p === '/api/account/teacher-code/show') && m === 'POST') {
       if (!cfg.simple || cfg.signupCode) return fail(res, 404, 'Ikke fundet'), true;
-      const code = simpleTeacherCode(true);
-      secLog(t, 'admin', `${t.name} lavede en ny lærerkode`, req);
-      return send(res, 200, { teacherCode: code }), true;
+      const rotate = p === '/api/account/teacher-code';
+      if (rotate) log('Ny lærerkode lavet af lærer', t.id);
+      return send(res, 200, showTeacherCode(rotate)), true;
+    }
+    /* --- enkel tilstand: nye lærere godkendes af en kollega --- */
+    if (p === '/api/account/pending-teachers' && m === 'GET') {
+      if (!cfg.simple) return fail(res, 404, 'Ikke fundet'), true;
+      const rows = db.prepare('SELECT id, name, email, created FROM teachers WHERE approved IS NULL ORDER BY created').all();
+      return send(res, 200, { teachers: rows.map(r => ({ id: r.id, name: r.name, username: r.email, created: r.created })) }), true;
+    }
+    let pm;
+    if ((pm = p.match(/^\/api\/account\/teachers\/(\d+)(\/approve)?$/)) && ((pm[2] && m === 'POST') || (!pm[2] && m === 'DELETE'))) {
+      if (!cfg.simple) return fail(res, 404, 'Ikke fundet'), true;
+      const other = db.prepare('SELECT * FROM teachers WHERE id = ? AND approved IS NULL').get(Number(pm[1]));
+      if (!other) return fail(res, 404, 'Læreren venter ikke på godkendelse'), true;
+      if (pm[2]) {
+        db.prepare('UPDATE teachers SET approved = ? WHERE id = ? AND approved IS NULL').run(Date.now(), other.id);
+        log('Lærer godkendt', other.id, 'af lærer', t.id);
+      } else {
+        deleteTeacher(other);
+        log('Ny lærer afvist og slettet', other.id, 'af lærer', t.id);
+      }
+      return send(res, 200, { ok: true }), true;
     }
     if (p === '/api/account/name' && m === 'POST') {
       const b = await readJson(req);
@@ -635,7 +667,7 @@ function createAccounts(ctx) {
         const tok = newToken('invite', { schoolId: s.id, email, role, teacherId: null }, 14 * DAY);
         await mailer.send({
           to: email, subject: `${t.name} inviterer dig til HolyMoly`, title: `Du er inviteret til ${s.name}`,
-          lines: [`${t.name} har inviteret dig til at bruge HolyMoly på ${s.name}.`, 'Med HolyMoly kan du se, at eleverne arbejder uden AI og forbudte sider i timen – og eleverne får et bevis på, at deres tekst er skrevet uden AI.'],
+          lines: [`${t.name} har inviteret dig til at bruge HolyMoly på ${s.name}.`, 'Med HolyMoly kan du se, om eleverne har AI eller forbudte sider åbne i timen. Eleverne kan få et mærke, der viser, at teksten er tastet i HolyMoly uden indsat tekst.'],
           button: { label: other ? 'Tilslut din konto' : 'Opret din konto', url: `${baseUrl(req)}/opret?invitation=${tok}` },
           after: ['Invitationen virker i 14 dage.'],
         });

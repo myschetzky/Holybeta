@@ -56,7 +56,7 @@ Det opdateres løbende – se `git log -- docs/SIKKERHED.md`.
 - Serveren henter aldrig adresser, som en bruger har skrevet (ingen SSRF); den eneste udgående forbindelse er til UNI-Login, hvis adresse står i serverens opsætning.
 
 **GDPR**
-- Ingen keylogger: HolyMoly ser aldrig, hvad eleven taster i andre programmer. I HolyMolys eget skrivevindue tælles skrivestatistik til beviset "✓ Skrevet uden AI" (antal anslag, tempo og rytme, forsøg på at indsætte, tid uden for vinduet) – ikke hvilke taster. Skriverytme ligger tæt på biometri og bør nævnes i skolens DPIA.
+- Ingen keylogger: HolyMoly ser aldrig, hvad eleven taster i andre programmer. I HolyMolys eget skrivevindue tælles skrivestatistik til mærket "✓ Tastet i HolyMoly – intet indsat" (antal anslag, tempo og rytme, forsøg på at indsætte, tid uden for vinduet) – ikke hvilke taster. Skriverytme ligger tæt på biometri og bør nævnes i skolens DPIA.
 - Overvågning kun i lektionen/skriveøkten. Overvågningsdata – hændelser, skærmbilleder og lampernes tidslinje – slettes automatisk efter `LOG_RETENTION_DAYS` (standard 30). Sletter man en elev eller klasse, slettes alt om den.
 - Ved ophør (licens-servere): skolens data slettes automatisk 90 dage efter, at prøveperiode og licens er udløbet; administratorerne varsles 30 og 7 dage før. Bestillinger bevares som fakturagrundlag (bogføringsloven) uden kobling til skolen.
 - Se `docs/JURA.md` for skolens del: databehandleraftale, DPIA og information til elever og forældre.

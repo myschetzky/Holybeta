@@ -37,6 +37,8 @@ test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
     assert.strictEqual(info.require2fa, false);
     assert.strictEqual(info.verifyEmail, false);
     assert.deepStrictEqual(info.approval, APPROVAL, '/api/info viser skolens ja (til /privatliv)');
+    assert.deepStrictEqual(info.approvalMissing, []);
+    assert.strictEqual(info.lessonBlocked, false);
     // Den første lærer skal bruge opsætningskoden fra serverens log
     assert.strictEqual(info.signupRequiresCode, true);
     assert.strictEqual(info.firstTeacher, true);
@@ -68,13 +70,20 @@ test('enkel tilstand: brugernavn, klassekode, navn og elevkode', async () => {
     assert.strictEqual(r._status, 403, 'uden lærerkode');
     assert.match(r.error, /lærerkode/);
     const me = await A.call('GET', '/api/me');
+    assert.strictEqual(me.teacherCode, undefined, 'lærerkoden står ikke i /api/me – den vises først efter et klik');
+    assert.strictEqual(me.teacherCodeOn, true);
+    const shown = await A.call('POST', '/api/account/teacher-code/show', {});
+    me.teacherCode = shown.teacherCode;
     assert.match(me.teacherCode, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
-    assert.ok(me.teacherCodeExpires > Date.now() + 13 * 86400_000, 'lærerkoden udløber om 14 dage');
+    assert.ok(Math.abs(shown.expires - (Date.now() + 30 * 60_000)) < 5000, 'lærerkoden gælder 30 minutter');
     r = await client(base).call('POST', '/api/register', { email: 'mette', name: 'Anden', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: me.teacherCode });
     assert.strictEqual(r._status, 409, 'brugernavnet er taget');
     const J = client(base);
     r = await J.call('POST', '/api/register', { email: 'jens', name: 'Jens', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: me.teacherCode.toLowerCase().replace('-', '') });
     assert.strictEqual(r.ok, true, 'lærerkoden virker med og uden bindestreg');
+    assert.strictEqual(r.pending, true, 'Jens venter på godkendelse');
+    // Mette godkender Jens (testet i detaljer i accounts.test.js)
+    assert.ok((await A.call('POST', `/api/account/teachers/${(await A.call('GET', '/api/account/pending-teachers')).teachers[0].id}/approve`, {})).ok);
     // Ny lærerkode: den gamle virker ikke længere
     const rot = await J.call('POST', '/api/account/teacher-code', {});
     assert.notStrictEqual(rot.teacherCode, me.teacherCode);
@@ -282,30 +291,35 @@ test('enkel tilstand: elevens kode låses efter 10 forkerte forsøg – også ef
   }
 });
 
-test('enkel tilstand: lærerkoden skiftes automatisk efter 14 dage', async () => {
+test('enkel tilstand: lærerkoden vises efter et klik og gælder 30 minutter', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-simple4-'));
   const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, simple: true, schoolApproval: APPROVAL });
   const base = 'http://127.0.0.1:' + await srv.listen();
-  const age = (days) => srv.db.prepare("UPDATE meta SET value = ? WHERE key = 'teacher_code_created'").run(String(Date.now() - days * 86400_000));
+  const age = (min) => srv.db.prepare("UPDATE meta SET value = ? WHERE key = 'teacher_code_created'").run(String(Date.now() - min * 60_000));
   try {
     const A = client(base);
     assert.strictEqual((await A.call('POST', '/api/register', { email: 'mette', name: 'Mette', password: 'tavle-kridt-1234', acceptTerms: true, signupCode: srv.setupCode() })).ok, true);
-    const first = (await A.call('GET', '/api/me')).teacherCode;
-    assert.strictEqual((await A.call('GET', '/api/me')).teacherCode, first, 'samme kode inden for 14 dage');
-    age(13);
-    assert.strictEqual((await A.call('GET', '/api/me')).teacherCode, first, '13 dage gammel: virker stadig');
-    // 15 dage gammel: ny kode ved næste visning (Konto-siden), og den gamle virker ikke længere
-    age(15);
-    const me = await A.call('GET', '/api/me');
-    assert.notStrictEqual(me.teacherCode, first);
-    assert.ok(me.teacherCodeExpires > Date.now() + 13 * 86400_000);
-    let r = await client(base).call('POST', '/api/register', { email: 'jens', name: 'Jens', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: first });
+    // Før nogen har klikket "Vis kode", findes der ingen gyldig kode
+    let r = await client(base).call('POST', '/api/register', { email: 'jens', name: 'Jens', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: 'ABCD-EFGH' });
+    assert.strictEqual(r._status, 403);
+    const show = () => A.call('POST', '/api/account/teacher-code/show', {});
+    const first = (await show()).teacherCode;
+    assert.strictEqual((await show()).teacherCode, first, 'samme kode inden for 30 minutter');
+    age(29);
+    assert.strictEqual((await show()).teacherCode, first, '29 minutter gammel: virker stadig');
+    // 31 minutter gammel: den gamle virker ikke, og "Vis kode" giver en ny
+    age(31);
+    r = await client(base).call('POST', '/api/register', { email: 'jens', name: 'Jens', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: first });
     assert.strictEqual(r._status, 403, 'den udløbne kode virker ikke');
-    r = await client(base).call('POST', '/api/register', { email: 'jens', name: 'Jens', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: me.teacherCode });
+    assert.match(r.error, /udløbet lærerkode/);
+    const next = await show();
+    assert.notStrictEqual(next.teacherCode, first);
+    assert.ok(next.expires > Date.now() + 29 * 60_000);
+    r = await client(base).call('POST', '/api/register', { email: 'jens', name: 'Jens', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: next.teacherCode });
     assert.strictEqual(r.ok, true);
     // Udløber koden, mens ingen ser den, virker den heller ikke ved oprettelse
-    age(15);
-    r = await client(base).call('POST', '/api/register', { email: 'ole', name: 'Ole', password: 'tavle-kridt-5555', acceptTerms: true, signupCode: me.teacherCode });
+    age(31);
+    r = await client(base).call('POST', '/api/register', { email: 'ole', name: 'Ole', password: 'tavle-kridt-5555', acceptTerms: true, signupCode: next.teacherCode });
     assert.strictEqual(r._status, 403);
   } finally {
     await srv.close();
@@ -321,7 +335,10 @@ test('enkel tilstand: ingen lektioner eller skriveøkter uden skolens ja', async
   const base = 'http://127.0.0.1:' + await srv.listen();
   try {
     assert.deepStrictEqual(srv.approvalMissing(), ['DPIA_DATO']);
-    assert.strictEqual((await client(base).call('GET', '/api/info')).approval, null);
+    const info = await client(base).call('GET', '/api/info');
+    assert.strictEqual(info.approval, null);
+    assert.deepStrictEqual(info.approvalMissing, ['DPIA_DATO'], 'kun variabelnavnene – ingen værdier');
+    assert.strictEqual(info.lessonBlocked, true);
     const A = client(base);
     assert.strictEqual((await A.call('POST', '/api/register', { email: 'mette', name: 'Mette', password: 'tavle-kridt-1234', acceptTerms: true, signupCode: srv.setupCode() })).ok, true);
     const cls = await A.call('POST', '/api/classes', { name: '2.g' });
@@ -357,7 +374,9 @@ test('almindelig tilstand: skolens ja kræves ikke', async () => {
   const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, schoolApproval: { controller: '', dpo: '', dpiaDate: '', approvedDate: '' } });
   const base = 'http://127.0.0.1:' + await srv.listen();
   try {
-    assert.strictEqual((await client(base).call('GET', '/api/info')).approval, null);
+    const info = await client(base).call('GET', '/api/info');
+    assert.strictEqual(info.approval, null);
+    assert.strictEqual(info.lessonBlocked, false, 'uden enkel tilstand blokeres lektioner ikke');
     assert.strictEqual(srv.setupCode(), null, 'ingen opsætningskode uden enkel tilstand');
     const A = client(base);
     assert.strictEqual((await A.call('POST', '/api/register', { email: 'mette@skole.dk', name: 'Mette', password: 'tavle-kridt-1234' })).ok, true);

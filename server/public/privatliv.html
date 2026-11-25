@@ -30,7 +30,7 @@
           <tr><td>Navn, e-mail, skole, rolle</td><td>Konto og login</td><td>Til kontoen slettes</td></tr>
           <tr><td>Adgangskode (kun som krypteret hash) og to-faktor-nøgle (krypteret)</td><td>Sikkert login</td><td>Til kontoen slettes</td></tr>
           <tr><td>Unilogin-id (hvis tilknyttet)</td><td>Login med Unilogin</td><td>Til kontoen slettes</td></tr>
-          <tr><td>Lærer-logbog (fx "så skærmen", "frøs")</td><td>Gennemsigtighed over for eleverne</td><td>Opbevaringsfristen (standard 30 dage)</td></tr>
+          <tr><td>Lærer-logbog (fx "så skærmen", "frøs")</td><td>Gennemsigtighed over for eleverne</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
         </tbody>
       </table>
 
@@ -40,9 +40,12 @@
         <thead><tr><th>Hvad</th><th>Hvorfor</th><th>Hvor længe</th></tr></thead>
         <tbody>
           <tr><td>Navn og klasse</td><td>Vise eleven i klasseværelset</td><td>Til læreren sletter eleven eller klassen</td></tr>
-          <tr><td>Aktivt program og hjemmeside, åbne faner, kørende programmer</td><td>Lamperne og blokering af det forbudte</td><td>Opbevaringsfristen (standard 30 dage)</td></tr>
-          <tr><td>Skærmbilleder (når læreren tager dem – og ved forbudt brug, hvis læreren har slået det til; eleven får besked hver gang)</td><td>Dokumentation</td><td>Opbevaringsfristen</td></tr>
-          <tr><td>Tekster skrevet i HolyMoly, skriveforløbet og beviser</td><td>Mærket på afleveringen</td><td>Til eleven eller læreren sletter dokumentet (en fast frist er på vej)</td></tr>
+          <tr><td>Aktivt program og hjemmeside, åbne faner, kørende programmer</td><td>Lamperne og blokering af det forbudte</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
+          <tr><td>Skærmbilleder (når læreren tager dem – og ved forbudt brug, hvis læreren har slået det til; eleven får besked hver gang)</td><td>Dokumentation</td><td><span data-cfg="retention.logDays">30</span> dage</td></tr>
+          <tr><td>Kladder skrevet i HolyMoly (ikke afleveret)</td><td>Skrivevinduet</td><td><span data-cfg="retention.draftDays">60</span> dage efter seneste ændring</td></tr>
+          <tr><td>Afleverede tekster</td><td>Mærket på afleveringen</td><td><span data-cfg="retention.docDays">365</span> dage efter aflevering</td></tr>
+          <tr><td>Afspilning og skrivedetaljer (skrivestatistik, lampens grunde)</td><td>Vurderingen til mærket</td><td><span data-cfg="retention.versionsDays">60</span> dage efter aflevering. Derefter kun minuttal.</td></tr>
+          <tr><td>Beviser (uden navn)</td><td>Tjek af mærket</td><td><span data-cfg="retention.certYears">3</span> år efter aflevering</td></tr>
         </tbody>
       </table>
       <p><b>Afspilning:</b> Læreren kan afspille, hvordan teksten blev til, i trin på ca. 20 sekunder. Vurderingen af skrivestatistikken til mærket er en form for profilering; den bruges kun til mærket og kun af elevens egne lærere.</p>
@@ -50,7 +53,8 @@
       <p><b>Ingen keylogger:</b> HolyMoly ser aldrig, hvad eleven taster i andre programmer. I HolyMolys eget skrivevindue tælles kun skrivestatistik til fluebenet "Tastet i HolyMoly – intet indsat" (antal anslag, tastede og slettede tegn, tempo og rytme, forsøg på at indsætte) – ikke hvilke taster.</p>
       <p><b>Vi registrerer ikke</b> filer, kamera, mikrofon eller noget uden for lektionen og skriveøkten.</p>
 
-      <p><b>Sikkerhedskopier:</b> Serveren laver hver nat en kopi af databasen og gemmer den i 7 dage. En oplysning, der er slettet, kan derfor højst ligge i en sikkerhedskopi 7 dage mere.</p>
+      <p><b>Frister:</b> Alle frister står ét sted på serveren og vises her. Når teksten er slettet, kan beviset stadig tjekkes med Word-filen, men der står intet navn på det. Kopien i elev-appen på elevens computer slettes ikke af serveren. Eleven kan selv slette en kladde i skrivevinduet.</p>
+      <p><b>Sikkerhedskopier:</b> Serveren laver hver nat en kopi af databasen og gemmer den i <span data-cfg="retention.backupDays">14</span> dage. En oplysning, der er slettet, kan derfor højst ligge i en sikkerhedskopi <span data-cfg="retention.backupDays">14</span> dage mere.</p>
 
       <h2>Hvor opbevares data?</h2>
       <p>På servere i EU hos <span data-company="hosting">[hostingudbyder]</span>. Data overføres ikke til lande uden for EU/EØS og bruges ikke til at træne AI, til reklamer eller til profilering.</p>
@@ -60,7 +64,7 @@
         <li>Al trafik er krypteret (HTTPS).</li>
         <li>Lærere logger ind med deres egen konto.</li>
         <li>Lærere ser kun deres egne klasser.</li>
-        <li>Skrive-beviser er digitalt signerede, så de ikke kan forfalskes.</li>
+        <li>Beviser er digitalt signerede. Kun den, der har serverens nøgle, kan udstede dem.</li>
       </ul>
 
       <h2>Dine rettigheder</h2>

@@ -79,6 +79,34 @@
     return h('div', { class: 'banner ' + kind, role: kind === 'bad' ? 'alert' : 'status' }, h('span', { text }), act);
   }
 
+  /** Enkel tilstand: "Ny lærer venter: Mette Hansen (oprettet 25.11 kl. 10.14) – Godkend / Afvis". Fyldes, når listen er hentet. */
+  function pendingTeachersBanner(me) {
+    if (!me.simple) return null;
+    const box = h('div', { class: 'stack', hidden: true });
+    const two = (n) => String(n).padStart(2, '0');
+    const when = (ts) => { const d = new Date(ts); return `${d.getDate()}.${d.getMonth() + 1} kl. ${two(d.getHours())}.${two(d.getMinutes())}`; };
+    const load = async () => {
+      let list = [];
+      try { list = (await api('/api/account/pending-teachers', { noRedirect: true })).teachers || []; } catch (e) { /* vises ikke */ }
+      box.replaceChildren(...list.map((t) => {
+        const ok = h('button', { class: 'btn small primary', text: 'Godkend' });
+        const no = h('button', { class: 'btn small', text: 'Afvis' });
+        ok.addEventListener('click', async () => {
+          try { await api(`/api/account/teachers/${t.id}/approve`, { method: 'POST', body: {} }); toast(`${t.name} er godkendt`); load(); } catch (ex) { toast(ex.message); }
+        });
+        no.addEventListener('click', async () => {
+          const sure = await dialog({ title: `Afvis ${t.name}?`, body: h('p', { text: 'Kontoen slettes. Var det en kollega, kan vedkommende oprette sig igen med en ny lærerkode.' }), actions: [{ label: 'Annuller' }, { label: 'Afvis', kind: 'danger', value: true }] });
+          if (!sure) return;
+          try { await api(`/api/account/teachers/${t.id}`, { method: 'DELETE', body: {} }); toast(`${t.name} er afvist`); load(); } catch (ex) { toast(ex.message); }
+        });
+        return h('div', { class: 'banner warn', role: 'status' }, h('span', { text: `Ny lærer venter: ${t.name} (oprettet ${when(t.created)})` }), h('span', { class: 'row-actions' }, ok, no));
+      }));
+      box.hidden = !list.length;
+    };
+    load();
+    return box;
+  }
+
   function gettingStarted() {
     const step = (n, title, body) => h('li', {}, h('span', { class: 'step-n', text: String(n) }), h('div', {}, h('b', { text: title }), h('div', { class: 'muted small' }, ...body)));
     return h('section', { class: 'card onboard reveal' },
@@ -87,7 +115,7 @@
         step(1, 'Opret din første klasse', ['Skriv navnet øverst til højre – fx "2.g Dansk".']),
         step(2, 'Giv eleverne klassekoden', ['Klassen får en kode på 8 tegn. Skriv den på tavlen.']),
         step(3, 'Eleverne henter HolyMoly-appen', ['De installerer den fra ', h('a', { href: '/hent', target: '_blank', rel: 'noopener', text: 'hent-siden' }), ' og skriver klassekoden og deres navn.']),
-        step(4, 'Tryk "Start lektion"', ['Lamperne viser, hvem der arbejder uden AI og forbudte sider. Alt stopper, når lektionen slutter.'])));
+        step(4, 'Tryk "Start lektion"', ['Lamperne viser, om en elev har AI eller forbudte sider åbne. Alt stopper, når lektionen slutter.'])));
   }
 
   async function afterLogin() {
@@ -284,6 +312,14 @@
 
   HM.pages.setup = function setup(me) {
     const out = h('p', { class: 'auth-foot' }, h('button', { class: 'link small', text: 'Log ud', onclick: logout }));
+    if (me.needs === 'approval') {
+      const again = h('button', { class: 'btn primary', text: 'Prøv igen' });
+      again.addEventListener('click', () => route('/', true));
+      return authShell(h('h1', { text: 'Din konto venter på godkendelse' }),
+        h('p', { text: 'En kollega, der allerede bruger HolyMoly, skal godkende dig, før du kan bruge HolyMoly.' }),
+        h('p', { class: 'muted small', text: 'Bed en kollega om at logge ind. Godkendelsen står øverst på siden med klasserne.' }),
+        h('div', { class: 'row-actions' }, again), out);
+    }
     if (me.needs === 'verify') {
       const err = errBox();
       const resend = h('button', { class: 'btn', text: 'Send mailen igen' });
@@ -483,17 +519,28 @@
 
     // Enkel tilstand: lærerkoden, som kolleger skal bruge for at oprette sig
     let colleagues = null;
-    if (me.teacherCode) {
-      const codeEl = h('div', { class: 'big-code', text: me.teacherCode });
-      const rot = h('button', { class: 'btn small', type: 'button', text: 'Lav ny lærerkode' });
+    if (me.teacherCodeOn) {
+      const codeEl = h('div', { class: 'big-code', hidden: true });
+      const until = h('p', { class: 'muted small', hidden: true });
+      const showCode = (r) => {
+        codeEl.textContent = r.teacherCode; codeEl.hidden = false;
+        until.textContent = `Koden gælder til kl. ${new Date(r.expires).toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })}.`; until.hidden = false;
+        rot.hidden = false; reveal.hidden = true;
+      };
+      const reveal = h('button', { class: 'btn', type: 'button', text: 'Vis kode' });
+      reveal.addEventListener('click', async () => {
+        try { showCode(await api('/api/account/teacher-code/show', { method: 'POST', body: {} })); } catch (ex) { toast(ex.message); }
+      });
+      const rot = h('button', { class: 'btn small', type: 'button', text: 'Lav ny lærerkode', hidden: true });
       rot.addEventListener('click', async () => {
         const ok = await dialog({ title: 'Lav ny lærerkode?', body: h('p', { text: 'Den gamle kode holder op med at virke. Lærere, der allerede er oprettet, mærker intet.' }), actions: [{ label: 'Annuller' }, { label: 'Lav ny', kind: 'primary', value: true }] });
         if (!ok) return;
-        try { const r = await api('/api/account/teacher-code', { method: 'POST', body: {} }); codeEl.textContent = r.teacherCode; toast('Ny lærerkode'); } catch (ex) { toast(ex.message); }
+        try { showCode(await api('/api/account/teacher-code', { method: 'POST', body: {} })); toast('Ny lærerkode'); } catch (ex) { toast(ex.message); }
       });
       colleagues = h('section', { class: 'card' }, h('h2', { text: 'Kolleger' }),
         h('p', { class: 'muted', text: `Kolleger opretter sig på ${location.origin}/opret med lærerkoden. Giv den kun til lærere – ikke til elever.` }),
-        codeEl, me.teacherCodeExpires ? h('p', { class: 'muted small', text: `Koden skifter af sig selv ${new Date(me.teacherCodeExpires).toLocaleDateString('da-DK', { day: 'numeric', month: 'long' })}.` }) : null, rot);
+        h('p', { class: 'muted small', text: 'Koden gælder i 30 minutter. Bagefter skal du godkende din kollega. Det står øverst på siden med klasserne.' }),
+        reveal, codeEl, until, rot);
     }
     page(me, 'konto', h('div', { class: 'page-head' }, h('h1', { text: 'Konto og sikkerhed' })),
       h('div', { class: 'cards' }, profile, colleagues, tfCard, pwCard, looks, danger));
@@ -711,7 +758,7 @@
         h('td', {}, h('b', { text: a.title }), h('div', { class: 'muted small', text: a.className + (a.home ? ' · må skrives hjemme' : ' · skrives i timen') })),
         h('td', { class: 'num', text: a.due ? fmtDate(a.due) : '–' }),
         h('td', { class: 'num', text: `${a.handed}/${a.students}` }),
-        h('td', {}, a.certified ? h('span', { class: 'badge green', text: `${a.certified} ✓ uden AI` }) : h('span', { class: 'muted small', text: '–' })),
+        h('td', {}, a.certified ? h('span', { class: 'badge green', text: `${a.certified} ✓ tastet i HolyMoly` }) : h('span', { class: 'muted small', text: '–' })),
         h('td', {}, !a.students ? h('span', { class: 'muted small', text: 'Ingen elever endnu' })
           : missing ? h('span', { class: 'badge' + (a.due && a.due <= now ? ' red' : ''), text: `${missing} mangler` }) : h('span', { class: 'badge green', text: 'Alle har afleveret' }),
           a.late ? h('div', { class: 'muted small', text: `${a.late} efter fristen` }) : null));
@@ -785,5 +832,5 @@
       h('section', { class: 'card' }, h('h2', { text: 'Skoler' }), table(['Skole', 'Oprettet', 'Lærere', 'Elever', 'Status', 'Udløber', ''], schoolRows, 'Ingen skoler endnu')));
   };
 
-  Object.assign(HM, { topbar, licenseBanner, gettingStarted, afterLogin });
+  Object.assign(HM, { topbar, licenseBanner, pendingTeachersBanner, gettingStarted, afterLogin });
 })();

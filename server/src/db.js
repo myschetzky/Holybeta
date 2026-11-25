@@ -212,6 +212,12 @@ function open(dataDir) {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS schools_inst_nr ON schools(inst_nr) WHERE inst_nr IS NOT NULL');
   const tch = new Set(db.prepare('PRAGMA table_info(teachers)').all().map(c => c.name));
   if (!tch.has('uni_insts')) db.exec('ALTER TABLE teachers ADD COLUMN uni_insts TEXT');
+  // Enkel tilstand: en ny lærer skal godkendes af en godkendt kollega (tidspunktet; NULL = venter).
+  // Lærere fra før kolonnen fandtes, er godkendt.
+  if (!tch.has('approved')) {
+    db.exec('ALTER TABLE teachers ADD COLUMN approved INTEGER');
+    db.exec('UPDATE teachers SET approved = created');
+  }
   const oc = new Set(db.prepare('PRAGMA table_info(license_orders)').all().map(c => c.name));
   if (!oc.has('school_name')) db.exec('ALTER TABLE license_orders ADD COLUMN school_name TEXT');
   // mfa = 1: sessionen er logget ind med to-faktor (godkendelses-app) eller UNI-Login
@@ -219,6 +225,10 @@ function open(dataDir) {
   if (!sc.has('mfa')) db.exec('ALTER TABLE sessions ADD COLUMN mfa INTEGER NOT NULL DEFAULT 0');
   // Hvornår sessionen blev logget ind (absolut levetid, uanset aktivitet)
   if (!sc.has('created')) db.exec('ALTER TABLE sessions ADD COLUMN created INTEGER');
+  // Serverens egne kørsler: hvornår den startede, og hvornår den sidst var i live. Hullerne imellem er serverens nedetid
+  // (tæller ikke mod elevens skrive-bevis, se docs.js _observe).
+  db.exec(`CREATE TABLE IF NOT EXISTS server_runs (start INTEGER NOT NULL, last_alive INTEGER NOT NULL, clean INTEGER NOT NULL DEFAULT 0);
+  CREATE INDEX IF NOT EXISTS server_runs_start ON server_runs(start);`);
   return db;
 }
 

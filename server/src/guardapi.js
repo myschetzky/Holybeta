@@ -107,15 +107,15 @@ function classifyReport(rep, R, opts = {}) {
   }
   for (const k of [...seen.keys()]) if (!stillRunning.has(k)) seen.delete(k);
 
-  // Programmer (ikke browsere og ikke HolyMoly) der taler med AI-tjenester
+  // Programmer (ikke browsere) der taler med AI-tjenester. HolyMoly selv taler aldrig med AI, så et program,
+  // der blot hedder "holymoly…", er ikke undtaget.
   const net = {
     conns: (rep._multi.conn || []).map(l => l.split('\t')).map(([pid, ip, port]) => [Number(pid), ip, Number(port)]),
     dns: (rep._multi.dns || []).map(l => l.split('\t')).filter(a => a.length >= 2),
   };
   for (const c of aiConnections(net, R)) {
     const p = procs.get(c.pid) || { name: 'proces ' + c.pid, orig: '' };
-    const lname = (p.orig || p.name).toLowerCase().replace(/\.exe$/, '');
-    if (R.browserOf(p.orig) || R.browserOf(p.name) || /^holymoly/.test(lname)) continue;
+    if (R.browserOf(p.orig) || R.browserOf(p.name)) continue;
     red('guard_ai', `${p.orig || p.name} bruger AI (${c.host})`);
   }
 

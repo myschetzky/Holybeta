@@ -40,7 +40,7 @@ class FakeGuard {
     out.all = (k) => out.lines.filter(l => l.startsWith(k + '=')).map(l => l.slice(k.length + 1));
     return out;
   }
-  pair(code) { return this.post('/api/guard/pair', ['v=1', 'code=' + code, this.pubLine(), 'os=Windows 11', 'host=PC', 'keystore=tpm'].join('\n') + '\n'); }
+  pair(code) { return this.post('/api/guard/pair', ['v=1', 'code=' + code, this.pubLine(), 'os=Windows 11', 'keystore=tpm'].join('\n') + '\n'); }
   beat(student, extra = [], seq) {
     const n = seq ?? ++this.seq;
     return this.post('/api/guard/beat', ['v=1', 'students=' + student, 'seq=' + n, 'ts=' + Date.now(), 'os=windows', 'guard=1.3.0', 'hosts=1', 'policies=1', 'app=1', 'lesson=' + (this.inLesson ? 1 : 0)].concat(extra).join('\n') + '\n');
@@ -223,4 +223,16 @@ test('vagten: Mac-varianten (DER-signatur og SPKI-nøgle) virker også', async (
   const sig = crypto.sign('sha256', Buffer.from(body), g.kp.privateKey).toString('base64');
   assert.ok(G.verifySig(pem, body, sig, 'der'));
   assert.ok(!G.verifySig(pem, body + 'x', sig, 'der'));
+});
+
+test('vagten: et program, der hedder "holymoly…", er ikke undtaget, når det taler med AI', () => {
+  const G = require('../server/src/guardapi.js');
+  const R = require('../shared/rules.js').compile();
+  const rep = G.parseLines([
+    'proc=42\tHolyMoly Helper.exe\tholymoly-snyd.exe',
+    'conn=42\t104.18.1.1\t443',
+    'dns=api.openai.com\t104.18.1.1',
+  ].join('\n'));
+  const r = G.classifyReport(rep, R, { now: 1 });
+  assert.ok(r.violations.some(v => v.kind === 'guard_ai' && /holymoly-snyd\.exe bruger AI/.test(v.text)), JSON.stringify(r.violations));
 });

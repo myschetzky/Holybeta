@@ -229,7 +229,7 @@ function Pair-Students($state) {
     $key = HM-Key
     if (-not $key) { continue }
     $blob = [Convert]::ToBase64String($key.Key.Export([System.Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob))
-    $body = "v=1`ncode=$code`npubblob=$blob`nos=windows`nhost=$(HM-Clean $env:COMPUTERNAME)`nkeystore=$($script:KeyStore)`nguard=$Version`n"
+    $body = "v=1`ncode=$code`npubblob=$blob`nos=windows`nkeystore=$($script:KeyStore)`nguard=$Version`n"
     $r = HM-Post '/api/guard/pair' $body
     if ($r.status -eq 200) { $state.paired = @(@($state.paired) + $sid) }
     elseif ($r.status -eq 409) { Add-Tamper $state 'En anden (falsk) vagt er allerede tilknyttet denne elev' }

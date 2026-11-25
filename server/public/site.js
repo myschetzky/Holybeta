@@ -81,17 +81,24 @@
     if (!c) return;
     const name = c.name || 'HolyMoly';
     const line = [c.cvr ? name + ' · CVR ' + c.cvr : '', c.address].filter(Boolean).join(' · ');
-    // Beta: skolens godkendelse (vises på privatlivssiden)
-    function fillApproval(a) {
-      const box = document.getElementById('approval');
-      if (!box || !a) return;
-      box.hidden = false;
-      box.replaceChildren(el('b', { text: 'Ansvarlig for denne server: ' }), document.createTextNode(`${a.controller}. Databeskyttelsesrådgiver: ${a.dpo}. Konsekvensanalyse: ${a.dpiaDate}. Ledelsens godkendelse: ${a.approvedDate}.`));
-    }
     for (const e of $$('[data-company]')) {
       const k = e.dataset.company;
       const v = k === 'line' ? line : k === 'copy' ? '© ' + new Date().getFullYear() + ' ' + name : c[k];
       if (v) e.textContent = v;
+    }
+  }
+
+  /* ---------- beta: skolens ja (vises på privatlivssiden) ---------- */
+  function fillApproval(info) {
+    const box = document.getElementById('approval');
+    if (!box || !info) return;
+    const a = info.approval;
+    if (a) {
+      box.hidden = false;
+      box.replaceChildren(el('b', { text: 'Ansvarlig for denne server: ' }), document.createTextNode(`${a.controller}. Databeskyttelsesrådgiver: ${a.dpo}. Konsekvensanalyse: ${a.dpiaDate}. Ledelsens godkendelse: ${a.approvedDate}.`));
+    } else if (info.simple && info.lessonBlocked) {
+      box.hidden = false;
+      box.replaceChildren(el('b', { text: 'Skolen har ikke givet sit ja endnu. ' }), document.createTextNode('Der kan ikke startes lektioner, før det er på plads.'));
     }
   }
 
@@ -109,11 +116,20 @@
     for (const b of ['chrome', 'edge', 'firefox']) { const a = $(`[data-ext="${b}"]`); if (a && ext[b]) { a.href = ext[b]; a.hidden = false; } }
   }
 
+  /* ---------- frister (server/src/retention.js): tal i <span data-cfg="retention.draftDays"> ---------- */
+  function fillRetention(r) {
+    if (!r) return;
+    for (const e of $$('[data-cfg^="retention."]')) {
+      const v = r[e.dataset.cfg.slice(10)];
+      if (v != null) e.textContent = String(v);
+    }
+  }
+
   const defaults = { perStudent: 129, minimum: 2500, trialDays: 30 };
   if (S.pages) { applyPricing(S.pricing || defaults); applyCompany(S.info && S.info.company); wireLinks(S.info); fillDownloads(null); }
   else {
     applyPricing(defaults); wireLinks(null);
     fetch('/api/pricing').then(r => r.json()).then(applyPricing).catch(() => {});
-    fetch('/api/info').then(r => r.json()).then((i) => { applyCompany(i.company); wireLinks(i); fillDownloads(i); fillApproval(i.approval); }).catch(() => fillDownloads(null));
+    fetch('/api/info').then(r => r.json()).then((i) => { applyCompany(i.company); wireLinks(i); fillDownloads(i); fillApproval(i); fillRetention(i.retention); }).catch(() => fillDownloads(null));
   }
 })();

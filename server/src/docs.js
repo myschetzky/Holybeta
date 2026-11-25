@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const D = require('../../shared/doc.js');
+const RET = require('./retention.js');
 
 const ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const MAX_HUMAN_CPS = 15;          // vedvarende tegn/sek (5 sek. vindue) – hurtigere er ikke et menneske
@@ -31,9 +32,17 @@ const OBSERVE_GAP_MS = 30_000;     // længere tid uden serverens egen måling t
 const MIN_REGULARITY = 0.25;       // variationskoefficient for tastetryk – lavere = maskinelt jævnt
 const GREY_MAX_SHARE = 0.10;       // højst 10 % af skrivetiden uden fuld overvågning
 const GREY_MAX_MS = 3 * 60_000;    // … og højst 3 minutter
+const FIRST_SAVE_BUDGET = 150;     // så meget tekst må et nyt dokument have, første gang serveren ser det (appen sender det tomme dokument straks)
+const MAX_OPEN_DOCS = 30;           // diskkvote: højst 30 uafleverede dokumenter pr. elev …
+const QUOTA_BYTES = 10 * 1024 * 1024; // … højst 10 MB tekst (dokumenter + afspilning) pr. elev …
+const MAX_GROWTH = 3000;           // … og højst 3.000 nye tegn pr. gemning (ellers gemmes intet)
 const GAP_MS = 2 * 60_000;         // længere pause mellem to gemninger tæller ikke som skrivetid
 const MIN_WORDS = 100;             // kortere tekster får ikke et bevis
 const GUARD_GRACE_MS = 30_000;     // de første 30 sek. med "Venter på HolyMoly-vagten" tæller ikke som grå
+const IDLE_MAX_MS = 10 * 60_000;   // grå tid UDEN vækst: højst 10 minutter …
+const IDLE_MAX_SHARE = 0.15;       // … og højst 15 % af tiden
+const DOWN_CPS = 2;                // mens serveren selv var nede, godtages vækst på 2 tegn/sek. …
+const DOWN_MAX = 400;              // … dog højst 400 tegn pr. hul
 const TEST_ISSUER = 'Testserver – må ikke bruges til bedømmelse';
 
 /* Hvorfor beviset mangler – i elevens sprog og uden tal (eleven skal ikke kunne justere sig ind under grænserne) */
@@ -54,6 +63,10 @@ class DocStore {
     this.db = db;
     this.testServer = !!opts.testServer;
     this.minWords = Number.isInteger(opts.minWords) && opts.minWords > 0 ? opts.minWords : MIN_WORDS;
+    // Diskkvote pr. elev (kan sættes lavere i tests)
+    this.maxOpenDocs = Number(opts.maxOpenDocs) > 0 ? Number(opts.maxOpenDocs) : MAX_OPEN_DOCS;
+    this.quotaBytes = Number(opts.quotaBytes) > 0 ? Number(opts.quotaBytes) : QUOTA_BYTES;
+    this.usage = new Map(); // studentId -> { bytes, ts } (genberegnes højst hvert minut)
     db.exec(`
       CREATE TABLE IF NOT EXISTS documents (
         id TEXT PRIMARY KEY,
@@ -84,17 +97,26 @@ class DocStore {
         sig TEXT NOT NULL,
         created INTEGER NOT NULL
       );
-      -- Slettes et dokument (fx fordi eleven eller klassen slettes), forsvinder beviset og afleveringen også (GDPR)
-      CREATE TRIGGER IF NOT EXISTS documents_cleanup AFTER DELETE ON documents BEGIN
-        DELETE FROM certificates WHERE doc_id = OLD.id;
-        DELETE FROM assignment_submissions WHERE doc_id = OLD.id;
-      END;
-      DELETE FROM certificates WHERE doc_id NOT IN (SELECT id FROM documents);
     `);
     // Navn og klasse gemmes usigneret ved siden af beviset (kun til elevens egen lærer – aldrig offentligt)
     const certCols = new Set(db.prepare('PRAGMA table_info(certificates)').all().map(c => c.name));
     if (!certCols.has('student_name')) db.exec("ALTER TABLE certificates ADD COLUMN student_name TEXT NOT NULL DEFAULT ''");
     if (!certCols.has('class_name')) db.exec("ALTER TABLE certificates ADD COLUMN class_name TEXT NOT NULL DEFAULT ''");
+    // Gravsten: hvornår teksten blev slettet (beviset lever videre uden navn), tekstens hash og hvornår beviset udløb
+    if (!certCols.has('doc_deleted')) db.exec('ALTER TABLE certificates ADD COLUMN doc_deleted INTEGER');
+    if (!certCols.has('text_sha256')) db.exec('ALTER TABLE certificates ADD COLUMN text_sha256 TEXT');
+    if (!certCols.has('expired')) db.exec('ALTER TABLE certificates ADD COLUMN expired INTEGER');
+    db.exec(`
+      UPDATE certificates SET text_sha256 = json_extract(payload, '$.sha256') WHERE text_sha256 IS NULL AND json_valid(payload);
+      CREATE INDEX IF NOT EXISTS certificates_sha ON certificates(text_sha256);
+      -- Slettes et dokument (frist, klasse eller lærer slettet), bliver beviset en gravsten: det kan stadig tjekkes,
+      -- men navn, klasse og kobling til teksten er væk. Kun "Slet elev" sletter beviserne (se deleteStudentCertificates).
+      DROP TRIGGER IF EXISTS documents_cleanup;
+      CREATE TRIGGER documents_cleanup AFTER DELETE ON documents BEGIN
+        UPDATE certificates SET doc_id = '', student_name = '', class_name = '', doc_deleted = COALESCE(doc_deleted, CAST(unixepoch('subsec') * 1000 AS INTEGER)) WHERE doc_id = OLD.id;
+        DELETE FROM assignment_submissions WHERE doc_id = OLD.id;
+      END;
+    `);
     // Signeringsnøgle (kun serveren har den). Den offentlige nøgle står på tjek-siden.
     const keyPath = path.join(dataDir, 'proof-key.pem');
     if (!fs.existsSync(keyPath)) {
@@ -174,19 +196,46 @@ class DocStore {
     m.lastObs = 0;
     this.q.mon.run(JSON.stringify(m), row.id);
   }
+  /** Hvor meget af tidsrummet [from, to] serveren selv var nede (huller mellem to kørsler i server_runs). */
+  _downtime(from, to) {
+    if (!(to > from)) return 0;
+    let ms = 0;
+    try {
+      const rows = this.db.prepare('SELECT start, LAG(last_alive) OVER (ORDER BY start) AS prev FROM server_runs').all();
+      for (const r of rows) {
+        if (r.prev == null) continue;
+        const a = Math.max(from, r.prev), b = Math.min(to, r.start);
+        if (b > a) ms += b - a;
+      }
+    } catch (e) { /* ingen tabel */ }
+    return Math.min(ms, to - from);
+  }
+
   /*
-   * Grå tid: al grå tid tælles (greyMs), men kun grå tid, hvor teksten voksede, tæller mod beviset (greyCounted).
-   * Grå tid siden sidste gemning samles i greyPending og afgøres ved næste gemning: voksede teksten, tæller den.
-   * De første 30 sek. med "Venter på HolyMoly-vagten" (fx ved lektionsstart) tæller aldrig.
+   * Grå tid: al grå tid tælles (greyMs). Grå tid siden sidste gemning samles i greyPending og afgøres ved næste gemning:
+   * voksede teksten, tæller den mod beviset (greyCounted); ellers lægges den i greyIdle (grå tid uden vækst), som har
+   * sin egen, større grænse (10 min. eller 15 %). De første 30 sek. med "Venter på HolyMoly-vagten" tæller aldrig.
+   * Tid, hvor serveren selv var nede (server_runs), tæller hverken som grå eller uden vækst.
    */
   _observe(m, view, now) {
     if (m.greyCounted == null) { m.greyCounted = m.greyMs || 0; m.greyPending = 0; } // dokument fra før reglen: som før
+    if (m.greyIdle == null) m.greyIdle = 0;
     if (m.lastObs) {
       const dt = Math.max(0, now - m.lastObs);
       if (dt > OBSERVE_GAP_MS) {
-        m.greyMs += dt;                       // serveren har ikke kunnet følge med (fx genstart)
-        m.greyPending += dt;
-        if (m.grey.length < 20 && !m.grey.includes('HolyMoly-serveren kunne ikke følge med')) m.grey.push('HolyMoly-serveren kunne ikke følge med');
+        // Serveren har ikke fulgt med. Den del, hvor serveren selv var nede, er ikke elevens skyld.
+        const down = this._downtime(m.lastObs, now);
+        if (down > 0) {
+          m.downMs = (m.downMs || 0) + down;
+          m.downPending = (m.downPending || 0) + down;
+          m.downAllow = (m.downAllow || 0) + Math.min(DOWN_MAX, Math.round(DOWN_CPS * down / 1000));
+        }
+        const rest = dt - down;
+        if (rest > 0) {
+          m.greyMs += rest;
+          m.greyPending += rest;
+          if (m.grey.length < 20 && !m.grey.includes('HolyMoly-serveren kunne ikke følge med')) m.grey.push('HolyMoly-serveren kunne ikke følge med');
+        }
       } else if (m.lastColor === 'green') m.greenMs += dt;
       else if (m.lastColor === 'red') m.redMs += dt;
       else {
@@ -211,6 +260,7 @@ class DocStore {
     m.lastColor = color;
   }
 
+  /** sinceMs (hvor længe eleven har været i lektionen) bruges ikke længere: et nyt dokument har et fast budget. */
   save(student, input, view, lessonId, now = Date.now(), sinceMs = 0) {
     if (!DocStore.validId(input.id)) return { ok: false, error: 'Ugyldigt dokument-id' };
     let blocks;
@@ -222,26 +272,44 @@ class DocStore {
     if (row && row.student_id !== student.id) return { ok: false, error: 'Ugyldigt dokument-id' };
     if (row && row.submitted) return { ok: false, error: 'Dokumentet er afleveret og kan ikke ændres' };
     const m = row ? JSON.parse(row.monitor) : { greenMs: 0, redMs: 0, greyMs: 0, red: [], grey: [], flags: [], lessons: [], lastTs: 0, lastLen: 0, lastColor: '', lastObs: 0, first: now };
+    // Diskkvote: før der skrives noget
+    const blocksJson = JSON.stringify(blocks);
+    if (text.length - (m.lastLen || 0) > MAX_GROWTH) return { ok: false, error: 'For meget ny tekst på én gang. HolyMoly gemmer højst 3.000 nye tegn ad gangen. Teksten er kun gemt på computeren.' };
+    if (!row && this.db.prepare('SELECT COUNT(*) AS n FROM documents WHERE student_id = ? AND submitted IS NULL').get(student.id).n >= this.maxOpenDocs) {
+      return { ok: false, error: 'Du har for mange åbne dokumenter. Aflever eller slet nogle først.' };
+    }
+    const newSize = Buffer.byteLength(blocksJson) + Buffer.byteLength(text);
+    const oldSize = row ? Buffer.byteLength(row.blocks) + Buffer.byteLength(row.text) : 0;
+    if (newSize > oldSize && this._usageOf(student.id) - oldSize + newSize > this.quotaBytes) {
+      return { ok: false, error: 'Der er ikke mere plads til dine dokumenter. Tal med din lærer.' };
+    }
     this._observe(m, view, now);
     // Serverens eget tjek: voksede teksten hurtigere, end et menneske kan skrive? (15 tegn/sek.)
     const dt = m.lastTs ? now - m.lastTs : 0;
     const growth = text.length - (m.lastLen || 0);
+    // Var serveren selv nede siden sidste gemning, godtages lidt vækst fra den tid (højst 400 tegn pr. hul)
+    const downDt = m.downPending || 0;
+    const eff = growth - (m.downAllow || 0);
+    m.downPending = 0; m.downAllow = 0;
     if (m.flags.length < 20 && growth > 30) {
       if (!m.lastTs) {
-        // Første gang serveren ser dokumentet: højst hvad man kan nå at skrive, siden lektionen startede for eleven
-        const budget = Math.max(120, Math.min(1500, SERVER_GROWTH_CPS * (sinceMs / 1000)));
-        if (growth > budget) m.flags.push(`Dokumentet havde allerede ${growth} tegn, første gang HolyMoly så det`);
-      } else if (dt > GAP_MS && growth > 80) m.flags.push(`${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (${Math.round(dt / 60000)} min. uden forbindelse)`);
-      else if (dt > 0 && growth / (dt / 1000) > SERVER_GROWTH_CPS) m.flags.push(`Tekst indsat for hurtigt: teksten voksede med ${growth} tegn på ${Math.max(1, Math.round(dt / 1000))} sek.`);
+        // Første gang serveren ser dokumentet: fast budget på 150 tegn (forberedt tekst, fx i en redigeret documents.json)
+        if (growth > FIRST_SAVE_BUDGET) m.flags.push(`Dokumentet havde allerede ${growth} tegn, første gang HolyMoly så det`);
+      } else if (downDt > 0 && eff > 80) m.flags.push(`${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (serveren var nede i ${Math.max(1, Math.round(downDt / 60000))} min.)`);
+      else if (dt - downDt > GAP_MS && eff > 80) m.flags.push(`${growth} tegn blev skrevet, mens HolyMoly ikke kunne følge med (${Math.round(dt / 60000)} min. uden forbindelse)`);
+      else if (dt > 0 && eff / (dt / 1000) > SERVER_GROWTH_CPS) m.flags.push(`Tekst indsat for hurtigt: teksten voksede med ${growth} tegn på ${Math.max(1, Math.round(dt / 1000))} sek.`);
     }
-    // Grå tid siden sidste gemning tæller kun, hvis teksten voksede imens
+    // Grå tid siden sidste gemning tæller mod beviset, hvis teksten voksede imens – ellers som grå tid uden vækst
     if (growth > 0) m.greyCounted += m.greyPending;
+    else m.greyIdle = (m.greyIdle || 0) + m.greyPending;
     m.greyPending = 0;
     if (lessonId && !m.lessons.includes(lessonId) && m.lessons.length < 50) m.lessons.push(lessonId);
     m.lastTs = now; m.lastLen = text.length;
-    if (row) this.q.upd.run(title, JSON.stringify(blocks), text, JSON.stringify(stats), JSON.stringify(m), now, input.id);
-    else this.q.ins.run(input.id, student.id, student.class_id, title, JSON.stringify(blocks), text, JSON.stringify(stats), JSON.stringify(m), now, now);
-    this._version(input.id, text, now);
+    if (row) this.q.upd.run(title, blocksJson, text, JSON.stringify(stats), JSON.stringify(m), now, input.id);
+    else this.q.ins.run(input.id, student.id, student.class_id, title, blocksJson, text, JSON.stringify(stats), JSON.stringify(m), now, now);
+    const added = this._version(input.id, text, now);
+    const u = this.usage.get(student.id);
+    if (u) u.bytes += newSize - oldSize + added;
     const doc = this.q.get.get(input.id);
     // Prøve-vurdering: hvad ville mangle, hvis eleven afleverede nu (kun kategorier – aldrig tal)
     const ev = this.evaluate(doc);
@@ -253,10 +321,21 @@ class DocStore {
    */
   _version(id, text, now) {
     const last = this.db.prepare('SELECT ts, length(text) AS n FROM doc_versions WHERE doc_id = ? ORDER BY ts DESC LIMIT 1').get(id);
-    if (last && now - last.ts < 20_000 && Math.abs(text.length - last.n) < 100) return;
-    if (last && last.n === text.length && this.db.prepare('SELECT text FROM doc_versions WHERE doc_id = ? ORDER BY ts DESC LIMIT 1').get(id).text === text) return;
-    if (this.db.prepare('SELECT COUNT(*) AS n FROM doc_versions WHERE doc_id = ?').get(id).n >= 720) return;
+    if (last && now - last.ts < 20_000 && Math.abs(text.length - last.n) < 100) return 0;
+    if (last && last.n === text.length && this.db.prepare('SELECT text FROM doc_versions WHERE doc_id = ? ORDER BY ts DESC LIMIT 1').get(id).text === text) return 0;
+    if (this.db.prepare('SELECT COUNT(*) AS n FROM doc_versions WHERE doc_id = ?').get(id).n >= 720) return 0;
     this.db.prepare('INSERT INTO doc_versions (doc_id, ts, text) VALUES (?,?,?)').run(id, now, text);
+    return Buffer.byteLength(text);
+  }
+  /** Hvor meget elevens dokumenter og afspilning fylder (bytes). Genberegnes højst hvert minut; ellers lægges ændringer til. */
+  _usageOf(studentId) {
+    const u = this.usage.get(studentId);
+    if (u && Math.abs(Date.now() - u.ts) < 60_000) return u.bytes;
+    const r = this.db.prepare(`SELECT
+        COALESCE((SELECT SUM(length(CAST(blocks AS BLOB)) + length(CAST(text AS BLOB))) FROM documents WHERE student_id = ?), 0)
+      + COALESCE((SELECT SUM(length(CAST(v.text AS BLOB))) FROM doc_versions v JOIN documents d ON d.id = v.doc_id WHERE d.student_id = ?), 0) AS n`).get(studentId, studentId);
+    this.usage.set(studentId, { bytes: r.n, ts: Date.now() });
+    return r.n;
   }
   versions(id) {
     return this.db.prepare('SELECT ts, text FROM doc_versions WHERE doc_id = ? ORDER BY ts').all(String(id || ''));
@@ -268,7 +347,7 @@ class DocStore {
    */
   similar(id) {
     const row = this.q.get.get(String(id || ''));
-    if (!row) return [];
+    if (!row || !row.submitted) return []; // kun afleverede dokumenter sammenlignes
     const shingles = (t) => {
       const w = String(t).toLocaleLowerCase('da').match(/[\p{L}\p{N}]+/gu) || [];
       const set = new Set();
@@ -277,7 +356,7 @@ class DocStore {
     };
     const mine = shingles(row.text);
     if (mine.size < 8) return [];
-    const others = this.db.prepare('SELECT d.id, d.title, d.text, d.submitted, s.name FROM documents d JOIN students s ON s.id = d.student_id WHERE d.class_id = ? AND d.student_id != ? LIMIT 400').all(row.class_id, row.student_id);
+    const others = this.db.prepare('SELECT d.id, d.title, d.text, d.submitted, s.name FROM documents d JOIN students s ON s.id = d.student_id WHERE d.class_id = ? AND d.student_id != ? AND d.submitted IS NOT NULL LIMIT 400').all(row.class_id, row.student_id);
     const out = [];
     for (const o of others) {
       const theirs = shingles(o.text);
@@ -310,6 +389,11 @@ class DocStore {
     if (greyCounted > GREY_MAX_MS || (totalMs > 0 && greyCounted / totalMs > GREY_MAX_SHARE)) {
       no('forbindelse', `Overvågningen var ikke komplet i ${Math.max(1, Math.round(greyCounted / 60000))} min., mens teksten voksede` + (m.grey.length ? ' (' + m.grey.join('; ') + ')' : ''));
     }
+    // Grå tid uden vækst (fx forbindelsen væk, mens dokumentet var åbent): over 10 min. eller 15 % af tiden
+    const idle = (m.greyIdle || 0) + (m.greyPending || 0);
+    if (!cats.has('forbindelse') && (idle > IDLE_MAX_MS || (totalMs > 0 && idle / totalMs > IDLE_MAX_SHARE))) {
+      no('forbindelse', `Overvågningen var ikke komplet i ${Math.max(1, Math.round(idle / 60000))} min., mens dokumentet var åbent` + (m.grey.length ? ' (' + m.grey.join('; ') + ')' : ''));
+    }
     if (s.pasteInserted > 0) no('indsat', 'Der er indsat tekst, som ikke er tastet');
     // Tastet minus slettet (plus fortrudt) skal kunne forklare teksten
     if (s.typed - s.deleted + s.restored + 20 < text.length) no('indsat', 'Der er mere tekst, end der er tastet');
@@ -322,7 +406,8 @@ class DocStore {
     for (const t of D.aiTraces(text)) no('ai', t);
     for (const t of D.aiHints(text)) notes.push(t + ' – kun en oplysning, ikke et afslag');
     if (s.pasteBlocked + s.dropBlocked > 0) notes.push(`${s.pasteBlocked + s.dropBlocked} forsøg på at indsætte tekst blev blokeret`);
-    if (s.focusLostMs > 60_000) notes.push(`Skrivevinduet var ikke i fokus i ${Math.round(s.focusLostMs / 60000)} min.`);
+    // Hjemme er tid uden for skrivevinduet elevens egen sag: ingen fokus-note (place='hjemme')
+    if (s.focusLostMs > 60_000 && !(({ home, lesson }) => home && !lesson)(this.placeOf(row.id))) notes.push(`Skrivevinduet var ikke i fokus i ${Math.round(s.focusLostMs / 60000)} min.`);
     if (m.greyMs > 0 && !cats.has('forbindelse')) {
       const quiet = Math.max(0, m.greyMs - greyCounted);
       notes.push(`Kort tid uden fuld overvågning (${Math.max(1, Math.round(m.greyMs / 1000))} sek.` + (quiet >= 1000 ? `, heraf ${Math.round(quiet / 1000)} sek. hvor teksten ikke voksede` : '') + ')');
@@ -378,13 +463,24 @@ class DocStore {
         nameHash: this.nameHash(meta.studentName),
       });
       const sig = crypto.sign(null, Buffer.from(payload), this.privateKey).toString('base64');
-      this.db.prepare('INSERT INTO certificates (id, doc_id, payload, sig, created, student_name, class_name) VALUES (?,?,?,?,?,?,?)')
-        .run(certId, row.id, payload, sig, now, String(meta.studentName || ''), String(meta.className || ''));
+      this.db.prepare('INSERT INTO certificates (id, doc_id, payload, sig, created, student_name, class_name, text_sha256) VALUES (?,?,?,?,?,?,?,?)')
+        .run(certId, row.id, payload, sig, now, String(meta.studentName || ''), String(meta.className || ''), JSON.parse(payload).sha256);
       cert = { id: certId };
     }
     const result = { certId: cert ? cert.id : null, reasons: ev.reasons, notes: ev.notes, facts: ev.facts, categories: ev.categories };
     this.db.prepare('UPDATE documents SET submitted = ?, result = ?, cert_id = ? WHERE id = ?').run(now, JSON.stringify(result), cert ? cert.id : null, row.id);
+    // Afspilningen beholder højst 120 versioner efter aflevering (retention.js)
+    RET.trimVersions(this.db, row.id);
     return Object.assign({ ok: true }, result);
+  }
+
+  /** Slet en kladde (aldrig et afleveret dokument). studentId = ejeren. */
+  deleteDraft(id, studentId) {
+    const row = this.q.get.get(String(id || ''));
+    if (!row || row.student_id !== Number(studentId)) return { ok: false, error: 'Dokumentet findes ikke', missing: true };
+    if (row.submitted) return { ok: false, error: 'Et afleveret dokument kan ikke slettes' };
+    this.db.prepare('DELETE FROM documents WHERE id = ? AND submitted IS NULL').run(row.id);
+    return { ok: true, title: row.title };
   }
 
   /** Blev dokumentet skrevet i timen, hjemme i en skriveøkt – eller begge? */
@@ -425,11 +521,19 @@ class DocStore {
   certificate(id) {
     const c = this.q.cert.get(String(id || ''));
     if (!c) return null;
+    // Udløbet efter fristen (retention.js): id'et er udstedt her, men beviset findes ikke længere
+    if (c.expired) return { expired: c.expired, created: c.created };
     const valid = crypto.verify(null, Buffer.from(c.payload), this.publicKey, Buffer.from(c.sig, 'base64'));
     let p = {};
     try { p = JSON.parse(c.payload); } catch (e) { /* ødelagt: ugyldig */ }
-    if (p.v !== 2) return { v: Number(p.v) || 1, legacy: true, valid, submitted: Number(p.submitted) || c.created };
-    return { v: 2, payload: p, signed: c.payload, sig: c.sig, publicKey: this.publicPem, valid };
+    const docDeleted = c.doc_deleted || null; // gravsten: teksten er slettet efter skolens frist
+    if (p.v !== 2) return Object.assign({ v: Number(p.v) || 1, legacy: true, valid, submitted: Number(p.submitted) || c.created }, docDeleted ? { docDeleted } : {});
+    return { v: 2, payload: p, signed: c.payload, sig: c.sig, publicKey: this.publicPem, valid, docDeleted };
+  }
+
+  /** "Slet elev": elevens beviser slettes helt (ingen gravsten). Kaldes, før eleven slettes. */
+  deleteStudentCertificates(studentId) {
+    return this.db.prepare('DELETE FROM certificates WHERE doc_id IN (SELECT id FROM documents WHERE student_id = ?)').run(Number(studentId)).changes;
   }
 
   /** Hvem beviset tilhører (KUN til elevens egen lærer – tjek ejerskab før brug). */

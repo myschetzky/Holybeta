@@ -44,17 +44,17 @@ git clone -b beta https://github.com/myschetzky/HolyMoly.git /opt/holymoly
 
 ## 3. Indstillinger
 
-Opret `/opt/holymoly/deploy/.env`:
+Kopiér eksemplet og udfyld det:
 
+```bash
+cp /opt/holymoly/deploy/.env.beta.example /opt/holymoly/deploy/.env
 ```
-PUBLIC_URL=https://holymoly.dit-domæne.dk
-# A. Cloudflare-tunnel:
-CLOUDFLARE_TUNNEL_TOKEN=
-# B. Caddy:
-HM_DOMAIN=holymoly.dit-domæne.dk
-```
+
+Udfyld mindst `PUBLIC_URL`, `HM_DOMAIN` (Caddy) eller `CLOUDFLARE_TUNNEL_TOKEN` (tunnel) og skolens ja: `DATAANSVARLIG`, `DPO_KONTAKT`, `DPIA_DATO` og `LEDELSE_JA_DATO`. Alle indstillinger står i `environment` i `deploy/docker-compose.yml`. En variabel, der ikke står der, når ikke ind i containeren.
 
 Filen indeholder hemmeligheder og må aldrig committes.
+
+Ved start skriver serveren én linje i loggen, fx `Udgave: beta · Server: testserver · Skolens ja mangler: DPIA_DATO · Vagt: fra · Nøgle: 3f2a…`. Tjek den med `docker compose -f deploy/docker-compose.yml logs holymoly`.
 
 ## 4A. Cloudflare-tunnel
 
@@ -110,6 +110,27 @@ docker compose -f deploy/docker-compose.yml cp ./backup/holymoly-ÅÅÅÅ-MM-DD.
 ```bash
 docker compose -f deploy/docker-compose.yml start holymoly
 ```
+
+## Overvågning med Uptime Kuma
+
+Serveren svarer på `/healthz`. Svaret er `ok`, eller `503` med `fejl: database`, `fejl: disk` eller `fejl: nøgle`. Med `/healthz?deep=1` tjekkes også, at nattens backup er højst 36 timer gammel (`fejl: backup`), og at der er mindst 1 GB fri plads (`fejl: disk`). Svaret har ingen tal om lektioner eller version.
+
+Docker bruger selv `/healthz` (`HEALTHCHECK` i `server/Dockerfile`). `docker compose ps` viser `healthy` eller `unhealthy`.
+
+Få besked, når noget går galt. Kør Uptime Kuma i sin egen lille container, så den også opdager, at hele HolyMoly-containeren er nede:
+
+1. *Create CT*: Debian 12, 1 kerne, 512 MB RAM, 4 GB disk, **nesting** slået til, *Start at boot*: **Yes**.
+2. Installér Docker som i trin 2, og start Uptime Kuma:
+
+```bash
+docker run -d --restart unless-stopped -p 3001:3001 -v uptime-kuma:/app/data --name uptime-kuma louislam/uptime-kuma:1
+```
+
+3. Åbn `http://<containerens IP>:3001` og opret en administrator.
+4. *Add New Monitor*: type **HTTP(s) – Keyword**, adresse `https://holymoly.dit-domæne.dk/healthz?deep=1`, keyword `ok`, interval 300 sekunder.
+5. Tilføj en *Notification* (fx e-mail eller Teams), så I får besked med det samme.
+
+Uptime Kuma skal kun nå serveren udefra. Den skal ikke have adgang til Docker eller til data.
 
 ## Drift
 

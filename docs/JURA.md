@@ -33,7 +33,7 @@ HolyMoly behandler personoplysninger om elever – ofte under 18 år: hvilke sid
 ## Forslag til information til elever og forældre
 > **HolyMoly i undervisningen**
 >
-> I [klasse/fag] bruger vi HolyMoly for at sikre, at alle arbejder på lige vilkår uden AI, sociale medier og spil i timerne og til prøver.
+> I [klasse/fag] bruger vi HolyMoly for at sikre, at alle arbejder på lige vilkår uden adgang til AI, sociale medier og spil i timerne og til prøver.
 >
 > **Hvornår?** Kun når læreren har startet en lektion, og HolyMoly er åben på computeren. Uden for lektionerne registreres intet.
 >

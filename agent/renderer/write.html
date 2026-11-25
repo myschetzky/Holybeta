@@ -42,6 +42,7 @@
     <span id="saved"></span>
     <span id="preview" class="preview" hidden></span>
     <span class="spacer"></span>
+    <button class="btn" id="del" hidden>Slet kladde</button>
     <button class="btn" id="docx">Gem som Word</button>
     <button class="btn primary" id="submit">Afslut dokument</button>
   </footer>
@@ -59,6 +60,14 @@
       </div>
       <p id="confirm-asg" hidden></p>
       <div class="actions"><button class="btn" value="no" id="confirm-no">Annuller</button><button class="btn primary" value="yes" id="confirm-yes">Afslut</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="del-dlg">
+    <form method="dialog">
+      <h2>Slet kladden?</h2>
+      <p>Teksten slettes på computeren og hos HolyMoly. Det kan ikke fortrydes.</p>
+      <div class="actions"><button class="btn" value="no">Annuller</button><button class="btn primary" value="yes">Slet kladde</button></div>
     </form>
   </dialog>
 

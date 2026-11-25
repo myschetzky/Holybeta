@@ -11,7 +11,8 @@ function mk(config = { killApps: true }) {
 }
 const ext = (title, url, browser = 'chrome') => ({ browser, windows: [{ focused: true, active: { title, url } }], tabs: [{ title, url, active: true }] });
 const WIN = 'Chrome_WidgetWin_1';
-const ev = (p, input) => p.evaluate(Object.assign({ platform: 'win32', now: 1000 }, input));
+// Som standard er browser-udvidelsen udgivet (appen kender dens id). Testen for beta sætter en tom liste.
+const ev = (p, input) => p.evaluate(Object.assign({ platform: 'win32', now: 1000, extensionIds: ['abc'] }, input));
 const color = (r) => colorOf(r);
 
 /* ------------------------------ GRØN ------------------------------ */
@@ -100,6 +101,22 @@ test('Firefox uden udvidelse og ukendte browsere lukkes, forbudt side i browser 
   const r = ev(mk(), { fg: { app: 'brave', title: 'TikTok - Brave', url: 'www.tiktok.com/foryou', cls: WIN }, extensions: [] });
   assert.strictEqual(color(r), 'red');
   assert.match(r.closeBrowser.reason, /TikTok|tiktok/i);
+});
+
+test('udvidelsen er ikke udgivet: Chrome og Edge lukkes ikke, heller ikke uden læsbar adresse', () => {
+  for (const extensionIds of [[], undefined]) {
+    const p = mk();
+    const chrome = (now) => ev(p, { now, extensionIds, fg: { app: 'chrome', title: 'Forside - Google Chrome', url: 'www.dr.dk', cls: WIN }, extensions: [] });
+    for (const now of [1000, 10_000, 60_000]) assert.strictEqual(chrome(now).closeBrowser, null);
+    assert.strictEqual(color(chrome(70_000)), 'green');
+    const edge = (now) => ev(p, { now, extensionIds, fg: { app: 'msedge', title: 'Hemmelig - Microsoft Edge', url: '', cls: WIN }, extensions: [] });
+    for (const now of [1000, 10_000, 60_000]) assert.strictEqual(edge(now).closeBrowser, null);
+  }
+  // Profilen 'skriv' kræver heller ikke udvidelsen
+  const ps = mk({ killApps: true, profile: 'skriv' });
+  for (const now of [1000, 10_000]) assert.strictEqual(ev(ps, { now, fg: { app: 'chrome', title: 'x - Google Chrome', url: 'www.dr.dk', cls: WIN }, extensions: [] }).closeBrowser, null);
+  // En forbudt side er stadig rød
+  assert.strictEqual(color(ev(mk(), { extensionIds: [], fg: { app: 'chrome', title: 'ChatGPT - Google Chrome', url: 'chatgpt.com/c/1', cls: WIN }, extensions: [] })), 'red');
 });
 
 test('vindue uden læsbar adresse (fx inkognito uden udvidelse) lukkes efter 5 sek.', () => {

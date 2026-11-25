@@ -49,8 +49,9 @@
       <h2 id="opbevaring">Hvor og hvor længe</h2>
       <ul>
         <li><b>Data i EU.</b> Servere hos <span data-company="hosting">[hostingudbyder]</span>. Ingen overførsel til lande uden for EU/EØS, ingen AI-tjenester og ingen analyse hos tredjeparter.</li>
-        <li><b>Overvågningsdata</b> (hændelser, skærmbilleder og lampernes tidslinje) slettes automatisk efter 30 dage. Skolen kan vælge en anden frist. Den natlige sikkerhedskopi gemmes i 7 dage, så en slettet oplysning højst ligger 7 dage mere i en kopi.</li>
-        <li><b>Konti, klasser og tekster</b> bliver, til skolen sletter dem. Sletter læreren en elev eller en klasse, slettes alt om den med det samme.</li>
+        <li><b>Overvågningsdata</b> (hændelser, skærmbilleder og lampernes tidslinje) slettes automatisk efter <span data-cfg="retention.logDays">30</span> dage. Skolen kan vælge en anden frist. Den natlige sikkerhedskopi gemmes i <span data-cfg="retention.backupDays">14</span> dage, så en slettet oplysning højst ligger <span data-cfg="retention.backupDays">14</span> dage mere i en kopi.</li>
+        <li><b>Tekster:</b> Kladder slettes <span data-cfg="retention.draftDays">60</span> dage efter seneste ændring. Afspilning og skrivedetaljer slettes <span data-cfg="retention.versionsDays">60</span> dage efter aflevering, og afleverede tekster <span data-cfg="retention.docDays">365</span> dage efter aflevering. Beviser kan tjekkes i <span data-cfg="retention.certYears">3</span> år, uden navn, når teksten er slettet.</li>
+        <li><b>Konti, klasser og elever</b> bliver, til skolen sletter dem. Sletter læreren en elev, slettes alt om eleven med det samme, også beviserne. Sletter læreren en klasse, bliver beviserne uden navn.</li>
         <li><b>Ved ophør</b> kan skolen eksportere sine data. HolyMoly sletter dem automatisk 90 dage efter, at prøveperioden eller licensen er udløbet (jf. databehandleraftalen). Skolens administrator får besked 30 og 7 dage før.</li>
       </ul>
 
@@ -61,7 +62,7 @@
         <li><b>Adgang:</b> Lærere ser kun deres egne klasser. Skolens administrator styrer, hvem der er med.</li>
         <li><b>Kryptering:</b> Al trafik er krypteret (HTTPS). Adgangskoder gemmes kun som langsomme hash (scrypt i OWASP-anbefalet styrke), og to-faktor-nøgler gemmes krypteret.</li>
         <li><b>Webapplikationen</b> følger OWASP Top 10:2025 med en streng Content-Security-Policy og sikkerheds-headers. Serveren henter aldrig adresser, som brugerne har skrevet (ingen SSRF).</li>
-        <li><b>Mærket "✓ Tastet i HolyMoly – intet indsat"</b> er digitalt signeret (Ed25519) og kan ikke forfalskes af udenforstående. Den, der driver serveren, har nøglen – derfor skal skolen drive den. HolyMoly beskytter mod almindelige elever, ikke mod en elev med administratorrettigheder på computeren.</li>
+        <li><b>Mærket "✓ Tastet i HolyMoly – intet indsat"</b> er digitalt signeret (Ed25519). Kun den, der har serverens nøgle, kan udstede det. Den, der driver serveren, har nøglen – derfor skal skolen drive den. HolyMoly beskytter mod almindelige elever, ikke mod en elev med administratorrettigheder på computeren.</li>
         <li><b>Gennemsigtighed:</b> Lærerens handlinger over for en elev (frys, se skærmen, skærmbillede, eksport) står i elevens logbog.</li>
         <li><b>Sikkerhedslog:</b> Skolens administrator kan under Skole se, hvem der har logget ind og hvordan, forkerte adgangskoder og to-faktor-koder, ændringer af adgangskode og to-faktor, invitationer og roller. Loggen gemmes i 90 dage.</li>
         <li><b>Forsyningskæden:</b> Afhængigheder tjekkes for kendte sårbarheder ved hver ændring, og byggeprocessen er låst til faste versioner.</li>
@@ -73,7 +74,7 @@
       <h2 id="dpia">Til skolens konsekvensanalyse (DPIA)</h2>
       <p>Overvågning af elever kræver normalt en konsekvensanalyse. Det kan I bruge:</p>
       <ul>
-        <li><b>Formål:</b> at eleverne arbejder uden AI og forbudte hjælpemidler i undervisningen og til prøver, og at afleveringer kan dokumenteres.</li>
+        <li><b>Formål:</b> at eleverne ikke bruger AI og forbudte hjælpemidler i undervisningen og til prøver, og at afleveringer kan dokumenteres.</li>
         <li><b>Behandlingsgrundlag:</b> typisk GDPR art. 6, stk. 1, litra e (opgave i samfundets interesse). Samtykke er normalt ikke egnet i forholdet mellem skole og elev.</li>
         <li><b>Dataminimering:</b> kun i lektionen eller skriveøkten, ingen keylogger og intet kamera, skærmbilleder kun ved klik (automatisk ved forbudt brug kun hvis læreren slår det til, og eleven får besked), og automatisk sletning af overvågningsdata. Skrivestatistikken i skrivevinduet (tempo og rytme, ikke hvilke taster) bruges kun til fluebenet.</li>
         <li><b>Gennemsigtighed:</b> Eleven kan altid se, om HolyMoly er aktiv, og får besked, når læreren ser skærmen. Vi har en tekst til information til elever og forældre.</li>

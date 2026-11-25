@@ -98,6 +98,8 @@ class Policy {
     const grey = (kind, text) => { if (!out.degraded.some(d => d.kind === kind)) out.degraded.push({ kind, text }); };
 
     const exts = input.extensions || [];
+    const extensionRequired = Array.isArray(input.extensionIds) && input.extensionIds.length > 0
+      && (input.profile || this.config.profile) !== 'skriv';
     out.extBrowsers = [...new Set(exts.map(e => e.browser))];
     for (const e of exts) {
       for (const t of e.tabs || []) {
@@ -135,8 +137,9 @@ class Policy {
       }
       if (this.lastUrlByWindow.size > 200) this.lastUrlByWindow.clear();
 
-      // Browsere med udvidelse SKAL have den installeret – ellers lukkes de (efter kort tid)
-      const needsExtension = EXTENSION_BROWSERS.has(browser);
+      // Browsere med udvidelse SKAL have den installeret – ellers lukkes de (efter kort tid).
+      // Kun når udvidelsen findes (appen kender dens id), og ikke i profilen 'skriv'.
+      const needsExtension = EXTENSION_BROWSERS.has(browser) && extensionRequired;
       const unsupported = browser === 'other';
       if (unsupported) {
         out.closeBrowser = { app: fg.app, pid: fg.pid, reason: `${bname} kan ikke bruges i lektionen – brug Chrome, Edge, Firefox eller Safari` };
@@ -166,7 +169,7 @@ class Policy {
         out.activity = `${bname}: ${title || '…'}`;
         if (input.platform === 'darwin' && (input.automationDenied || []).includes(browser)) {
           grey('automation', `Mangler tilladelse til at læse adressen i ${bname}`);
-        } else if (title && !out.closeBrowser) {
+        } else if (title && !out.closeBrowser && extensionRequired) {
           // Et browservindue hvor adressen ikke kan læses (fx inkognito uden udvidelse)
           unseen = true;
           const key = browser + '|' + norm(title);

@@ -21,7 +21,19 @@ const guard = require('./guard');
 const { Streamer, screenPermission, screenCount, captureWorks } = require('./capture');
 const { Freezer } = require('./freeze');
 const { Writer } = require('./writer');
+const { homeEvent, homeStatus } = require('./homepolicy');
 let writer = null; // "Skriv i HolyMoly"
+
+// Startet med fejlfinding (fx --remote-debugging-port)? Så kunne et andet program taste i skrivevinduet. Luk.
+// Gælder den installerede app. Under udvikling starter ende-til-ende-testen (Playwright) appen med disse flag.
+{
+  const { debugFlagsUsed, MESSAGE } = require('./debugflags');
+  if (app.isPackaged && debugFlagsUsed(process.argv, (s) => app.commandLine.hasSwitch(s))) {
+    try { dialog.showErrorBox('HolyMoly', MESSAGE); } catch (e) { /* */ }
+    app.exit(1);
+    process.exit(1);
+  }
+}
 
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
@@ -93,7 +105,8 @@ const STARTED_FROM_TRAY = process.argv.includes('--tray');
 /* ---------------- tilstand ---------------- */
 const state = {
   data: { enrollments: [] },
-  lesson: null, // {live, className, studentName, teacherName, endsAt, config}
+  lesson: null, // {live, className, studentName, teacherName, endsAt, config, solo}
+  home: false, // skriveøkt hjemme: ingen adresser, programmer, faner eller skærmbilleder sendes
   rules: ACRules.RULE_DATA,
   watching: false,
   frozen: false,
@@ -320,6 +333,7 @@ function lessonActive() {
 function applyLesson(lesson) {
   const wasLive = lessonActive();
   state.lesson = lesson && lesson.live ? lesson : null;
+  state.home = !!(state.lesson && state.lesson.solo);
   const live = lessonActive();
   if (writer) writer.lessonChanged(live);
   if (live !== wasLive) updateTrayMenu();
@@ -336,11 +350,12 @@ function applyLesson(lesson) {
       evalTimer = setInterval(evaluate, 1000);
       // Tjek jævnligt at skærmoptagelse virker (uden at sende billedet)
       state.captureOk = true;
-      const check = () => captureWorks().then((ok) => { state.captureOk = ok; });
+      // Hjemme bruges skærmen aldrig – så tjekkes den heller ikke
+      const check = () => { if (!state.home) captureWorks().then((ok) => { state.captureOk = ok; }); };
       check();
       captureTimer = setInterval(check, 15_000);
       // macOS: første kald udløser tilladelses-dialogen til skærmoptagelse
-      if (process.platform === 'darwin') require('./capture').grab(0, 64, 10).catch(() => {});
+      if (process.platform === 'darwin' && !state.home) require('./capture').grab(0, 64, 10).catch(() => {});
     }
   } else if (wasLive || !live) {
     endMonitoring();
@@ -402,12 +417,13 @@ function evaluate() {
     windows: monitor.windows, macTabs: monitor.macTabs,
     netAi: macFilter ? macFilter.recentAi().map(f => ({ pid: f.pid, host: f.host, bundle: f.app }))
       : (net ? aiConnections(net, policy.rules) : []),
+    extensionIds: CONFIG.extensionIds || [],
     selfPids: [process.pid], minExtensionVersion: state.minExtensionVersion, bridgeSquatter: state.bridgeSquatter,
     macFilterRequired: !!CONFIG.requireMacFilter, macFilterState: macFilter ? macFilter.state : 'ok',
     guardRequired: GUARD_MANAGED || guard.installed(), guardStatus: guard.readStatus(), lessonStartedAt: state.lessonStartedAt || 0,
     macFilterTamperAt: macFilter ? macFilter.lastForeignChange : 0,
     extensionVersions: bridge.live().map(c => c.version),
-    screenPermission: screenPermission(), accessibility: accessibilityOk(), captureOk: state.captureOk,
+    screenPermission: state.home ? undefined : screenPermission(), accessibility: accessibilityOk(), captureOk: state.home ? undefined : state.captureOk,
     automationDenied: [...monitor.automationDenied], monitorBroken, now,
   });
 
@@ -466,7 +482,7 @@ function evaluate() {
   state.violationKeys = keys;
   for (const v of fresh) conn.event({ kind: 'violation', title: v.text, category: v.category, url: r.url, app: r.app });
   // Skærmbillede som dokumentation kun, hvis læreren har slået det til for klassen – og eleven får altid besked
-  const autoEvidence = !!(state.lesson && state.lesson.config && state.lesson.config.autoEvidence);
+  const autoEvidence = !state.home && !!(state.lesson && state.lesson.config && state.lesson.config.autoEvidence);
   if (autoEvidence && fresh.length && now - state.lastEvidence > 20_000 && streamer) {
     state.lastEvidence = now;
     setTimeout(() => {
@@ -482,7 +498,8 @@ function evaluate() {
 
   // App-skift til loggen (kun når vinduet har været i front i 2 sek)
   const appKey = (monitor.fg.app || '') + '|' + (policy.rules.browserOf(monitor.fg.app) ? '' : monitor.fg.title || '');
-  if (appKey !== state.lastAppEvent.key) {
+  if (state.home) { state.pendingApp = null; } // hjemme: ingen programskift i loggen
+  else if (appKey !== state.lastAppEvent.key) {
     if (!state.pendingApp || state.pendingApp.key !== appKey) state.pendingApp = { key: appKey, ts: now, app: monitor.fg.app, title: monitor.fg.title };
     else if (now - state.pendingApp.ts > 2000) {
       state.lastAppEvent = { key: appKey, ts: now };
@@ -502,8 +519,9 @@ function evaluate() {
   const detailKey = JSON.stringify([r.tabs, r.apps.map(a => a.name)]);
   const changed = !state.lastStatus || key !== state.lastStatus.key;
   if (changed || now - state.lastStatusSent > 5000) {
-    const msg = Object.assign({ type: 'status' }, status);
-    if (detailKey !== state.lastDetailKey || now - state.lastDetailSent > 30_000) {
+    // Hjemme: kun "Skriver hjemme", lampen og kategorien – ingen adresse, intet program, ingen faner eller programmer
+    const msg = Object.assign({ type: 'status' }, state.home ? homeStatus(status) : status);
+    if (!state.home && (detailKey !== state.lastDetailKey || now - state.lastDetailSent > 30_000)) {
       msg.tabs = r.tabs.slice(0, 60);
       msg.apps = r.apps.slice(0, 120).map(a => ({ name: a.name, category: a.category, blocked: a.blocked }));
       if (conn.online) { state.lastDetailKey = detailKey; state.lastDetailSent = now; }
@@ -520,8 +538,15 @@ function startConnection() {
   conn = new Connection({
     serverUrl: SERVER_URL,
     getTokens: () => state.data.enrollments.map(e => e.token),
-    device: { os: osName(), host: os.hostname().slice(0, 80), version: app.getVersion() },
+    // Computerens navn sendes ikke (det er ofte elevens navn) – kun et tilfældigt id for denne installation
+    device: { os: osName(), id: state.data.deviceId || '', version: app.getVersion() },
   });
+  // Hjemme sendes kun de hændelser, der må sendes – og kun i den form, de må have
+  const sendEvent = conn.event.bind(conn);
+  conn.event = (item) => {
+    const it = state.home ? homeEvent(item) : item;
+    if (it) sendEvent(it);
+  };
   streamer = new Streamer(conn);
   streamer.onLiveChange = (on) => {
     state.watching = on;
@@ -553,7 +578,7 @@ function startConnection() {
       case 'lesson':
         if (msg.live && !lessonActive()) notifyStudent(`Lektionen ${msg.className || ''} er startet – HolyMoly er aktiv.`);
         if (msg.live) {
-          applyLesson({ live: true, className: msg.className, studentName: msg.studentName, teacherName: msg.teacherName, endsAt: Number(msg.endsAt), config: msg.config || {} });
+          applyLesson({ live: true, className: msg.className, studentName: msg.studentName, teacherName: msg.teacherName, endsAt: Number(msg.endsAt), config: msg.config || {}, solo: msg.solo || null });
           conn.event({ kind: 'info', title: 'HolyMoly forbundet (' + osName() + ')' });
         } else applyLesson(null);
         break;
@@ -587,15 +612,15 @@ function startConnection() {
         pushUi();
         break;
       case 'stream':
-        if (lessonActive()) streamer.setMode(msg.mode, msg.screen);
+        if (lessonActive() && !state.home) streamer.setMode(msg.mode, msg.screen);
         else streamer.setMode('off');
         break;
       case 'frameAck':
         streamer.ack();
         break;
       case 'screenshot':
-        // Læreren har trykket "Tag skærmbillede" – gemmes under elevens hændelser
-        if (lessonActive()) {
+        // Læreren har trykket "Tag skærmbillede" – gemmes under elevens hændelser (aldrig hjemme)
+        if (lessonActive() && !state.home) {
           streamer.evidence('Skærmbillede taget af læreren', { url: monitor.fg.url || (state.lastStatus && state.lastStatus.url) || '', app: monitor.fg.app }, { width: 1920, quality: 80 });
           notifyStudent('Din lærer tog et skærmbillede af din skærm.');
         }
@@ -632,7 +657,7 @@ function osName() {
 
 /* ---------------- browser-udvidelse ---------------- */
 bridge.on('nav', (n) => {
-  if (!lessonActive()) return;
+  if (!lessonActive() || state.home) return; // hjemme: ingen navigation til læreren
   conn.event({ kind: n.blocked ? 'blocked' : 'nav', url: n.url, title: n.title, detail: { browser: n.browser } });
 });
 bridge.on('blocked', (b) => {

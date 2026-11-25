@@ -11,8 +11,10 @@ const U = require('./util');
 const G = require('./guardapi');
 const { UniLogin, configFromEnv } = require('./oidc');
 const { DocStore } = require('./docs');
+const RET = require('./retention');
 const { createMailer } = require('./mail');
 const { createAccounts } = require('./accounts');
+const { createProxyTrust } = require('./proxytrust');
 
 /** Skolens ja fra opts.schoolApproval eller miljøet (DATAANSVARLIG, DPO_KONTAKT, DPIA_DATO, LEDELSE_JA_DATO). */
 const APPROVAL_FIELDS = [['controller', 'DATAANSVARLIG'], ['dpo', 'DPO_KONTAKT'], ['dpiaDate', 'DPIA_DATO'], ['approvedDate', 'LEDELSE_JA_DATO']];
@@ -47,10 +49,10 @@ function createServer(opts = {}) {
     host: opts.host ?? process.env.HOST ?? '0.0.0.0',
     dataDir: opts.dataDir ?? process.env.DATA_DIR ?? path.join(__dirname, '..', 'data'),
     signupCode: opts.signupCode ?? process.env.TEACHER_SIGNUP_CODE ?? '',
-    trustProxy: (opts.trustProxy ?? process.env.TRUST_PROXY) === '1' || opts.trustProxy === true,
-    retentionDays: Number(opts.retentionDays ?? process.env.LOG_RETENTION_DAYS ?? 30),
-    // Daglig kopi af databasen i <data>/backup (VACUUM INTO – en hel, konsistent fil). Antal dage der gemmes; 0 = slået fra.
-    backupDays: Math.max(0, Number(opts.backupDays ?? process.env.BACKUP_DAYS ?? 7) || 0),
+    // Liste af proxyer (værter, IP-adresser eller net), hvis X-Forwarded-* må bruges. '1' = alle (se proxytrust.js)
+    trustProxy: opts.trustProxy ?? process.env.TRUST_PROXY ?? '',
+    // Alle frister står i retention.js (kladder, versioner, dokumenter, beviser, log og backup)
+    retention: RET.fromEnv(opts),
     // Lærerens login holder højst så længe, uanset aktivitet (NIST SP 800-63B-4, AAL2: genlogin mindst hver 24. time).
     // 12 timer = det samme som cookien altid har holdt; nu håndhæver serveren det også (en stjålet cookie kan ikke holdes i live).
     sessionMaxHours: Math.min(24, Math.max(1, Number(opts.sessionMaxHours ?? process.env.SESSION_MAX_HOURS ?? 12) || 12)),
@@ -102,6 +104,9 @@ function createServer(opts = {}) {
     // Skolens ja (enkel tilstand/beta): dataansvarlig, DPO, DPIA og ledelsens ja. Uden dem startes ingen lektioner.
     schoolApproval: schoolApprovalFrom(opts.schoolApproval),
   };
+  cfg.retentionDays = cfg.retention.logDays;
+  // Daglig kopi af databasen i <data>/backup (VACUUM INTO – en hel, konsistent fil). Antal dage der gemmes; 0 = slået fra.
+  cfg.backupDays = cfg.retention.backupDays;
   // E-mail-bekræftelse er slået til, når serveren kan sende mails (eller VERIFY_EMAIL=1)
   cfg.verifyEmail = opts.verifyEmail ?? (process.env.VERIFY_EMAIL ? process.env.VERIFY_EMAIL === '1' : !!(cfg.smtpUrl || opts.mailSend));
   // To-faktor (godkendelses-app) kræves for e-mail-login. Unilogin har sin egen sikkerhed.
@@ -176,10 +181,12 @@ function createServer(opts = {}) {
 
   // Enkel tilstand uden at skolen driver serveren (SCHOOL_OPERATED=1): beviser mærkes "Testserver"
   const schoolOperated = opts.schoolOperated === true || String(opts.schoolOperated ?? process.env.SCHOOL_OPERATED ?? '') === '1';
+  // Funktioner, der kan slås fra. Beta (enkel tilstand): ingen lighedstjek mellem elevernes tekster.
+  const features = { similar: !cfg.simple };
   const docs = new DocStore(db, cfg.dataDir, { testServer: cfg.simple && !schoolOperated, minWords: opts.minProofWords });
   const hub = new Hub({ db, dataDir: cfg.dataDir, docs, publicUrl: cfg.publicUrl, getRules: () => rules, classConfig, log, staleMs: opts.staleMs,
     minAgentVersion: cfg.minAgentVersion, minExtensionVersion: cfg.minExtensionVersion, downloadUrl: cfg.downloadUrl,
-    requireGuard: cfg.requireGuard, compileFor: (classId) => ACRules.compile(rules, classConfig(classId)), lessonBlocked: () => lessonBlocked() });
+    requireGuard: cfg.requireGuard, compileFor: (classId, config) => ACRules.compile(rules, config || classConfig(classId)), lessonBlocked: () => lessonBlocked() });
 
   /* ---------------------------- auth ---------------------------- */
   const SESSION_MS = 12 * 3600_000; // uden aktivitet
@@ -198,13 +205,17 @@ function createServer(opts = {}) {
   const uniRl = new U.RateLimiter(120, 2); // UNI-Login: en hel klasse bag én skole-IP
   const apiRl = new U.RateLimiter(300, 20);
 
+  // X-Forwarded-* bruges kun fra en proxy i TRUST_PROXY (ellers kan enhver forfalske sin IP-adresse)
+  const proxyTrust = createProxyTrust(cfg.trustProxy, { log });
+  if (proxyTrust.all) log('ADVARSEL: TRUST_PROXY=1 stoler på alle. Skriv proxyens navn eller adresse i stedet, fx TRUST_PROXY=caddy.');
+  const fromProxy = (req) => proxyTrust.trusts(req.socket.remoteAddress);
   function clientIp(req) {
     // Den yderste værdi er den proxyen selv har tilføjet – de forreste kan klienten forfalske
-    if (cfg.trustProxy && req.headers['x-forwarded-for']) return String(req.headers['x-forwarded-for']).split(',').pop().trim();
+    if (req.headers['x-forwarded-for'] && fromProxy(req)) return String(req.headers['x-forwarded-for']).split(',').pop().trim();
     return req.socket.remoteAddress || '';
   }
   function isHttps(req) {
-    return req.socket.encrypted || (cfg.trustProxy && req.headers['x-forwarded-proto'] === 'https');
+    return req.socket.encrypted || (req.headers['x-forwarded-proto'] === 'https' && fromProxy(req));
   }
   function teacherFromReq(req) {
     const tok = U.parseCookies(req.headers.cookie).hm_session;
@@ -228,6 +239,14 @@ function createServer(opts = {}) {
     }
     return Object.assign(row, { sess: { hash, mfa: !!sess.mfa } });
   }
+  /** Gælder lærerens session stadig (findes, ikke udløbet, under den absolutte grænse)? Bruges af hub.heartbeat. */
+  function teacherSessionOk(hash) {
+    const sess = db.prepare('SELECT expires, created FROM sessions WHERE token_hash = ?').get(hash);
+    const now = Date.now();
+    if (!sess || sess.expires < now) return false;
+    return now - (sess.created ?? (sess.expires - SESSION_MS)) < SESSION_MAX_MS;
+  }
+  hub.teacherSessionOk = teacherSessionOk;
   function studentFromReq(req) {
     const tok = U.parseCookies(req.headers.cookie).hm_student;
     if (!tok) return null;
@@ -250,7 +269,7 @@ function createServer(opts = {}) {
     if (!origin) return true; // ikke-browser-klienter
     try {
       const o = new URL(origin);
-      return o.host === req.headers.host || (cfg.trustProxy && o.host === req.headers['x-forwarded-host']);
+      return o.host === req.headers.host || (o.host === req.headers['x-forwarded-host'] && fromProxy(req));
     } catch (e) { return false; }
   }
 
@@ -270,7 +289,7 @@ function createServer(opts = {}) {
    */
   const HOST_RE = /^[a-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-f:.]+\](:\d{1,5})?$/i;
   function cspFor(req) {
-    const fwd = cfg.trustProxy && req.headers['x-forwarded-host'];
+    const fwd = fromProxy(req) && req.headers['x-forwarded-host'];
     const host = String(fwd || req.headers.host || '').split(',')[0].trim();
     const ws = HOST_RE.test(host) ? (isHttps(req) ? `wss://${host}` : `ws://${host} wss://${host}`) : '';
     return "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; " +
@@ -356,7 +375,7 @@ function createServer(opts = {}) {
       }
       const s = db.prepare('SELECT id, guard_pubkey, guard_pair_expires FROM students WHERE guard_pair_hash = ?').get(h);
       if (!s || !s.guard_pair_expires || s.guard_pair_expires < Date.now()) return sendText(res, 404, 'ok=0\nerror=expired\n');
-      const info = JSON.stringify({ os: U.str(rep.os, 40), host: U.str(rep.host, 80), keystore: U.str(rep.keystore, 20), guard: U.str(rep.guard, 20) });
+      const info = JSON.stringify({ os: U.str(rep.os, 40), keystore: U.str(rep.keystore, 20), guard: U.str(rep.guard, 20) });
       db.prepare('UPDATE students SET guard_pubkey = ?, guard_seq = 0, guard_pair_hash = NULL, guard_pair_expires = NULL, guard_info = ?, guard_pair_used = ?, guard_pair_used_until = ? WHERE id = ?').run(pem, info, h, Date.now() + 60 * 60_000, s.id);
       hub.guardPaired(s.id);
       return sendText(res, 200, `ok=1\nstudent=${s.id}\n`);
@@ -440,7 +459,7 @@ function createServer(opts = {}) {
     hub.forgetClass(c.id);
   }
   const accounts = createAccounts({ db, cfg, mailer, log, send, fail, readJson, setSession, clientIp, deleteClassFully,
-    loginRl, loginEmailRl });
+    loginRl, loginEmailRl, closeTeacher: (id, exceptHash) => hub.closeTeacher(id, exceptHash) });
   /** Elev-appen: filer i data/downloads (fx HolyMoly-Setup.exe / HolyMoly.pkg) eller AGENT_DOWNLOAD_URL. */
   function downloadsInfo() {
     const dir = path.join(cfg.dataDir, 'downloads');
@@ -615,7 +634,8 @@ function createServer(opts = {}) {
 
     // --- offentlige ---
     if (p === '/api/info' && m === 'GET') {
-      return send(res, 200, { simple: cfg.simple, uniLogin: uni.enabled, signupRequiresCode: !!accounts.signupCodeNow(), firstTeacher: !!accounts.setupCode(), approval: approvalInfo(), signupOpen: cfg.signupOpen, licensing: cfg.licensing, trialDays: cfg.trialDays, verifyEmail: cfg.verifyEmail, require2fa: cfg.require2fa, company: cfg.company, downloads: downloadsInfo(), downloadUrl: cfg.downloadUrl, extensionUrls: cfg.extensionUrls, categories: ACRules.CATEGORIES, rulesVersion: rules.version });
+      return send(res, 200, { simple: cfg.simple, uniLogin: uni.enabled, signupRequiresCode: !!accounts.signupCodeNow(), firstTeacher: !!accounts.setupCode(), approval: approvalInfo(), approvalMissing: approvalMissingFields(), lessonBlocked: !!lessonBlocked(), signupOpen: cfg.signupOpen, licensing: cfg.licensing, trialDays: cfg.trialDays, verifyEmail: cfg.verifyEmail, require2fa: cfg.require2fa, company: cfg.company, downloads: downloadsInfo(), downloadUrl: cfg.downloadUrl, extensionUrls: cfg.extensionUrls, categories: ACRules.CATEGORIES, rulesVersion: rules.version,
+        retention: RET.publicInfo(cfg.retention), features });
     }
     if (await accounts.publicRoutes(req, res, p, m)) return;
     /* ---- UNI-Login ----
@@ -719,7 +739,9 @@ function createServer(opts = {}) {
     let bm;
     if ((bm = p.match(/^\/api\/bevis\/([A-Za-z0-9_-]{16})$/)) && m === 'GET') {
       const c = docs.certificate(bm[1]);
-      if (!c) return fail(res, 404, 'Beviset findes ikke');
+      // 404 kun for id'er, der aldrig er udstedt her. Et udløbet bevis giver 410.
+      if (!c) return fail(res, 404, 'Dette id er aldrig udstedt her');
+      if (c.expired) return send(res, 410, { error: 'Beviset er udløbet', expired: c.expired, created: c.created });
       // Navn og klasse står ikke i beviset. Elevens egen lærer (logget ind) får dem med – ingen andre.
       const t = teacherFromReq(req);
       const o = t && docs.certificateOwner(bm[1]);
@@ -748,7 +770,12 @@ function createServer(opts = {}) {
     }
     if (p === '/api/logout' && m === 'POST') {
       const tok = U.parseCookies(req.headers.cookie).hm_session;
-      if (tok) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(U.sha256(tok));
+      if (tok) {
+        const h = U.sha256(tok);
+        const row = db.prepare('SELECT teacher_id FROM sessions WHERE token_hash = ?').get(h);
+        db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(h);
+        if (row) hub.closeTeacher(row.teacher_id, null, h); // klasseværelset i denne browser lukkes også
+      }
       return send(res, 200, { ok: true }, { 'Set-Cookie': 'hm_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' });
     }
     if (p === '/api/enroll' && m === 'POST') {
@@ -860,7 +887,7 @@ function createServer(opts = {}) {
     // Mangler e-mail-bekræftelse, to-faktor eller skole, kan kun kontoen sættes op
     const need = accounts.needs(teacher, teacher.sess);
     if (need && !accounts.isOpenWhenNeeds(p, need)) {
-      const msg = { verify: 'Bekræft din e-mail først', '2fa': 'Slå to-faktor til først', school: 'Opret eller tilslut din skole først' }[need];
+      const msg = { verify: 'Bekræft din e-mail først', '2fa': 'Slå to-faktor til først', school: 'Opret eller tilslut din skole først', approval: 'Din konto venter på, at en kollega godkender den' }[need];
       return send(res, 403, { error: msg, needs: need });
     }
     if (await accounts.authedRoutes(req, res, p, m, teacher, teacher.sess)) return;
@@ -1079,6 +1106,8 @@ function createServer(opts = {}) {
         return send(res, 200, studentOut(db.prepare('SELECT * FROM students WHERE id = ?').get(s.id)));
       }
       if (m === 'DELETE') {
+        // Slet elev: også elevens beviser (ingen gravsten – eleven skal helt væk)
+        docs.deleteStudentCertificates(s.id);
         db.prepare('DELETE FROM students WHERE id = ?').run(s.id);
         hub.forgetStudent(s.id);
         const dir = path.join(cfg.dataDir, 'evidence', String(s.id));
@@ -1113,17 +1142,34 @@ function createServer(opts = {}) {
       if (!s) return fail(res, 404, 'Eleven findes ikke');
       return send(res, 200, { docs: docs.list(s.id) });
     }
-    // Afspil skriveforløbet og lighed med andre afleveringer i klassen (kun lærerens egne elever)
+    // Afspil skriveforløbet og lighed med andre afleveringer i klassen (kun lærerens egne elever og kun afleverede dokumenter)
     if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})\/(versions|similar)$/)) && m === 'GET') {
       const d = docs.full(mm[1]);
       if (!d || !ownStudent(teacher, d.studentId)) return fail(res, 404, 'Dokumentet findes ikke');
+      if (!d.submitted) return fail(res, 409, 'Kan ses, når dokumentet er afleveret');
       if (mm[2] === 'versions') return send(res, 200, { versions: docs.versions(mm[1]) });
+      if (!features.similar) return fail(res, 404, 'Ikke slået til på denne server');
       return send(res, 200, { similar: docs.similar(mm[1]) });
     }
     if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})$/)) && m === 'GET') {
       const d = docs.full(mm[1]);
-      if (!d || !ownStudent(teacher, d.studentId)) return fail(res, 404, 'Dokumentet findes ikke');
+      const s = d && ownStudent(teacher, d.studentId);
+      if (!s) return fail(res, 404, 'Dokumentet findes ikke');
+      // En kladde kan kun læses, mens klassens lektion kører (ikke når eleven skriver hjemme). Ellers kun titel og omfang.
+      if (!d.submitted && !(hub.lessonOf(s.class_id) && !hub.isHome(s.id))) {
+        return send(res, 200, { id: d.id, studentId: d.studentId, title: d.title, words: d.words, updated: d.updated, draft: true });
+      }
       return send(res, 200, d);
+    }
+    // Læreren sletter en kladde (kun dokumenter, der ikke er afleveret). Elevens kopi i appen røres ikke.
+    if ((mm = p.match(/^\/api\/docs\/([A-Za-z0-9_-]{16,64})$/)) && m === 'DELETE') {
+      const d = docs.full(mm[1]);
+      const s = d && ownStudent(teacher, d.studentId);
+      if (!s) return fail(res, 404, 'Dokumentet findes ikke');
+      const r = docs.deleteDraft(d.id, s.id);
+      if (!r.ok) return fail(res, 409, r.error);
+      hub.docDeleted(s.id, d.id, `${teacher.name} slettede kladden "${d.title || 'Uden titel'}"`);
+      return send(res, 200, { ok: true });
     }
     if ((mm = p.match(/^\/api\/students\/(\d+)\/events$/)) && m === 'GET') {
       const s = ownStudent(teacher, mm[1]);
@@ -1179,6 +1225,49 @@ function createServer(opts = {}) {
     return fail(res, 404, 'Ukendt adresse');
   }
 
+  /** Én linje i loggen ved start: hvad kører, og hvad mangler. */
+  function startupLine() {
+    const missing = approvalMissingFields();
+    return [
+      `Udgave: ${cfg.simple ? 'beta' : 'koncept'}`,
+      `Server: ${docs.testServer ? 'testserver' : 'skolens'}`,
+      missing.length ? `Skolens ja mangler: ${missing.join(', ')}` : 'Skolens ja: udfyldt',
+      `Vagt: ${cfg.requireGuard ? 'til' : 'fra'}`,
+      `Nøgle: ${docs.keyId}`,
+    ].join(' · ');
+  }
+
+  /* ---------------------------- helbred ---------------------------- */
+  /**
+   * /healthz (Docker HEALTHCHECK og Uptime Kuma): databasen svarer, der kan skrives, og signeringsnøglen er indlæst.
+   * deep: også nattens backup (højst 36 timer gammel) og fri plads på disken (mindst 1 GB).
+   * Returnerer navnene på det, der fejler (tom liste = alt er i orden). Svaret har ingen tal om lektioner eller version.
+   */
+  const MIN_FREE_BYTES = opts.minFreeBytes ?? 1024 ** 3;
+  function health(deep) {
+    const bad = [];
+    try { db.prepare('SELECT 1').get(); } catch (e) { bad.push('database'); }
+    if (!bad.length) {
+      try { db.prepare("INSERT INTO meta (key, value) VALUES ('healthz', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(Date.now())); } catch (e) { bad.push('disk'); }
+    }
+    if (!docs.privateKey || !docs.keyId || !fs.existsSync(path.join(cfg.dataDir, 'proof-key.pem'))) bad.push('nøgle');
+    if (deep) {
+      if (cfg.backupDays) {
+        let newest = 0;
+        try {
+          const dir = path.join(cfg.dataDir, 'backup');
+          for (const n of fs.readdirSync(dir)) if (/^holymoly-\d{4}-\d{2}-\d{2}\.db$/.test(n)) newest = Math.max(newest, fs.statSync(path.join(dir, n)).mtimeMs);
+        } catch (e) { /* ingen backup-mappe */ }
+        if (Date.now() - newest > 36 * 3600_000) bad.push('backup');
+      }
+      try {
+        const st = fs.statfsSync(cfg.dataDir);
+        if (st.bavail * st.bsize < MIN_FREE_BYTES && !bad.includes('disk')) bad.push('disk');
+      } catch (e) { if (!bad.includes('disk')) bad.push('disk'); }
+    }
+    return bad;
+  }
+
   /* ---------------------------- server ---------------------------- */
   const server = http.createServer((req, res) => {
     if (isHttps(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
@@ -1199,7 +1288,10 @@ function createServer(opts = {}) {
       });
       return;
     }
-    if (url.pathname === '/healthz') return send(res, 200, 'ok');
+    if (url.pathname === '/healthz') {
+      const bad = health(url.searchParams.get('deep') === '1');
+      return send(res, bad.length ? 503 : 200, bad.length ? 'fejl: ' + bad.join(', ') : 'ok');
+    }
     // RFC 9116: hvor forskere melder sikkerhedsfejl. Kun hvis der er en kontakt; Expires er påkrævet.
     if (url.pathname === '/.well-known/security.txt' || url.pathname === '/security.txt') {
       const contact = String(cfg.securityContact || cfg.company.email || '').trim();
@@ -1241,7 +1333,7 @@ function createServer(opts = {}) {
       const teacher = teacherFromReq(req);
       const c = teacher && sameOrigin(req) && !accounts.needs(teacher, teacher.sess) ? ownClass(teacher, url.searchParams.get('classId')) : null;
       if (!c) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
-      wssTeacher.handleUpgrade(req, socket, head, (ws) => hub.handleTeacher(ws, teacher, c));
+      wssTeacher.handleUpgrade(req, socket, head, (ws) => hub.handleTeacher(ws, teacher, c, teacher.sess.hash));
       return;
     }
     socket.destroy();
@@ -1277,11 +1369,17 @@ function createServer(opts = {}) {
     db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
     db.prepare('DELETE FROM student_sessions WHERE expires < ?').run(Date.now());
     db.prepare('DELETE FROM tokens WHERE expires < ?').run(Date.now());
+    // Dokumenter, afspilning, skrivedetaljer og beviser efter fristerne i retention.js
+    try { RET.purge(db, cfg.retention, Date.now()); } catch (e) { log('Oprydning af dokumenter fejlede', e); }
     // Skoler, hvis prøveperiode/licens har været udløbet længe nok (kun på licens-servere)
     try { accounts.purgeExpired(); } catch (e) { log('Sletning efter ophør fejlede', e); }
     accounts.pruneSecLog();
   }
+  // Serverens kørsel: start og "i live" hvert minut (nedetid mellem to kørsler tæller ikke mod elevernes beviser)
+  const runId = Number(db.prepare('INSERT INTO server_runs (start, last_alive) VALUES (?, ?)').run(Date.now(), Date.now()).lastInsertRowid);
+  const alive = (clean = 0) => { try { db.prepare('UPDATE server_runs SET last_alive = ?, clean = ? WHERE rowid = ?').run(Date.now(), clean, runId); } catch (e) { /* lukket */ } };
   const timers = [
+    setInterval(() => alive(), 60_000),
     setInterval(() => hub.heartbeat(), 20_000),
     setInterval(retention, 3600_000),
     setInterval(backup, 3600_000), // tjekker hver time, laver højst én kopi pr. dag
@@ -1305,7 +1403,8 @@ function createServer(opts = {}) {
     setupCode: () => accounts.setupCode(),
     /** Enkel tilstand: de felter i skolens ja, der mangler (miljøvariablernes navne). */
     approvalMissing: () => approvalMissingFields(),
-    listen() {
+    async listen() {
+      await proxyTrust.ready; // proxyernes værtsnavne er slået op, før den første forespørgsel kommer
       return new Promise((resolve) => server.listen(cfg.port, cfg.host, () => {
         log(`HolyMoly-server kører på http://${cfg.host}:${server.address().port}`);
         if (cfg.smtpUrl && !cfg.publicUrl) log('ADVARSEL: PUBLIC_URL er ikke sat – links i e-mails kan ikke laves.');
@@ -1313,12 +1412,15 @@ function createServer(opts = {}) {
         const setup = accounts.setupCode();
         if (setup) log('Opsætningskode til første lærer: ' + setup);
         if (cfg.simple && approvalMissingFields().length) log('ADVARSEL: ' + APPROVAL_MISSING + ' Mangler: ' + approvalMissingFields().join(', '));
+        log(startupLine());
         resolve(server.address().port);
       }));
     },
     close() {
       hub.shuttingDown = true;
       timers.forEach(clearInterval);
+      proxyTrust.stop();
+      alive(1);
       clearInterval(hub.timer);
       for (const c of wssAgent.clients) c.terminate();
       for (const c of wssTeacher.clients) c.terminate();
@@ -1327,7 +1429,7 @@ function createServer(opts = {}) {
   };
 }
 
-module.exports = { createServer, weakPin };
+module.exports = { createServer, weakPin, APPROVAL_FIELDS };
 
 if (require.main === module) {
   // OWASP A10: en glemt fejl i et løfte må ikke vælte serveren midt i en lektion (alle elever ville blive grå).
@@ -1338,8 +1440,10 @@ if (require.main === module) {
   // Udgaven (beta = enkel tilstand til skolen, koncept = den fulde udgave) står i server/edition.json
   let edition = {};
   try { edition = require('../edition.json'); } catch (e) { /* ingen fil = den fulde udgave */ }
-  const s = createServer({ simple: (process.env.SIMPLE ?? (edition.simple ? '1' : '0')) === '1' });
-  if (edition.edition) console.log(new Date().toISOString(), `HolyMoly ${edition.edition}${edition.simple ? ' (enkel tilstand)' : ''}`);
+  // SIMPLE=1/0 i miljøet går forud for edition.json. Tom (fx "SIMPLE=" i compose) tæller som ikke sat.
+  const envSimple = String(process.env.SIMPLE ?? '').trim();
+  const simple = envSimple ? envSimple === '1' : !!edition.simple;
+  const s = createServer({ simple });
   s.listen();
   const stop = () => s.close().then(() => process.exit(0));
   process.on('SIGINT', stop);

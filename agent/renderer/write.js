@@ -267,9 +267,10 @@
     ed.contentEditable = can ? 'true' : 'false';
     $('title').disabled = !can;
     $('submit').disabled = !can;
+    $('del').hidden = !(doc && !doc.submitted);
     const n = $('notice');
     if (doc && doc.submitted) { n.textContent = doc.result && doc.result.certId ? `Afsluttet med mærket "${labelFor(doc.result.place)}". Dokumentet kan ikke længere ændres – vedhæft det til en aflevering under "Afleveringer".` : 'Afsluttet uden bevis. Dokumentet kan ikke længere ændres.'; n.hidden = false; }
-    else if (!lessonLive) { n.textContent = 'Du kan skrive her, når din lærer har startet en lektion. Så kan HolyMoly bevise, at teksten er din egen.'; n.hidden = false; }
+    else if (!lessonLive) { n.textContent = 'Du kan skrive her, når din lærer har startet en lektion eller du har startet en skriveøkt.'; n.hidden = false; }
     else n.hidden = true;
     showPreview();
   }
@@ -422,6 +423,7 @@
     $('asg-count').textContent = String(open);
     if ($('asg').open) renderAssignments();
   }
+  const HOME_TEXT = 'Hjemme blokerer HolyMoly kun AI-tjenester og fjernstyring, mens skrivevinduet er åbent. Din lærer ser kun, at du skriver, din lampe og om noget blev blokeret – ikke din skærm, dine faner, programmer eller hvilke sider du besøger. Hjemme tages der aldrig skærmbilleder.';
   async function renderAssignments() {
     const docs = (await window.hmw.state()).docs.filter(d => d.submitted);
     const ul = $('asg-list');
@@ -441,7 +443,7 @@
       write.title = lessonLive || canHome ? '' : (a.home ? 'Fristen er overskredet' : 'Denne aflevering skrives i timen, når din lærer har startet en lektion');
       write.addEventListener('click', async () => {
         if (canHome) {
-          // Skriveøkt: HolyMoly er aktiv på computeren, mens du skriver – præcis som i timen
+          // Skriveøkt hjemme: kun AI og fjernstyring blokeres, og kun mens skrivevinduet er åbent
           write.disabled = true;
           const r = await window.hmw.session(a.id, true);
           write.disabled = false;
@@ -452,7 +454,7 @@
         await newDoc({ assignmentId: a.id });
       });
       row.append(write);
-      if (a.home) li.append(el('div', 'muted', 'Må skrives hjemme. HolyMoly er aktiv på computeren, mens skrivevinduet er åbent.'));
+      if (a.home) li.append(el('div', 'muted', 'Må skrives hjemme. ' + HOME_TEXT));
       if (docs.length) {
         const sel = el('select');
         sel.setAttribute('aria-label', 'Vælg dokument');
@@ -486,6 +488,19 @@
     else if (r && r.error) toast(r.error);
   }
   $('docx').addEventListener('click', exportDocx);
+
+  /* ---------- slet kladde ---------- */
+  $('del').addEventListener('click', () => { if (doc && !doc.submitted) $('del-dlg').showModal(); });
+  $('del-dlg').addEventListener('close', async () => {
+    if ($('del-dlg').returnValue !== 'yes' || !doc || doc.submitted) return;
+    dirty = false;
+    const r = await window.hmw.remove(doc.id);
+    if (!r.ok) { toast(r.error || 'Kunne ikke slette kladden'); return; }
+    toast('Kladden er slettet');
+    doc = null;
+    const s = await window.hmw.state();
+    if (s.docs.length) await open(s.docs[0].id); else await newDoc();
+  });
 
   /* ---------- start ---------- */
   window.hmw.onLesson((live) => { lessonLive = !!live; applyMode(); });

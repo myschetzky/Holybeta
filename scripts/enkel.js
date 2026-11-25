@@ -4,6 +4,7 @@
  *
  *   npm run enkel                         starter serveren (data gemmes i server/data)
  *   npm run enkel -- nulstil <brugernavn> laver en ny midlertidig adgangskode til en lærer
+ *   npm run enkel -- godkend <brugernavn> godkender en ny lærer (når ingen kollega kan gøre det)
  *
  * Lærere opretter sig med navn, brugernavn og adgangskode (den første med opsætningskoden, som skrives her ved start).
  * Elever skriver klassekoden, deres navn og en kode på 4 cifre i HolyMoly-appen. Lektioner kræver skolens ja:
@@ -31,6 +32,19 @@ if (process.argv[2] === 'nulstil') {
   db.prepare('UPDATE teachers SET pass_hash = ? WHERE id = ?').run(U.hashPassword(pw), t.id);
   db.prepare('DELETE FROM sessions WHERE teacher_id = ?').run(t.id); // log ud overalt
   console.log(`Ny adgangskode til ${t.name} (${user}):\n\n    ${pw}\n\nBed læreren skifte den under Konto efter login.`);
+  process.exit(0);
+}
+
+if (process.argv[2] === 'godkend') {
+  // Normalt godkender en kollega nye lærere i dashboardet. Her kan den, der driver serveren, gøre det.
+  const user = String(process.argv[3] || '').trim().toLowerCase();
+  if (!user) { console.error('Skriv brugernavnet:  npm run enkel -- godkend <brugernavn>'); process.exit(1); }
+  const db = require('../server/src/db.js').open(DATA_DIR);
+  const t = db.prepare('SELECT id, name, approved FROM teachers WHERE email = ?').get(user);
+  if (!t) { console.error(`Ingen lærer med brugernavnet "${user}".`); process.exit(1); }
+  if (t.approved) { console.log(`${t.name} (${user}) er allerede godkendt.`); process.exit(0); }
+  db.prepare('UPDATE teachers SET approved = ? WHERE id = ?').run(Date.now(), t.id);
+  console.log(`${t.name} (${user}) er godkendt.`);
   process.exit(0);
 }
 

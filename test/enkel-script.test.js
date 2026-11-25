@@ -37,3 +37,21 @@ test('npm run enkel: opsætningskode og advarsel om skolens ja', async () => {
   assert.match(out, /Opsætningskode til første lærer/);
   assert.doesNotMatch(out, /ADVARSEL: Skolens ja mangler/);
 });
+
+test('npm run enkel -- godkend <brugernavn>: godkender en ventende lærer', () => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-enkel-'));
+  const db = require('../server/src/db.js').open(dir);
+  db.prepare('INSERT INTO teachers (email, name, pass_hash, created) VALUES (?,?,?,?)').run('jens', 'Jens', 'x', Date.now());
+  db.close();
+  const run = (...a) => spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'scripts', 'enkel.js'), ...a], { env: Object.assign({}, process.env, { DATA_DIR: dir }), encoding: 'utf8' });
+  let r = run('godkend', 'jens');
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Jens \(jens\) er godkendt/);
+  r = run('godkend', 'ukendt');
+  assert.strictEqual(r.status, 1);
+  const db2 = require('../server/src/db.js').open(dir);
+  assert.ok(db2.prepare("SELECT approved FROM teachers WHERE email = 'jens'").get().approved);
+  db2.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

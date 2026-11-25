@@ -184,7 +184,7 @@ pair_students() {
     grep -qx "$sid" "$STATE/paired" 2>/dev/null && continue
     ensure_key || continue
     pub=$(/usr/bin/openssl ec -in "$KEY" -pubout -outform DER 2>/dev/null | /usr/bin/openssl base64 -A)
-    printf 'v=1\ncode=%s\npub=%s\nos=mac\nhost=%s\nkeystore=file\nguard=%s\n' "$code" "$pub" "$(clean "$(hostname)")" "$VERSION" > "$STATE/body"
+    printf 'v=1\ncode=%s\npub=%s\nos=mac\nkeystore=file\nguard=%s\n' "$code" "$pub" "$VERSION" > "$STATE/body"
     st=$(post /api/guard/pair "$STATE/body")
     if [ "$st" = 200 ]; then echo "$sid" >> "$STATE/paired"
     elif [ "$st" = 409 ]; then add_tamper 'En anden (falsk) vagt er allerede tilknyttet denne elev'; fi

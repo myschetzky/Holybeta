@@ -101,6 +101,10 @@ class Writer {
       const key = 's:' + (Number(msg.assignmentId) || 0);
       const resolve = this.pending.get(key);
       if (resolve) { this.pending.delete(key); resolve({ ok: !!msg.ok, error: String(msg.error || ''), endsAt: Number(msg.endsAt) || 0 }); }
+    } else if (msg.type === 'doc-deleted') {
+      const key = 'd:' + String(msg.id || '');
+      const resolve = this.pending.get(key);
+      if (resolve) { this.pending.delete(key); resolve({ ok: !!msg.ok, error: String(msg.error || '') }); }
     } else if (msg.type === 'assignment-result') {
       const key = 'a:' + (Number(msg.assignmentId) || 0);
       const resolve = this.pending.get(key);
@@ -162,7 +166,25 @@ class Writer {
       const d = { id: crypto.randomUUID(), title: asg ? asg.title.slice(0, D.LIMITS.title) : '', blocks: [], stats: {}, created: Date.now(), updated: Date.now(), submitted: 0, result: null, assignmentId: asg ? asg.id : 0 };
       this.docs.unshift(d);
       this._persist();
+      // Serveren ser dokumentet straks (tomt), så den kan følge det fra første tegn (et nyt dokument må højst have 150 tegn første gang)
+      this._send(d);
       return { id: d.id };
+    });
+    // Slet en kladde: først hos serveren, derefter på computeren. Afsluttede dokumenter kan ikke slettes.
+    ipcMain.handle('write:delete', async (_e, id) => {
+      const d = this._get(String(id || ''));
+      if (!d) return { ok: false, error: 'Dokumentet findes ikke' };
+      if (d.submitted) return { ok: false, error: 'Et afsluttet dokument kan ikke slettes' };
+      const key = 'd:' + d.id;
+      const r = await new Promise((resolve) => {
+        this.pending.set(key, resolve);
+        if (!this.o.send({ type: 'doc-delete', id: d.id })) { this.pending.delete(key); resolve({ ok: false, error: 'Ingen forbindelse til HolyMoly-serveren. Prøv igen senere.' }); }
+        setTimeout(() => { if (this.pending.delete(key)) resolve({ ok: false, error: 'Serveren svarede ikke – prøv igen' }); }, 15_000);
+      });
+      if (!r.ok) return r;
+      this.docs = this.docs.filter(x => x.id !== d.id);
+      this._persist();
+      return { ok: true };
     });
     ipcMain.handle('write:load', (_e, id) => {
       const d = this._get(id);

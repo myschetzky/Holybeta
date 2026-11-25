@@ -18,11 +18,11 @@ Pejlemærker for al videreudvikling. En ny funktion skal opfylde alle fire:
 | Tag skærmbillede (gemmes med tid og adresse) | Dokumentation ved mistanke |
 | Frys én / alle skærme med besked | "Kig op på tavlen" |
 | Gennemgang: alle skærme på standby med ur, dato og tid tilbage af lektionen | Alle kigger op – og ved hvor længe der er igen |
-| **Skriv i HolyMoly**: Word-agtig editor i elev-appen; indsæt og træk-og-slip er blokeret; skriveforløbet måles | Skriftlige opgaver uden AI og copy-paste |
-| **Skrive-bevis**: signeret bevis (Ed25519) når teksten er tastet under overvågning, uden rød lampe, i menneskeligt tempo og uden AI-spor; alle kan tjekke det på /bevis/… | Dokumentation over for censor, forældre og klagesager |
+| **Skriv i HolyMoly**: Word-agtig editor i elev-appen; indsæt og træk-og-slip er blokeret; skriveforløbet måles | Skriftlige opgaver, der er tastet i HolyMoly uden indsat tekst |
+| **Skrive-bevis**: signeret bevis (Ed25519) når teksten er tastet under overvågning, uden rød lampe, i menneskeligt tempo og uden ordrette AI-fraser; alle kan tjekke det på /bevis/… | Dokumentation over for censor, forældre og klagesager |
 | Elevens dokumenter i elevskuffen (fanen Dokumenter) med begrundelse, hvis der ikke er bevis; hent som Word | Læreren ser teksten og forløbet ét sted |
 | **Afspil skriveforløbet**: skyder/afspil gennem versionerne (hver ~20 sek.), det nye fremhævet | Se hvordan teksten blev til – stærkere end et gæt |
-| **Ligner andre afleveringer**: lokalt tjek af fælles 5-ords-sætningsdele mellem klassens dokumenter (info, aldrig rød) | Opdager afskrift mellem elever uden AI eller betaling |
+| **Ligner andre afleveringer**: lokalt tjek af fælles 5-ords-sætningsdele mellem klassens dokumenter (info, aldrig rød) | Opdager afskrift mellem elever – lokalt, uden eksterne tjenester |
 | **Ræk hånden op ✋**: knap i elev-appen; ✋ på bordet og i toppen; læreren tager hånden ned | Hjælp uden at råbe – også for de stille elever |
 | **Lektionens links**: læreren lægger links ind før timen; eleverne åbner dem med ét klik i appen; advarsel + "Tillad" hvis et link er blokeret | Ingen links der skal sendes ud i timen |
 | **Lektionsrapport**: minutter grøn/rød/grå pr. elev (tidslinje), årsager, fund, forsøg, ✋ og afleveringer; åbner når lektionen slutter; CSV | Overblik og opfølgning uden at grave i logs |
@@ -37,7 +37,7 @@ Pejlemærker for al videreudvikling. En ny funktion skal opfylde alle fire:
 | Prøvetilstand: kun tilladte sider | Til prøver i timen (ikke eksamen i beta) |
 | Start/afslut lektion, stopper automatisk | Ingen overvågning uden for timen |
 | Klassekode: eleverne tilmelder sig selv og dukker op med det samme; kan fornyes og lukkes | Ingen lister at taste ind |
-| Login: vælg Lærer eller Elev, UNI-Login (OpenID Connect via STIL) eller e-mail | Ingen ekstra adgangskode; elevens navn kan ikke forfalskes |
+| Login: vælg Lærer eller Elev, UNI-Login (OpenID Connect via STIL) eller e-mail | Ingen ekstra adgangskode; elevens navn kommer fra UNI-Login |
 | Velkomst første gang + i-knap med vejledning og farvernes betydning | Ingen manual nødvendig |
 | Lyst tema som standard, mørkt under Indstillinger | Til projektor og mørke lokaler |
 | Lærer-logbog: "Mette så skærmen live 10.32" | Ansvarlighed over for elever og forældre |

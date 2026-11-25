@@ -28,8 +28,10 @@ npm run enkel
 ## Lærere og lærerkoden
 
 - Den første lærer bruger **opsætningskoden**, som serveren skriver i loggen, når den starter (`Opsætningskode til første lærer: XXXX-XXXX`). Koden virker én gang.
-- Derefter kræves **lærerkoden**. Den står under *Konto → Kolleger* hos alle lærere. Så kan en elev ikke oprette sig som lærer, selvom serveren er offentlig.
-- *Lav ny lærerkode* gør den gamle ugyldig. Koden skifter også af sig selv efter 14 dage. Lærere, der allerede er oprettet, mærker intet.
+- Derefter kræves **lærerkoden**. En lærer klikker *Vis kode* under *Konto → Kolleger*. Koden gælder i 30 minutter.
+- En ny lærer skal **godkendes af en kollega**, før kontoen kan bruges. Den nye lærer ser "Din konto venter på godkendelse". Kollegerne ser "Ny lærer venter: navn (oprettet dato kl. tid) – Godkend / Afvis" øverst på siden med klasserne. *Afvis* sletter kontoen. Så kan en elev, der har set koden, ikke få en lærerkonto.
+- *Lav ny lærerkode* gør den gamle ugyldig. Lærere, der allerede er oprettet, mærker intet.
+- Kan ingen kollega godkende (fx hvis den eneste godkendte lærer er stoppet), kan den, der driver serveren, gøre det: `node scripts/enkel.js godkend <brugernavn>` (i Docker: `docker compose -f deploy/docker-compose.yml exec holymoly node /app/scripts/enkel.js godkend <brugernavn>`).
 
 ## Elevernes kode
 
@@ -79,7 +81,7 @@ Elevernes accept dækker informationen til eleverne. Den erstatter ikke skolens 
 
 HolyMoly bruger SQLite: én fil, `holymoly.db`, i datamappen. Der er ingen separat databaseserver at installere eller passe.
 
-- Hver nat laves en hel kopi i `backup/holymoly-ÅÅÅÅ-MM-DD.db` i datamappen. De seneste 7 gemmes (`BACKUP_DAYS`).
+- Hver nat laves en hel kopi i `backup/holymoly-ÅÅÅÅ-MM-DD.db` i datamappen. De seneste 14 gemmes (`BACKUP_DAYS`).
 - Skærmbilleder ligger i `evidence/` ved siden af.
 - En kopi kan åbnes med ethvert SQLite-værktøj, fx DB Browser for SQLite.
 
@@ -90,5 +92,14 @@ HolyMoly bruger SQLite: én fil, `holymoly.db`, i datamappen. Der er ingen separ
 | `PORT` | 8080 | |
 | `DATA_DIR` | `server/data` | Database og skærmbilleder |
 | `PUBLIC_URL` | – | https-adressen |
-| `BACKUP_DAYS` | 7 | Antal daglige kopier af databasen; 0 = slået fra |
+| `BACKUP_DAYS` | 14 | Antal daglige kopier af databasen; 0 = slået fra |
+| `DRAFT_DAYS` | 60 | Kladder slettes så mange dage efter seneste ændring |
+| `VERSIONS_DAYS` | 60 | Afspilning og skrivedetaljer slettes så mange dage efter aflevering |
+| `DOC_RETENTION_DAYS` | 365 | Afleverede dokumenter slettes så mange dage efter aflevering (beviset bliver uden navn) |
+| `CERT_YEARS` | 3 | Beviser kan tjekkes så mange år; derefter svarer tjek-siden "udløbet" |
+| `LOG_RETENTION_DAYS` | 30 | Hændelser, skærmbilleder og lampernes tidslinje |
 | `REQUIRE_GUARD` | 1 | `0`: elever kan være grønne uden HolyMoly-vagten (kun til test) |
+
+## Ny elev-app
+
+Når en ny version af elev-appen udgives, så hæv `MIN_AGENT_VERSION` til den nye version (fx `MIN_AGENT_VERSION=1.2.5`). Ældre apps bliver så grå hos læreren og beder eleven om at opdatere. Det er vigtigt, når den nye version lukker et sikkerhedshul. Fx nægter appen fra og med denne version at starte med fejlfinding slået til (`--remote-debugging-port`, `--inspect`), men en gammel app kan stadig startes sådan.

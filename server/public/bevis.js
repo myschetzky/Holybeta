@@ -36,11 +36,24 @@
     let c;
     try {
       const r = await fetch('/api/bevis/' + id, { credentials: 'same-origin' });
+      // 410: id'et er udstedt her, men beviset er udløbet efter skolens frist
+      if (r.status === 410) {
+        const x = await r.json().catch(() => ({}));
+        $('loading').hidden = true;
+        $('expired').hidden = false;
+        if (x.created) $('expired-text').textContent = `Beviset blev udstedt her ${fmt(x.created)}, men skolens frist for at gemme det er nået.`;
+        return;
+      }
       if (!r.ok) throw new Error();
       c = await r.json();
     } catch (e) { $('loading').hidden = true; $('missing').hidden = false; return; }
     $('loading').hidden = true;
     $('proof').hidden = false;
+    // Gravsten: teksten er slettet efter skolens frist, men beviset gælder stadig
+    if (c.docDeleted && c.valid && !c.legacy) {
+      $('deleted').hidden = false;
+      $('deleted').textContent = `Beviset er gyldigt. Skolen har slettet teksten efter sin frist (${fmt(c.docDeleted)}). Upload filen for at tjekke den.`;
+    }
     const dl = $('facts');
     if (c.owner) {
       $('owner').hidden = false;

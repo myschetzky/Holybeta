@@ -491,3 +491,25 @@ test('sikkerhed: skriveøkter efter genstart, mod en klasselektion, kvote, genbr
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('nyt dokument: fast budget på 150 tegn første gang serveren ser det – og appen sender det tomme dokument straks', () => {
+  const { dir, db, docs, anna } = setup();
+  const text = SENT.repeat(12);
+  // 800 tegn første gang (fx forberedt tekst i en redigeret documents.json) – også efter en lang lektion
+  const big = crypto.randomUUID();
+  const r = docs.save(anna, { id: big, title: 'R', blocks: blocksOf(text.slice(0, 800)), stats: { typed: 900 } }, green, 1, 5_000_000, 60 * 60_000);
+  assert.ok(r.ok);
+  assert.match(JSON.parse(r.doc.monitor).flags.join(), /Dokumentet havde allerede \d+ tegn/);
+  assert.ok(r.preview.categories.some(c => c.key === 'indsat'));
+  // Op til 150 tegn er i orden
+  const ok = crypto.randomUUID();
+  const r2 = docs.save(anna, { id: ok, title: '', blocks: [{ t: 'p', r: [{ x: text.slice(0, 135) }] }], stats: { typed: 150 } }, green, 1, 5_000_000, 0);
+  assert.deepStrictEqual(JSON.parse(r2.doc.monitor).flags, []);
+  // Et tomt dokument (sendes af appen, når eleven trykker "Nyt dokument")
+  assert.ok(docs.save(anna, { id: crypto.randomUUID(), title: '', blocks: [], stats: {} }, green, 1, 5_000_000).ok);
+  const writer = fs.readFileSync(path.join(__dirname, '..', 'agent', 'src', 'writer.js'), 'utf8');
+  const create = writer.slice(writer.indexOf("ipcMain.handle('write:create'"), writer.indexOf("ipcMain.handle('write:delete'"));
+  assert.match(create, /this\._send\(d\)/, 'write:create sender dokumentet til serveren med det samme');
+  db.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

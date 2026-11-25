@@ -17,6 +17,7 @@
     <section class="proof" id="proof" hidden>
       <div class="proof-head bad" id="testserver" hidden>Testserver – må ikke bruges til bedømmelse</div>
       <div class="proof-head" id="verdict" aria-live="polite"></div>
+      <p id="deleted" hidden></p>
       <p class="proof-mark" id="mark"></p>
       <dl class="proof-facts" id="facts"></dl>
       <div id="owner" hidden>
@@ -52,8 +53,12 @@
       </details>
     </section>
     <section class="proof" id="missing" hidden>
-      <div class="proof-head bad">✗ Beviset findes ikke</div>
+      <div class="proof-head bad">✗ Dette id er aldrig udstedt her</div>
       <p>Tjek at adressen er skrevet rigtigt. Et HolyMoly-bevis har en adresse som <code>/bevis/</code> efterfulgt af 16 tegn.</p>
+    </section>
+    <section class="proof" id="expired" hidden>
+      <div class="proof-head">Beviset er udløbet</div>
+      <p id="expired-text">Beviset blev udstedt her, men skolens frist for at gemme det er nået.</p>
     </section>
   </main>
   <script src="/shared/doc.js"></script>

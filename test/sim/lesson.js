@@ -50,7 +50,7 @@ class Student {
     this.status();
     if (!this.opts.noGuard) {
       this.kp = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
-      await this.signed('/api/guard/pair', `v=1\ncode=${w.guardPair[this.id]}\npubblob=${eccBlob(this.kp.publicKey)}\nos=windows\nhost=PC\nkeystore=tpm\nguard=1.3.0\n`);
+      await this.signed('/api/guard/pair', `v=1\ncode=${w.guardPair[this.id]}\npubblob=${eccBlob(this.kp.publicKey)}\nos=windows\nkeystore=tpm\nguard=1.3.0\n`);
       this.seq = 0;
       await this.beat();
       this.guardTimer = setInterval(() => this.beat(), 3000);

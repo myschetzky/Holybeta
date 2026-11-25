@@ -99,6 +99,28 @@ test('ræk hånden op, lektionsrapport, afspil skriveforløbet og ligheds-tjek',
     save(bo, bDoc, essay.replace('1800', '1810') + ' Det er min egen afslutning.');
     await until(() => bo.msgs.find(m => m.type === 'doc-saved' && m.ok));
 
+    // Kladder: kan ikke afspilles eller sammenlignes, før de er afleveret – men kan læses i klassens lektion
+    const notYet = await call('GET', `/api/docs/${aDoc}/versions`);
+    assert.strictEqual(notYet._status, 409);
+    assert.match(notYet.error, /når dokumentet er afleveret/);
+    assert.strictEqual((await call('GET', `/api/docs/${bDoc}/similar`))._status, 409);
+    const live = await call('GET', `/api/docs/${aDoc}`);
+    assert.ok(!live.draft && Array.isArray(live.blocks), 'i lektionen kan læreren læse kladden');
+    // Kun afleverede dokumenter sammenlignes: Bo afleverer, Annas kladde tæller ikke med
+    await sleep(1600);
+    bo.send(JSON.stringify({ type: 'doc-submit', id: bDoc, force: true }));
+    assert.ok((await until(() => bo.msgs.find(m => m.type === 'doc-result'))).ok);
+    assert.deepStrictEqual((await call('GET', `/api/docs/${bDoc}/similar`)).similar, []);
+    await sleep(1600);
+    anna.send(JSON.stringify({ type: 'doc-submit', id: aDoc, force: true }));
+    assert.ok((await until(() => anna.msgs.find(m => m.type === 'doc-result'))).ok);
+    // En ny kladde, som Anna skriver videre på efter timen
+    const cDoc = crypto.randomUUID();
+    await sleep(1600);
+    anna.msgs.length = 0;
+    save(anna, cDoc, essay.slice(0, 40));
+    await until(() => anna.msgs.find(m => m.type === 'doc-saved' && m.ok));
+
     const v = await call('GET', `/api/docs/${aDoc}/versions`);
     assert.strictEqual(v.versions.length, 2, 'to versioner at afspille');
     assert.ok(v.versions[0].text.length < v.versions[1].text.length);
@@ -122,6 +144,11 @@ test('ræk hånden op, lektionsrapport, afspil skriveforløbet og ligheds-tjek',
     const csv = await call('GET', `/api/classes/${cls.id}/lessons/${lessons.lessons[0].id}.csv`);
     assert.match(csv._type, /text\/csv/);
     assert.match(csv._text, /"Bo Nielsen";.*chatgpt/);
+    // Efter timen: kladden viser kun titel og omfang
+    const draft = await call('GET', `/api/docs/${cDoc}`);
+    assert.deepStrictEqual(Object.keys(draft).filter(k => k !== '_status').sort(), ['draft', 'id', 'studentId', 'title', 'updated', 'words']);
+    assert.strictEqual(draft.draft, true);
+    assert.strictEqual((await call('GET', `/api/docs/${aDoc}`)).draft, undefined, 'afleveret kan altid læses');
 
     // En anden lærer kan hverken se rapporten eller dokumenterne
     ck = '';
@@ -133,4 +160,65 @@ test('ræk hånden op, lektionsrapport, afspil skriveforløbet og ligheds-tjek',
     await srv.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('features: lighedstjek er slået fra i beta (enkel tilstand)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-feat2-'));
+  const srv = createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, simple: true });
+  try {
+    const base = 'http://127.0.0.1:' + await srv.listen();
+    assert.strictEqual((await (await fetch(base + '/api/info')).json()).features.similar, false);
+  } finally {
+    await srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-feat3-'));
+  const srv2 = createServer({ port: 0, host: '127.0.0.1', dataDir: dir2, quiet: true, requireGuard: false });
+  try {
+    const base = 'http://127.0.0.1:' + await srv2.listen();
+    assert.strictEqual((await (await fetch(base + '/api/info')).json()).features.similar, true);
+  } finally {
+    await srv2.close();
+    fs.rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
+/*
+ * Tekster må ikke love mere, end HolyMoly måler: ikke "uden AI", "din egen", "kan ikke forfalskes" eller "hvem der har skrevet".
+ * Mærket siger kun, at teksten er tastet i HolyMoly uden indsat tekst.
+ */
+const PROMISES = /skrevet uden AI|uden AI|ikke er skrevet med AI|din egen|kan ikke forfalskes|hvem der har skrevet/i;
+// Undtagelser (små og præcise): ejerens bevidste tagline og "din egen" om elevens/lærerens egen konto
+const ALLOWED = [
+  'bevis på, at deres tekst ikke er skrevet med AI', // forsidens H1 og titel, footeren i site.js og taglinen i index.html
+  'din egen e-mail',
+  'din egen to-faktor',
+];
+function textFiles(dir, out = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name === 'data' || e.name.startsWith('.')) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) textFiles(p, out);
+    else if (/\.(js|html|css|md|json|txt)$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
+
+test('tekster: ingen løfter om "uden AI", "din egen", "kan ikke forfalskes" eller "hvem der har skrevet"', () => {
+  const root = path.join(__dirname, '..');
+  const files = ['server/src', 'server/public', 'agent/renderer', 'docs'].flatMap(d => textFiles(path.join(root, d)));
+  assert.ok(files.length > 20, 'filerne er fundet');
+  const hits = [];
+  for (const f of files) {
+    fs.readFileSync(f, 'utf8').split('\n').forEach((line, i) => {
+      let l = line;
+      for (const a of ALLOWED) l = l.replace(new RegExp(a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '');
+      if (PROMISES.test(l)) hits.push(`${path.relative(root, f)}:${i + 1}: ${line.trim().slice(0, 120)}`);
+    });
+  }
+  assert.deepStrictEqual(hits, []);
+  // Forsidens H1 er ejerens valg og står der stadig
+  assert.match(fs.readFileSync(path.join(root, 'server/public/forside.html'), 'utf8'), /<h1>Elevernes bevis på, at deres tekst ikke er skrevet med AI<\/h1>/);
+  // Logbogen ved aflevering bruger mærket (D.label), ikke "skrevet uden AI"
+  assert.match(fs.readFileSync(path.join(root, 'server/src/hub.js'), 'utf8'), /' – ' \+ D\.label\(/);
 });

@@ -203,20 +203,28 @@ test('F: en ærlig tekst om AI får bevis – kun ordrette chatbot-fraser giver 
   } finally { done(); }
 });
 
-test('F: grå tid tæller kun, når teksten voksede – og ikke de første 30 sek. med "Venter på HolyMoly-vagten"', () => {
+test('F: grå tid uden vækst har sin egen grænse – og de første 30 sek. med "Venter på HolyMoly-vagten" tæller ikke', () => {
   const { docs, anna, done } = setup();
   try {
     const greyStill = { color: 'grey', greyReason: 'HolyMoly-vagten svarer ikke' };
-    // Lang grå pause (5 min.), hvor eleven ikke skriver: tæller ikke
+    // Kort grå pause (9 sek.), hvor eleven ikke skriver: under grænsen (10 min. og 15 % af tiden) – kun en note
     const a = write(docs, anna, LONG.slice(0, 400));
     let t = a.end;
-    for (let i = 0; i < 100; i++) { t += 3000; docs.observe(a.id, greyStill, t); }
+    for (let i = 0; i < 3; i++) { t += 3000; docs.observe(a.id, greyStill, t); }
     t += 3000; docs.observe(a.id, green, t);
     const rest = write(docs, anna, LONG, { id: a.id, start: t + 3000 });
-    void rest;
     let r = docs.submit(anna, a.id, meta, rest.end + 1000);
     assert.ok(r.certId, r.reasons.join(' | '));
     assert.match(r.notes.join(), /hvor teksten ikke voksede/);
+    // Lang grå pause (5 min.) uden vækst: tilgives ikke længere (over 15 % af tiden)
+    const a2 = write(docs, anna, LONG.slice(0, 400));
+    t = a2.end;
+    for (let i = 0; i < 100; i++) { t += 3000; docs.observe(a2.id, greyStill, t); }
+    t += 3000; docs.observe(a2.id, green, t);
+    const rest2 = write(docs, anna, LONG, { id: a2.id, start: t + 3000 });
+    r = docs.submit(anna, a2.id, meta, rest2.end + 1000);
+    assert.match(r.reasons.join(), /ikke komplet i 5 min\., mens dokumentet var åbent/);
+    assert.deepStrictEqual(r.categories.map(c => c.key), ['forbindelse']);
     // Grå, mens teksten vokser: tæller
     const b = write(docs, anna, LONG, { view: (x) => x > 1_020_000 ? greyStill : green });
     r = docs.submit(anna, b.id, meta, b.end + 1000);
@@ -230,6 +238,32 @@ test('F: grå tid tæller kun, når teksten voksede – og ikke de første 30 se
     const d = write(docs, anna, LONG, { view: (x) => x < 1_000_000 + 300_000 ? waitView : green });
     r = docs.submit(anna, d.id, meta, d.end + 1000);
     assert.match(r.reasons.join(), /ikke komplet/);
+  } finally { done(); }
+});
+
+test('F2: serverens egen nedetid (server_runs) tæller ikke mod eleven – dog højst 400 tegn pr. hul', () => {
+  const { db, docs, anna, done } = setup();
+  try {
+    // Eleven skriver, serveren går ned i 5 min. (sidst i live ved t1, starter igen ved t1 + 5 min.)
+    const a = write(docs, anna, LONG.slice(0, 200));
+    const t1 = a.end + 1000;
+    db.prepare('INSERT INTO server_runs (start, last_alive) VALUES (?, ?), (?, ?)').run(0, t1, t1 + 300_000, t1 + 300_000);
+    assert.strictEqual(docs._downtime(a.end, t1 + 305_000), 300_000);
+    // Efter genstarten: 200 tegn mere (under 2 tegn/sek. × 300 sek., højst 400) – intet flag, og nedetiden er ikke grå
+    const st = (n) => ({ typed: Math.round(n * 1.15) + 12, deleted: 5, keystrokes: n + 20, maxCps: 6, regularity: 0.7 });
+    assert.ok(docs.save(anna, { id: a.id, title: 'R', blocks: blocksOf(LONG.slice(0, 400)), stats: st(420) }, green, 1, t1 + 305_000).ok);
+    const m = JSON.parse(db.prepare('SELECT monitor FROM documents WHERE id = ?').get(a.id).monitor);
+    assert.strictEqual(m.downMs, 300_000, 'nedetiden er talt for sig');
+    assert.ok(m.greyMs <= 10_000, 'kun tiden uden for nedetiden er grå: ' + m.greyMs);
+    assert.deepStrictEqual(m.flags, []);
+    // For meget tekst under nedetiden (mere end 400 tegn ud over det tilladte): flag som før
+    const c = write(docs, anna, LONG.slice(0, 120), { start: 50_000_000 });
+    const t2 = c.end + 1000;
+    db.prepare('UPDATE server_runs SET last_alive = ? WHERE start = ?').run(t2, t1 + 300_000);
+    db.prepare('INSERT INTO server_runs (start, last_alive) VALUES (?, ?)').run(t2 + 600_000, t2 + 600_000);
+    assert.ok(docs.save(anna, { id: c.id, title: 'R', blocks: blocksOf(LONG), stats: st(LONG.length + 40) }, green, 1, t2 + 605_000).ok);
+    const r2 = docs.submit(anna, c.id, meta, t2 + 610_000);
+    assert.match(r2.reasons.join(), /ikke kunne følge med \(serveren var nede i 10 min\.\)/);
   } finally { done(); }
 });
 

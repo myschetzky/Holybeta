@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { sha256, str, encodeFrame, decodeFrame, isJpeg, RateLimiter } = require('./util');
+const D = require('../../shared/doc.js');
 
 // Hændelser elev-appen må sende. 'teacher' (lærer-logbogen) kan kun skrives af serveren selv.
 const EVENT_KINDS = new Set(['nav', 'app', 'blocked', 'violation', 'tamper', 'killed', 'info']);
@@ -16,6 +17,32 @@ const MAX_TABS = 60;
 const MAX_APPS = 120;
 const STALE_MS = 20_000; // ingen status i 20 sek -> grå
 const HOME_NO_SCREEN = 'Skriveøkt hjemme: skærmen kan ikke ses';
+/*
+ * Hjemme har én fast profil: kun AI, fjernstyring og virtuelle maskiner blokeres, intet lukkes,
+ * og der tages aldrig skærmbilleder. Læreren ser kun "Skriver hjemme", lampen og kategorien.
+ */
+const HOME_CATEGORIES = ['ai', 'remote', 'vm'];
+const HOME_ACTIVITY = 'Skriver hjemme';
+const HOME_EVENT_KINDS = new Set(['info', 'blocked', 'violation', 'tamper', 'killed']);
+const CATEGORY_TEXT = { ai: 'AI / chatbots', remote: 'Fjernstyring', vm: 'Virtuel maskine' };
+function homeConfig(config) {
+  const c = Object.assign({}, config || {});
+  return Object.assign(c, {
+    categories: HOME_CATEGORIES.slice(), killApps: false, autoEvidence: false, profile: 'skriv',
+    extraBlocked: [], extraBlockedApps: [], examMode: false, examAllowed: [], examAllowedApps: [],
+  });
+}
+/** Hjemme: kun rødt for ai, fjernstyring og vm – og kun med kategorien som tekst. */
+function homeViolations(list) {
+  const out = [];
+  for (const v of list || []) {
+    if (HOME_CATEGORIES.includes(v.category) && !out.some(o => o.category === v.category)) out.push({ kind: v.kind, text: CATEGORY_TEXT[v.category], category: v.category });
+  }
+  return out;
+}
+function hostOnly(u) {
+  try { return new URL(String(u)).hostname.slice(0, 253); } catch (e) { return ''; }
+}
 
 function versionLt(a, b) {
   const pa = String(a || '0').split('.').map(Number);
@@ -112,6 +139,18 @@ class Hub {
   isHome(sid) {
     const l = this.lessonFor(sid);
     return !!(l && l.assignmentId);
+  }
+
+  /**
+   * Hvad gælder for eleven lige nu? kind 'hjemme' (skriveøkt uden klassens lektion) eller 'klasse'.
+   * Hjemme-profilen er fast og håndhæves både her (hændelser, status, vagt) og i elevens app.
+   */
+  policyFor(sid, classId = this.studentClass.get(sid)) {
+    let config = {};
+    try { config = (classId != null && this.classConfig(classId)) || {}; } catch (e) { config = {}; }
+    const observed = this.requireGuard ? ['skrivevindue', 'vagt'] : ['skrivevindue'];
+    if (this.isHome(sid)) return { kind: 'hjemme', observed, config: homeConfig(config) };
+    return { kind: 'klasse', observed, config };
   }
 
   /**
@@ -297,7 +336,8 @@ class Hub {
     }
     conn.helloDone = true;
     conn.device = {
-      os: str(msg.device && msg.device.os, 40), host: str(msg.device && msg.device.host, 80),
+      // Computerens navn (host) gemmes ikke – det er ofte elevens navn. Appen sender et tilfældigt id.
+      os: str(msg.device && msg.device.os, 40), id: str(msg.device && msg.device.id, 32),
       version: str(msg.device && msg.device.version, 20),
     };
     const invalid = tokens.length - conn.students.size;
@@ -391,7 +431,7 @@ class Hub {
         const solo = best.lesson.assignmentId ? best.lesson : null;
         this._send(conn, {
           type: 'lesson', live: true, studentId: s.id, className: solo ? `Skriveøkt: ${solo.title}` : s.class_name, teacherName: s.teacher_name,
-          studentName: s.name, endsAt: best.lesson.endsAt, config: this.classConfig(s.class_id),
+          studentName: s.name, endsAt: best.lesson.endsAt, config: this.policyFor(s.id, s.class_id).config,
           solo: solo ? { assignmentId: solo.assignmentId, title: solo.title } : null,
         });
       } else {
@@ -416,6 +456,8 @@ class Hub {
       case 'status': {
         if (!a) return;
         const st = this._sanitizeStatus(msg);
+        // Hjemme gemmes hverken adresse, program eller vinduestitel – kun kategorien for rødt
+        if (a.solo) Object.assign(st, { activity: HOME_ACTIVITY, url: '', app: '', violations: homeViolations(st.violations) });
         const prev = this.status.get(a.studentId);
         // Ny overtrædelse -> ét skærmbillede som dokumentation må følge med
         const key = (v) => v.map(x => x.kind + '|' + x.text).join('\n');
@@ -502,6 +544,18 @@ class Hub {
         }
         break;
       }
+      case 'doc-delete': {
+        // Eleven sletter en kladde i skrivevinduet (også uden for lektionen). Afleverede dokumenter kan ikke slettes.
+        if (!this.docs) return;
+        const id = str(msg.id, 64);
+        const reply = (ok, error) => this._send(conn, { type: 'doc-deleted', id, ok, error: error || '' });
+        const row = this.db.prepare('SELECT student_id FROM documents WHERE id = ?').get(id);
+        if (!row || !conn.students.has(row.student_id)) return reply(true); // findes ikke hos serveren: intet at slette
+        const r = this.docs.deleteDraft(id, row.student_id);
+        if (!r.ok) return reply(false, r.error);
+        this.docDeleted(row.student_id, id, `Eleven slettede kladden "${r.title || 'Uden titel'}"`);
+        return reply(true);
+      }
       case 'write-session': {
         // Eleven åbner/lukker en skriveøkt til en aflevering, der må skrives hjemme
         const aid = Number(msg.assignmentId) || 0;
@@ -531,7 +585,7 @@ class Hub {
         const asg = this.db.prepare('SELECT id, class_id, title, due, created FROM assignments WHERE id = ?').get(aid);
         const st = asg && [...conn.students.values()].find(s => s.class_id === asg.class_id);
         if (!st) return reply(false, 'Afleveringen findes ikke');
-        const doc = this.db.prepare('SELECT id, title, submitted, cert_id, created FROM documents WHERE id = ? AND student_id = ?').get(docId, st.id);
+        const doc = this.db.prepare('SELECT id, title, submitted, cert_id, created, result FROM documents WHERE id = ? AND student_id = ?').get(docId, st.id);
         if (!doc) return reply(false, 'Dokumentet findes ikke hos HolyMoly. Skriv det i HolyMoly under en lektion.');
         if (!doc.submitted) return reply(false, 'Afslut dokumentet først (knappen "Afslut dokument")');
         // Et dokument skrevet før afleveringen blev lagt ud – eller allerede afleveret til en anden – kan ikke bruges
@@ -543,7 +597,7 @@ class Hub {
         this._sendAssignments(conn);
         if (!this.shuttingDown) {
           const late = asg.due && now > asg.due ? ' (efter fristen)' : '';
-          const text = `Afleverede "${doc.title || 'Uden titel'}" til ${asg.title}${late}${doc.cert_id ? ' – ✓ skrevet uden AI' : ' – uden flueben'}`;
+          const text = `Afleverede "${doc.title || 'Uden titel'}" til ${asg.title}${late}${doc.cert_id ? ' – ' + D.label(((JSON.parse(doc.result || '{}').facts) || {}).place) : ' – uden mærke'}`;
           const l = this.lessonOf(asg.class_id);
           const ins = this._q.insertEvent.run(st.id, l ? l.id : null, now, 'info', null, text.slice(0, 500), null, null, 0, null, null);
           this._broadcastToWatchers(st.id, { type: 'event', studentId: st.id, event: { id: Number(ins.lastInsertRowid), ts: now, kind: 'info', title: text.slice(0, 500) } });
@@ -595,6 +649,13 @@ class Hub {
     if (!it || typeof it !== 'object' || this.shuttingDown) return;
     const kind = str(it.kind, 20);
     if (!EVENT_KINDS.has(kind)) return;
+    // Hjemme: ingen navigation eller programskift. Adresser kun som værtsnavn, titel kun som kategori.
+    if (a.solo) {
+      if (!HOME_EVENT_KINDS.has(kind)) return;
+      const label = CATEGORY_TEXT[str(it.category, 20)];
+      it = { kind, ts: it.ts, url: it.url ? hostOnly(it.url) : '', title: label || (kind === 'blocked' || kind === 'violation' ? 'Blokeret' : str(it.title, 300)),
+        category: str(it.category, 20), blocked: !!it.blocked };
+    }
     const lim = this._limits(a);
     if (++lim.events > MAX_EVENTS_PER_LESSON) return;
     if (kind === 'violation') {
@@ -703,8 +764,9 @@ class Hub {
 
   /* ------------------------------ lærere ------------------------------ */
 
-  handleTeacher(ws, teacher, classRow) {
-    const t = { ws, teacher, classId: classRow.id, watching: null, watchScreen: 0 };
+  /** sessHash: hash af lærerens login-session (forbindelsen lukkes, når sessionen ophører – se closeTeacher og heartbeat). */
+  handleTeacher(ws, teacher, classRow, sessHash = null) {
+    const t = { ws, teacher, classId: classRow.id, watching: null, watchScreen: 0, sessHash };
     let set = this.teachers.get(classRow.id);
     if (!set) { set = new Set(); this.teachers.set(classRow.id, set); }
     set.add(t);
@@ -821,6 +883,11 @@ class Hub {
     const fresh = rep && Date.now() - rep.ts < 25_000;
     const alerts = (this.guardAlerts.get(sid) || []).filter(a => a.until > Date.now()).map(a => ({ kind: 'guard_tamper', text: a.text, category: '' }));
     const out = { violations: (fresh ? rep.violations : []).concat(alerts), grey: '', state: !row.guard_pubkey ? 'unpaired' : (fresh ? 'ok' : 'stale') };
+    if (this.isHome(sid)) {
+      // Hjemme: kun kategorien – og ikke to gange, hvis appen allerede melder den samme
+      const shown = new Set(((this.status.get(sid) || {}).violations || []).map(v => v.category));
+      out.violations = homeViolations(out.violations).filter(v => !shown.has(v.category));
+    }
     if (this._guardRequired(conn)) {
       const os = String((conn.device && conn.device.os) || '');
       if (!row.guard_pubkey) out.grey = /^(Windows|macOS)/.test(os) ? 'HolyMoly-vagten er ikke tilknyttet denne computer' : 'HolyMoly-vagten findes ikke til denne computer';
@@ -890,8 +957,8 @@ class Hub {
         this.guardReports.set(s.id, { ts: Date.now(), violations: [], kill: [], seen: new Map() });
         continue;
       }
-      const config = this.classConfig(s.class_id);
-      const R = this.compileFor(s.class_id);
+      const { config } = this.policyFor(s.id, s.class_id);
+      const R = this.compileFor(s.class_id, config);
       const c = classifyReport(rep, R, {
         now: Date.now(), killApps: config.killApps !== false, seenForbidden: prev.seen,
         trayConnected: this.agentByStudent.has(s.id), lessonLive: true, lessonStarted: best.lesson.started,
@@ -921,6 +988,13 @@ class Hub {
       this._pushStudent(s.id);
     }
     return result;
+  }
+
+  /** En kladde er slettet: stop målingen, skriv det i logbogen og opdater lærerens liste. */
+  docDeleted(sid, docId, text) {
+    if (this.writing.get(sid) === docId) this.writing.delete(sid);
+    this._audit(sid, text);
+    this._broadcastToWatchers(sid, { type: 'docs', studentId: sid });
   }
 
   /** Lærer-logbog: hvem så hvad hvornår (vises under elevens hændelser). */
@@ -977,16 +1051,19 @@ class Hub {
     }
     if (!st) { v.color = 'grey'; v.activity = 'Forbinder…'; return v; }
     Object.assign(v, { activity: st.activity, url: st.url, app: st.app, violations: st.violations, ext: st.ext, screens: st.screens, lastAttempt: st.attempt, degraded: st.degraded });
+    if (this.isHome(sid)) Object.assign(v, { activity: HOME_ACTIVITY, url: '', app: '', violations: homeViolations(st.violations), lastAttempt: null });
     // HolyMoly-vagten (SYSTEM/root) er et uafhængigt vidne – dens fund vejer tungest
     const g = this._guardView(sid, conn);
     if (g.violations.length) v.violations = g.violations.concat(st.violations);
-    if (g.grey && !g.violations.length) { v.color = 'grey'; v.greyReason = g.grey; v.guard = g.state; return v; }
     v.guard = g.state;
-    if (g.violations.length && !st.stale) { v.color = 'red'; return v; }
+    // Rød vinder over grå: en bekræftet overtrædelse skjules aldrig af en grå tilstand (vagtens fund gælder også, når appen er stille)
+    if (g.violations.length) { v.color = 'red'; return v; }
+    if (g.grey) { v.color = 'grey'; v.greyReason = g.grey; return v; }
+    if (st.violations.length && !st.stale) { v.color = 'red'; return v; }
     // Grå = overvågningen er ikke komplet. Kun bekræftede overtrædelser giver rød.
     if (st.stale) { v.color = 'grey'; v.greyReason = 'Ingen forbindelse (netværk?)'; }
     else if (st.degraded.length) { v.color = 'grey'; v.greyReason = st.degraded.map(d => d.text).join(', '); }
-    else v.color = st.violations.length ? 'red' : 'green';
+    else v.color = 'green';
     return v;
   }
 
@@ -1046,7 +1123,7 @@ class Hub {
   configChanged(classId) {
     for (const conn of this.agentConns) {
       if (conn.active && conn.active.classId === classId) {
-        this._send(conn, { type: 'config', config: this.classConfig(classId) });
+        this._send(conn, { type: 'config', config: this.policyFor(conn.active.studentId, classId).config });
       }
     }
   }
@@ -1089,11 +1166,37 @@ class Hub {
     else this._assignActive(conn);
   }
 
+  /**
+   * Lærerens login er ophørt (logget ud, ny adgangskode, to-faktor nulstillet, konto slettet): luk lærerens
+   * forbindelser med 4401. exceptHash: sessionen, der skiftede adgangskoden, beholder sin. onlyHash: kun den ene session.
+   */
+  closeTeacher(teacherId, exceptHash = null, onlyHash = null) {
+    let n = 0;
+    for (const set of this.teachers.values()) {
+      for (const t of [...set]) {
+        if (t.teacher.id !== teacherId) continue;
+        if (exceptHash && t.sessHash === exceptHash) continue;
+        if (onlyHash && t.sessHash !== onlyHash) continue;
+        try { t.ws.close(4401, 'logged out'); } catch (e) { /* */ }
+        n++;
+      }
+    }
+    return n;
+  }
+
   heartbeat() {
     for (const conn of this.agentConns) {
       if (!conn.alive) { conn.ws.terminate(); continue; }
       conn.alive = false;
       try { conn.ws.ping(); } catch (e) { /* ignorer */ }
+    }
+    // Lærer-forbindelser lever kun, så længe login-sessionen gælder (udløb og absolut grænse, SESSION_MAX_HOURS)
+    if (typeof this.teacherSessionOk === 'function') {
+      for (const set of this.teachers.values()) {
+        for (const t of [...set]) {
+          if (t.sessHash && !this.teacherSessionOk(t.sessHash)) { try { t.ws.close(4401, 'session expired'); } catch (e) { /* */ } }
+        }
+      }
     }
   }
 

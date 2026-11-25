@@ -325,3 +325,81 @@ test('uden licens-styring (skolens egen server) virker alt som før', async () =
     assert.ok(fs.existsSync(path.join(dir, 'outbox')) === false, 'ingen mails uden bekræftelse');
   } finally { await srv.close(); }
 });
+
+test('enkel tilstand: nye lærere godkendes af en godkendt kollega', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-approve-'));
+  const mk = () => createServer({ port: 0, host: '127.0.0.1', dataDir: dir, quiet: true, requireGuard: false, simple: true,
+    schoolApproval: { controller: 'Testskolen', dpo: 'dpo@test.dk', dpiaDate: '2026-11-01', approvedDate: '2026-11-15' } });
+  let srv = mk();
+  let base = 'http://127.0.0.1:' + await srv.listen();
+  try {
+    // Den første lærer (opsætningskoden) er godkendt med det samme
+    const A = client(base);
+    let r = await A.call('POST', '/api/register', { email: 'mette', name: 'Mette Hansen', password: 'tavle-kridt-1234', acceptTerms: true, signupCode: srv.setupCode() });
+    assert.strictEqual(r.ok, true);
+    assert.ok(!r.pending);
+    let me = await A.call('GET', '/api/me');
+    assert.strictEqual(me.needs, null);
+    assert.strictEqual(me.approved, true);
+    const code = (await A.call('POST', '/api/account/teacher-code/show', {})).teacherCode;
+
+    // Jens bruger lærerkoden: kontoen venter på godkendelse og kan kun se /api/me og logge ud
+    const J = client(base);
+    r = await J.call('POST', '/api/register', { email: 'jens', name: 'Jens Berg', password: 'tavle-kridt-9876', acceptTerms: true, signupCode: code });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.pending, true);
+    me = await J.call('GET', '/api/me');
+    assert.strictEqual(me.needs, 'approval');
+    r = await J.call('GET', '/api/classes');
+    assert.strictEqual(r._status, 403);
+    assert.strictEqual(r.needs, 'approval');
+    for (const [m, p] of [['POST', '/api/classes'], ['POST', '/api/account/teacher-code/show'], ['GET', '/api/account/pending-teachers'], ['POST', `/api/account/teachers/${me.id}/approve`], ['DELETE', '/api/account'], ['POST', '/api/account/password']]) {
+      assert.strictEqual((await J.call(m, p, m === 'GET' ? undefined : {}))._status, 403, `${m} ${p} er lukket for en lærer, der venter`);
+    }
+    const jensId = me.id;
+
+    // Eva venter også
+    const E = client(base);
+    r = await E.call('POST', '/api/register', { email: 'eva', name: 'Eva Holm', password: 'tavle-kridt-4242', acceptTerms: true, signupCode: code });
+    assert.strictEqual(r.pending, true);
+
+    // Mette ser de ventende lærere med navn og tidspunkt
+    const pend = await A.call('GET', '/api/account/pending-teachers');
+    assert.deepStrictEqual(pend.teachers.map(t => [t.name, t.username]), [['Jens Berg', 'jens'], ['Eva Holm', 'eva']]);
+    assert.ok(pend.teachers.every(t => t.created > Date.now() - 60_000));
+    const evaId = pend.teachers.find(t => t.username === 'eva').id;
+
+    // Mette godkender Jens og afviser Eva
+    assert.ok((await A.call('POST', `/api/account/teachers/${jensId}/approve`, {})).ok);
+    assert.strictEqual((await J.call('GET', '/api/me')).needs, null);
+    assert.ok(Array.isArray(await J.call('GET', '/api/classes')), 'Jens kan bruge HolyMoly');
+    assert.ok((await A.call('DELETE', `/api/account/teachers/${evaId}`)).ok);
+    assert.strictEqual((await E.call('GET', '/api/me'))._status, 401, 'Evas konto er slettet');
+    assert.strictEqual(srv.db.prepare('SELECT COUNT(*) AS n FROM teachers').get().n, 2);
+    // En godkendt lærer kan ikke afvises (slettes) eller godkendes igen
+    assert.strictEqual((await J.call('DELETE', `/api/account/teachers/${(await A.call('GET', '/api/me')).id}`))._status, 404);
+    assert.strictEqual((await A.call('POST', `/api/account/teachers/${jensId}/approve`, {}))._status, 404);
+    assert.deepStrictEqual((await A.call('GET', '/api/account/pending-teachers')).teachers, []);
+
+    // Lærere fra før godkendelsen fandtes, er godkendt efter opdateringen
+    await srv.close();
+    const { DatabaseSync } = require('node:sqlite');
+    const raw = new DatabaseSync(path.join(dir, 'holymoly.db'));
+    raw.exec('ALTER TABLE teachers DROP COLUMN approved');
+    raw.close();
+    srv = mk();
+    base = 'http://127.0.0.1:' + await srv.listen();
+    assert.strictEqual(srv.db.prepare('SELECT COUNT(*) AS n FROM teachers WHERE approved IS NULL').get().n, 0);
+  } finally { await srv.close(); }
+
+  // Uden enkel tilstand findes ventelisten ikke
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-approve2-'));
+  const full = createServer({ port: 0, host: '127.0.0.1', dataDir: dir2, quiet: true, requireGuard: false, signupCode: 'k' });
+  const b2 = 'http://127.0.0.1:' + await full.listen();
+  try {
+    const X = client(b2);
+    assert.ok(!(await X.call('POST', '/api/register', { email: 'x@skole.dk', name: 'X', password: 'tavle-kridt-1234', signupCode: 'k' })).pending);
+    assert.strictEqual((await X.call('GET', '/api/me')).needs, null);
+    assert.strictEqual((await X.call('GET', '/api/account/pending-teachers'))._status, 404);
+  } finally { await full.close(); }
+});

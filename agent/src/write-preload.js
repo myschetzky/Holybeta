@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('hmw', {
   onShowAssignments: (cb) => ipcRenderer.on('write:show-assignments', () => cb()),
   load: (id) => ipcRenderer.invoke('write:load', String(id || '')),
   save: (doc) => ipcRenderer.invoke('write:save', doc),
+  remove: (id) => ipcRenderer.invoke('write:delete', String(id || '')),
   submit: (id, force) => ipcRenderer.invoke('write:submit', { id: String(id || ''), force: force === true }),
   docx: (id) => ipcRenderer.invoke('write:docx', String(id || '')),
   onSaved: (cb) => ipcRenderer.on('write:saved', (_e, r) => cb(r)),

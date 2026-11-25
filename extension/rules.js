@@ -447,8 +447,10 @@
     data = data || RULE_DATA;
     config = config || {};
     const blockCat = {};
+    // categories er enten {ai:true,...} eller en liste med præcis de kategorier, der blokeres (fx hjemme: ['ai','remote','vm'])
+    const catList = Array.isArray(config.categories) ? config.categories : null;
     for (const k of Object.keys(CATEGORIES)) {
-      const c = config.categories && Object.prototype.hasOwnProperty.call(config.categories, k)
+      const c = catList ? catList.includes(k) : config.categories && Object.prototype.hasOwnProperty.call(config.categories, k)
         ? !!config.categories[k] : CATEGORIES[k].block;
       blockCat[k] = c;
     }

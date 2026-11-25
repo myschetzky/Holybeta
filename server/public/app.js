@@ -322,6 +322,8 @@
     app.replaceChildren(HM.topbar(me, 'klasser'), tpl('tpl-classes'));
     const banner = HM.licenseBanner(me);
     if (banner) $('.page').prepend(banner);
+    const waiting = HM.pendingTeachersBanner(me);
+    if (waiting) $('.page').prepend(waiting);
     cleanup = setupInfo();
     api('/api/info').then(info => { downloadUrl = info.downloadUrl || ''; uniLoginOn = !!info.uniLogin; maybeIntro(); }).catch(() => {});
     const list = $('#class-list');
@@ -369,6 +371,12 @@
     };
     // Kun elever der har tilmeldt sig, står i klasseværelset
     for (const s of cls.students) if (s.joined) state.students.set(s.id, s);
+    // Beta: uden skolens ja kan lektioner ikke startes (knappen er slået fra, og banneret siger hvorfor)
+    if (info.lessonBlocked) {
+      $('.room-wrap').prepend(h('div', { class: 'banner warn', role: 'status', id: 'approval-banner', style: 'margin-bottom:12px' },
+        h('span', { text: 'Lektioner kan ikke startes endnu – skolen har ikke givet sit ja. Eleverne kan godt tilmelde sig.' })));
+      if (!(cls.lesson && cls.lesson.live)) { $('#lesson-btn').disabled = true; $('#lesson-btn').title = 'Venter på skolens ja'; }
+    }
 
     $('#class-name').textContent = cls.name;
     $('#back').addEventListener('click', () => route('/'));
@@ -434,9 +442,16 @@
         if (state.open) watchOpen(Number($('#d-screen-sel').value) || 0);
       };
       ws.onmessage = (e) => (typeof e.data === 'string' ? onMessage(JSON.parse(e.data)) : onBinary(e.data));
-      ws.onclose = () => {
+      ws.onclose = (e) => {
         setConn(false);
         if (state.closed) return;
+        // 4401: login-sessionen er slut (logget ud, ny adgangskode eller udløbet). Ingen genforbindelse.
+        if (e && e.code === 4401) {
+          state.closed = true;
+          dialog({ title: 'Du er logget ud', body: h('p', { text: 'Du er logget ud. Log ind igen.' }), actions: [{ label: 'Log ind', kind: 'primary', value: true }] })
+            .then(() => route('/login'));
+          return;
+        }
         setTimeout(connect, backoff);
         backoff = Math.min(10_000, backoff * 2);
       };
@@ -647,6 +662,8 @@
         pill.className = 'pill live';
         btn.textContent = 'Afslut lektion';
         btn.className = 'btn';
+        btn.disabled = false; // en lektion i gang kan altid afsluttes
+        btn.removeAttribute('title');
         $('#toolbar-live').hidden = false;
       } else {
         pill.textContent = 'Ingen lektion';
@@ -654,6 +671,8 @@
         pill.className = 'pill';
         btn.textContent = 'Start lektion';
         btn.className = 'btn primary';
+        btn.disabled = !!state.info.lessonBlocked;
+        if (state.info.lessonBlocked) btn.title = 'Venter på skolens ja'; else btn.removeAttribute('title');
         $('#toolbar-live').hidden = true;
       }
     }
@@ -686,7 +705,7 @@
           body: [
             h('p', { text: 'Lektionen er ikke startet. HolyMoly er i beta, og skolen skal først sige ja.' }),
             h('p', { text: 'Den, der driver serveren, skal udfylde fire ting: hvem der er dataansvarlig, kontakt til skolens DPO, datoen for konsekvensanalysen (DPIA) og datoen for ledelsens ja.' }),
-            h('p', { class: 'muted small', text: r.approval }),
+            h('p', { class: 'muted small', text: 'Eleverne kan godt tilmelde sig imens.' }),
           ],
           actions: [{ label: 'OK', kind: 'primary', value: true }],
         });
@@ -872,7 +891,7 @@
         const desc = h('textarea', { maxlength: 4000, rows: 5, placeholder: 'Opgaveformulering, krav og hjælpemidler' });
         desc.value = a ? a.description : '';
         const due = h('input', { type: 'datetime-local', value: a && a.due ? localInput(a.due) : '' });
-        const home = h('input', { type: 'checkbox', checked: a ? !!a.home : true });
+        const home = h('input', { type: 'checkbox', checked: a ? !!a.home : false });
         const err = h('p', { class: 'error', hidden: true });
         const save = h('button', { class: 'btn primary', type: 'button', text: a ? 'Gem' : 'Opret aflevering' });
         const cancel = h('button', { class: 'btn', type: 'button', text: 'Tilbage', onclick: () => { view = a ? { kind: 'one', id: a.id } : { kind: 'list' }; render(); } });
@@ -998,7 +1017,7 @@
       const s = state.students.get(id);
       const name = h('input', { value: s.name, maxlength: 80 });
       const info = s.enrolled
-        ? h('p', { class: 'muted small', text: 'Tilmeldt' + (s.device ? ` på ${s.device.os || 'ukendt'} (${s.device.host || ''})` : '') + '. "Ny computer" logger den gamle computer ud og giver en kode til den nye.' })
+        ? h('p', { class: 'muted small', text: 'Tilmeldt' + (s.device ? ` på ${s.device.os || 'ukendt'}` : '') + '. "Ny computer" logger den gamle computer ud og giver en kode til den nye.' })
         : h('p', { class: 'small' }, 'Venter på ny computer – kode: ', h('b', { text: s.inviteCode || 'udløbet' }));
       // Elevens egen kode (enkel tilstand): læreren kan nulstille den, hvis eleven har glemt den
       const pinInfo = s.pinLocked
@@ -1216,7 +1235,8 @@
         if (v.degraded && v.degraded.length) {
           secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Overvågning ikke komplet' }), ...v.degraded.map(x => h('div', { class: 'violation grey', text: x.text }))));
         }
-        secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Aktivt vindue' }), h('div', { text: v.activity || '–' }), v.url ? h('div', { class: 'muted small', text: v.url }) : null,
+        // Hjemme vises intet aktivt vindue – kun at eleven skriver
+        if (!v.solo) secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Aktivt vindue' }), h('div', { text: v.activity || '–' }), v.url ? h('div', { class: 'muted small', text: v.url }) : null,
           v.app && !v.url ? appButtons(v.app) : null));
         if (v.ext) secs.push(h('div', { class: 'sec' }, h('h3', { text: 'Browser-udvidelse' }), h('div', { class: 'small', text: v.ext.connected ? 'Aktiv i: ' + (v.ext.browsers.join(', ') || '–') : 'Ikke forbundet' })));
         if (!v.solo) secs.push(h('div', { class: 'sec' }, h('h3', { text: `Åbne faner (${d.tabs.length})` }),
@@ -1313,6 +1333,13 @@
       state.docOpen = docId;
       const body = $('#d-body');
       const back = h('button', { class: 'btn small', text: '← Alle dokumenter', onclick: () => { state.docOpen = null; renderTab(); } });
+      // Kladde uden for klassens lektion: kun titel og omfang
+      if (d.draft) {
+        body.replaceChildren(h('div', { class: 'sec' }, h('div', { class: 'row-actions' }, back)), h('h3', { text: d.title || 'Uden titel' }),
+          h('p', { class: 'muted small', text: `${d.words} ord · senest gemt ${fmtDateTime(d.updated)}` }),
+          h('p', { text: 'Kladde – kan læses, når eleven afleverer.' }));
+        return;
+      }
       const word = h('button', { class: 'btn small', text: 'Hent som Word', onclick: () => {
         const mark = d.certId ? { code: proofCode(d.certId), url: `${location.origin}/bevis/${d.certId}`, place: d.place } : null;
         const blob = new Blob([HMDoc.toDocx(d.blocks, { title: d.title, author: d.studentName || '', mark, readOnly: true })], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
@@ -1330,8 +1357,9 @@
       const replay = h('div', { class: 'sec' });
       const similar = h('div', { class: 'sec' });
       body.replaceChildren(h('div', { class: 'sec' }, h('div', { class: 'row-actions' }, back, word)), h('h3', { text: d.title || 'Uden titel' }), status, facts, notes, similar, renderBlocks(d.blocks), replay);
-      fillSimilar(docId, similar).catch(() => {});
-      fillReplay(docId, replay).catch(() => {});
+      // Lighedstjek og afspilning kun for afleverede dokumenter
+      if (d.submitted && state.info.features && state.info.features.similar) fillSimilar(docId, similar).catch(() => {});
+      if (d.submitted) fillReplay(docId, replay).catch(() => {});
     }
 
     // Ligner dokumentet andre i klassen? (lokalt tjek af fælles sætningsdele – en oplysning, aldrig en rød lampe)

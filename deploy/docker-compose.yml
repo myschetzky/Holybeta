@@ -1,10 +1,29 @@
 # Kør fra repo-roden:  docker compose -f deploy/docker-compose.yml up -d
-# Udfyld deploy/.env først (se deploy/.env.example og docs/SALG.md).
+# Udfyld deploy/.env først. Beta til én skole: se deploy/.env.beta.example og docs/PROXMOX.md.
+# Den fulde udgave med licenser: se deploy/.env.example og docs/SALG.md.
 services:
   holymoly:
     build: { context: .., dockerfile: server/Dockerfile }
     restart: unless-stopped
+    # Alle indstillinger står her (ingen env_file): kun det, der er nævnt, når ind i containeren.
     environment:
+      # Udgave: 1 = enkel tilstand (beta til én skole), 0 = den fulde udgave med kontoer og licenser
+      SIMPLE: ${SIMPLE:-1}
+      # 1 = skolen driver serveren og har nøglen. 0 = testserver: beviserne mærkes "Testserver"
+      SCHOOL_OPERATED: ${SCHOOL_OPERATED:-0}
+      # Skolens ja. Uden alle fire startes ingen lektioner i enkel tilstand (se docs/ENKEL.md)
+      DATAANSVARLIG: ${DATAANSVARLIG:-}
+      DPO_KONTAKT: ${DPO_KONTAKT:-}
+      DPIA_DATO: ${DPIA_DATO:-}
+      LEDELSE_JA_DATO: ${LEDELSE_JA_DATO:-}
+      # 1 = Windows/Mac-elever skal have HolyMoly-vagten for at være grønne. Fra i beta
+      REQUIRE_GUARD: ${REQUIRE_GUARD:-0}
+      # Ældste elev-app og browserudvidelse, der må forbinde (tom = alle)
+      MIN_AGENT_VERSION: ${MIN_AGENT_VERSION:-}
+      MIN_EXTENSION_VERSION: ${MIN_EXTENSION_VERSION:-}
+      EXTENSION_URL_CHROME: ${EXTENSION_URL_CHROME:-}
+      EXTENSION_URL_EDGE: ${EXTENSION_URL_EDGE:-}
+      EXTENSION_URL_FIREFOX: ${EXTENSION_URL_FIREFOX:-}
       TEACHER_SIGNUP_CODE: ${TEACHER_SIGNUP_CODE:-}
       # Kontoer, skoler og licenser
       LICENSING: ${LICENSING:-1}
@@ -12,6 +31,7 @@ services:
       PRICE_PER_STUDENT: ${PRICE_PER_STUDENT:-129}
       PRICE_MINIMUM: ${PRICE_MINIMUM:-2500}
       REQUIRE_2FA: ${REQUIRE_2FA:-1}
+      VERIFY_EMAIL: ${VERIFY_EMAIL:-}
       SIGNUP: ${SIGNUP:-open}
       PLATFORM_ADMINS: ${PLATFORM_ADMINS:-}
       SALES_EMAIL: ${SALES_EMAIL:-}
@@ -23,12 +43,18 @@ services:
       COMPANY_EMAIL: ${COMPANY_EMAIL:-}
       HOSTING_PROVIDER: ${HOSTING_PROVIDER:-}
       LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
-      BACKUP_DAYS: ${BACKUP_DAYS:-7}
+      # Frister (se server/src/retention.js). Tomme værdier = standarden i retention.js
+      BACKUP_DAYS: ${BACKUP_DAYS:-}
+      DRAFT_DAYS: ${DRAFT_DAYS:-}
+      VERSIONS_DAYS: ${VERSIONS_DAYS:-}
+      DOC_RETENTION_DAYS: ${DOC_RETENTION_DAYS:-}
+      CERT_YEARS: ${CERT_YEARS:-}
       PURGE_AFTER_DAYS: ${PURGE_AFTER_DAYS:-90}
       SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-12}
       SECURITY_CONTACT: ${SECURITY_CONTACT:-}
       AGENT_DOWNLOAD_URL: ${AGENT_DOWNLOAD_URL:-}
-      TRUST_PROXY: "1"
+      # Kun disse proxyer må sætte X-Forwarded-For (værtsnavne i compose-netværket, IP-adresser eller net)
+      TRUST_PROXY: ${TRUST_PROXY:-caddy,cloudflared}
       PUBLIC_URL: ${PUBLIC_URL:-}
       # UNI-Login (tomme = slået fra)
       UNILOGIN_ISSUER: ${UNILOGIN_ISSUER:-}
