@@ -1,0 +1,22 @@
+# Opdateringer af afhængigheder (OWASP Top 10:2025 A03 – forsyningskæden).
+# Dependabot åbner pull requests; intet flettes automatisk. Actions er låst til commit-SHA'er,
+# og Dependabot holder SHA'erne opdaterede.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /server
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      server-minor: { update-types: [minor, patch] }
+  - package-ecosystem: npm
+    directory: /agent
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      agent-minor: { update-types: [minor, patch] }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    groups:
+      actions: { patterns: ['*'] }

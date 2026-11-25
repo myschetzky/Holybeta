@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+  <title>HolyMoly</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <header><img src="../assets/icon.svg" alt="" width="22" height="22"><b>HolyMoly</b></header>
+
+  <main>
+    <!-- Første opsætning: skolens HolyMoly-adresse (kun hvis IT ikke har sat den) -->
+    <section id="setup" hidden>
+      <h1>Hvad er din skoles HolyMoly-adresse?</h1>
+      <p class="muted">Adressen får du af din lærer eller skolens IT, fx <b>holymoly.minskole.dk</b>. Du skal kun skrive den én gang.</p>
+      <form id="setup-form">
+        <input id="server" autocomplete="url" spellcheck="false" maxlength="200" placeholder="holymoly.minskole.dk" aria-label="Skolens HolyMoly-adresse">
+        <button class="btn primary" type="submit" id="setup-submit">Fortsæt</button>
+      </form>
+      <p class="error" id="setup-error" hidden></p>
+    </section>
+
+    <!-- Første gang: kode fra læreren -->
+    <section id="enroll" hidden>
+      <h1 id="enroll-title">Skriv klassekoden</h1>
+      <p class="muted" id="enroll-help">Koden får du af din lærer. Du skal kun gøre det én gang.</p>
+      <form id="enroll-form">
+        <input id="code" autocomplete="off" spellcheck="false" maxlength="9" placeholder="ABCD-2345" aria-label="Klassekode">
+        <input id="student-name" autocomplete="name" maxlength="80" placeholder="Fornavn Efternavn" aria-label="Dit fulde navn" hidden>
+        <input id="student-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="Din kode (4 cifre)" aria-label="Din kode, 4-6 cifre" hidden>
+        <div id="enroll-terms" hidden>
+          <p class="muted small">HolyMoly ser kun med, når din lærer har startet en lektion, og når du skriver i HolyMoly. Aldrig dine filer, kamera, mikrofon eller hvad du taster i andre programmer.</p>
+          <label class="check"><input type="checkbox" id="enroll-accept"> <span>Jeg har læst, hvad HolyMoly ser og ikke ser (<button class="link" type="button" id="enroll-terms-link">vilkår for elever</button>)</span></label>
+        </div>
+        <button class="btn primary" type="submit" id="enroll-submit">Næste</button>
+      </form>
+      <button class="btn uni" id="enroll-uni" type="button" hidden>Log ind med UNI-Login</button>
+      <p class="muted small" id="enroll-uni-wait" hidden>Log ind i browseren, der lige er åbnet. Appen fortsætter af sig selv.</p>
+      <p class="error" id="enroll-error" hidden></p>
+      <button class="link" id="enroll-cancel" type="button" hidden>Annuller</button>
+    </section>
+
+    <!-- Normal visning -->
+    <section id="status" hidden>
+      <div class="who">
+        <div class="name" id="name"></div>
+        <div class="muted small" id="classes"></div>
+      </div>
+      <div class="state" id="state"><span class="dot"></span><span id="state-text"></span></div>
+
+      <div class="todo" id="todo" hidden>
+        <b>Det skal ordnes, før HolyMoly virker:</b>
+        <ul id="todo-list"></ul>
+      </div>
+      <div class="links" id="links" hidden>
+        <b>Lektionens links</b>
+        <ul id="links-list"></ul>
+      </div>
+      <div class="assign" id="assign" hidden>
+        <span id="assign-text"></span>
+        <button class="btn small" id="assign-btn" type="button">Se afleveringer</button>
+      </div>
+      <div class="row-btns" id="lesson-btns" hidden>
+        <button class="btn primary" id="write" type="button">Skriv dokument</button>
+        <button class="btn" id="hand" type="button" aria-pressed="false">✋ Ræk hånden op</button>
+      </div>
+      <p class="muted small" id="hint"></p>
+    </section>
+    <p class="error" id="global-error" hidden></p>
+  </main>
+  <script src="ui.js"></script>
+</body>
+</html>

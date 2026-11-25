@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tilbud på HolyMoly</title>
+  <meta name="description" content="Lav et tilbud på en HolyMoly-skolelicens til skolens ledelse og økonomi.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <a class="skip" href="#indhold">Gå til indhold</a>
+  <header class="site-head" id="site-head"></header>
+  <main class="doc quote-page" id="indhold">
+    <div class="wrap">
+      <form class="quote-form no-print" id="quote-form">
+        <h1>Tilbud til skolens ledelse</h1>
+        <p class="intro">Udfyld felterne, og tryk <b>Udskriv eller gem som PDF</b>. Tilbuddet kan sendes til rektor eller økonomi til godkendelse.</p>
+        <div class="q-grid">
+          <label>Skolens navn<input id="q-school" maxlength="120" placeholder="Fx Aarhus Gymnasium" autocomplete="organization"></label>
+          <label>Kontaktperson<input id="q-contact" maxlength="100" autocomplete="name"></label>
+          <label>Antal elever<input id="q-students" type="number" min="1" max="20000" step="1" value="300"></label>
+          <label>Periode<select id="q-years"><option value="1">1 år</option><option value="2">2 år</option><option value="3">3 år</option></select></label>
+          <label>EAN-nummer (valgfrit)<input id="q-ean" inputmode="numeric" maxlength="16" placeholder="13 cifre"></label>
+          <label>Start (valgfrit)<input id="q-start" type="date"></label>
+        </div>
+        <div class="q-actions"><button class="btn primary" type="button" id="q-print">Udskriv eller gem som PDF</button></div>
+      </form>
+
+      <article class="quote" id="quote" aria-label="Tilbud">
+        <header class="q-head">
+          <div>
+            <div class="q-brand"><img src="/icon.svg" alt="" width="28" height="28"> <span data-company="name">HolyMoly</span></div>
+            <div class="q-from" id="q-from"></div>
+          </div>
+          <div class="q-meta">
+            <div class="q-title">Tilbud</div>
+            <dl>
+              <dt>Nr.</dt><dd id="q-no"></dd>
+              <dt>Dato</dt><dd id="q-date"></dd>
+              <dt>Gyldigt til</dt><dd id="q-valid"></dd>
+            </dl>
+          </div>
+        </header>
+
+        <section class="q-to">
+          <div class="q-label">Til</div>
+          <div id="q-to-school" class="q-strong">[Skolens navn]</div>
+          <div id="q-to-contact"></div>
+          <div id="q-to-ean"></div>
+        </section>
+
+        <table class="q-lines">
+          <thead><tr><th>Beskrivelse</th><th class="num">Antal</th><th class="num">Pris</th><th class="num">Beløb</th></tr></thead>
+          <tbody id="q-lines"></tbody>
+          <tfoot>
+            <tr><td colspan="3">I alt ekskl. moms</td><td class="num" id="q-sub"></td></tr>
+            <tr><td colspan="3">Moms 25 %</td><td class="num" id="q-vat"></td></tr>
+            <tr class="q-total"><td colspan="3">I alt inkl. moms</td><td class="num" id="q-total"></td></tr>
+          </tfoot>
+        </table>
+
+        <section class="q-terms">
+          <h2>Det indeholder licensen</h2>
+          <ul>
+            <li>HolyMoly for hele skolen: alle lærere og klasser, afleveringer med "✓ Tastet i HolyMoly – intet indsat", skriveøkter hjemme, overblik i timen og lektionsrapporter.</li>
+            <li>Login med Unilogin eller e-mail med to-faktor. Elev-app til Windows og Mac.</li>
+            <li>Drift i EU, sikkerhedsopdateringer og support på dansk.</li>
+          </ul>
+          <h2>Betingelser</h2>
+          <ul>
+            <li id="q-period"></li>
+            <li>Faktura sendes elektronisk via NemHandel (EAN) eller på e-mail. Betaling 30 dage netto.</li>
+            <li>Licensen fornyes ikke automatisk. Elever ud over det aftalte antal aftales særskilt – tjenesten lukkes ikke midt i en lektion.</li>
+            <li>Gratis prøveperiode på <span data-trial>30</span> dage før købet.</li>
+            <li id="q-legal"></li>
+          </ul>
+        </section>
+
+        <footer class="q-foot">
+          <div class="q-sign"><span>Dato og underskrift (skolen)</span></div>
+          <div class="q-sign"><span>Dato og underskrift (<span data-company="name">HolyMoly</span>)</span></div>
+        </footer>
+      </article>
+    </div>
+  </main>
+  <footer class="site-foot no-print" id="site-foot"></footer>
+  <script src="/site.js"></script>
+  <script src="/tilbud.js"></script>
+</body>
+</html>

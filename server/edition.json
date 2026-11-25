@@ -1,0 +1,5 @@
+{
+  "edition": "beta",
+  "simple": true,
+  "about": "Hvilken udgave serveren starter som, når den startes direkte (npm start, Docker, Start HolyMoly.cmd). Grenen 'beta' har simple: true (enkel tilstand til skolen); grenen 'koncept' har simple: false (den fulde udgave med kontoer og licenser). SIMPLE=1/0 i miljøet går forud."
+}

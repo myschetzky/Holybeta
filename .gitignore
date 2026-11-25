@@ -1,0 +1,11 @@
+node_modules/
+server/data/
+agent/dist/
+extension/dist/
+*.log
+.DS_Store
+test-results/
+site/
+test/sim/out/
+
+/dist/

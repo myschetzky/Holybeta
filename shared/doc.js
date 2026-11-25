@@ -1,0 +1,305 @@
+/*
+ * HolyMoly-dokumenter ("Skriv i HolyMoly") – fælles for server, elev-app og lærer-dashboard.
+ *
+ *  - Dokumentformat: blokke i stedet for HTML (kan ikke indeholde scripts):
+ *      [{ t: 'p'|'h1'|'h2'|'ul'|'ol', r: [{ x: 'tekst', b: 1, i: 1, u: 1 }] }]
+ *    ul/ol er ét punkt hver; punkter efter hinanden er én liste.
+ *  - normalizeText(): den tekst skrive-beviset dækker (samme resultat overalt).
+ *  - aiTraces(): ordrette chatbot-fraser i teksten (lokalt, ingen API). Kun hårde spor – aldrig gæt.
+ *    aiHints(): svagere spor (fx at teksten nævner ChatGPT). Kun til læreren – aldrig et afslag.
+ *  - label(place): mærket på et dokument med bevis. Samme tekst overalt.
+ *  - toDocx(): Word-fil (.docx) uden eksterne biblioteker.
+ *  - readZipEntry() / docxText(): læs teksten i en .docx (bruges på tjek-siden i browseren).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.HMDoc = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const TYPES = new Set(['p', 'h1', 'h2', 'ul', 'ol']);
+  const LIMITS = { blocks: 3000, runs: 300, chars: 200_000, title: 120 };
+
+  /** Strikt validering af et dokument fra elev-appen. Kaster ved ugyldigt input. */
+  function validateBlocks(input) {
+    if (!Array.isArray(input)) throw new Error('Ugyldigt dokument');
+    if (input.length > LIMITS.blocks) throw new Error('Dokumentet er for langt');
+    let total = 0;
+    const out = [];
+    for (const b of input) {
+      if (!b || typeof b !== 'object' || !TYPES.has(b.t) || !Array.isArray(b.r)) throw new Error('Ugyldigt dokument');
+      if (b.r.length > LIMITS.runs) throw new Error('Ugyldigt dokument');
+      const runs = [];
+      for (const r of b.r) {
+        if (!r || typeof r.x !== 'string') throw new Error('Ugyldigt dokument');
+        // Ingen kontroltegn (undtagen tab), ingen usynlige retnings-tegn
+        const x = r.x.replace(/[\r\n]+/g, ' ').replace(/[\u0000-\u0008\u000B-\u001F\u007F\u202A-\u202E\u2066-\u2069]/g, '');
+        total += x.length;
+        if (total > LIMITS.chars) throw new Error('Dokumentet er for langt');
+        if (!x) continue;
+        const run = { x };
+        if (r.b) run.b = 1;
+        if (r.i) run.i = 1;
+        if (r.u) run.u = 1;
+        runs.push(run);
+      }
+      out.push({ t: b.t, r: runs });
+    }
+    return out;
+  }
+
+  /** Ren tekst: én linje pr. blok. */
+  function textOf(blocks) {
+    return blocks.map(b => b.r.map(r => r.x).join('')).join('\n');
+  }
+
+  /** Den tekst beviset gælder for: NFC, ens mellemrum, ingen tomme linjer. Bruges også på tjek-siden. */
+  function normalizeText(text) {
+    return String(text || '').normalize('NFC').replace(/\r\n?/g, '\n')
+      .split('\n').map(l => l.replace(/[\s ​]+/g, ' ').trim()).filter(Boolean).join('\n');
+  }
+
+  function wordCount(text) {
+    const m = String(text || '').match(/[\p{L}\p{N}]+(?:[-'’][\p{L}\p{N}]+)*/gu);
+    return m ? m.length : 0;
+  }
+
+  /*
+   * Ordrette fraser fra en AI-chat. Kun sætninger, en elev ikke skriver selv om sin egen opgave.
+   * (At afgøre om en tekst "lyder som AI" kan ikke gøres sikkert – det gør HolyMoly derfor ikke.
+   *  Beviset bygger på skriveforløbet; dette er et ekstra tjek for åbenlyse spor.)
+   * Kun disse giver afslag. En ærlig tekst om AI må gerne nævne ChatGPT eller bruge overskrifter.
+   */
+  const TRACES = [
+    [/\bjeg er (en|bare en) (ai|sprogmodel|chatbot|kunstig intelligens)\b/i, 'Teksten indeholder "jeg er en AI/sprogmodel"'],
+    [/\bas an ai( language model)?\b/i, 'Teksten indeholder "as an AI language model"'],
+    [/\bi(?:'|’)?m (just )?an ai\b/i, 'Teksten indeholder "I\'m an AI"'],
+    [/\b(as of|pr\.?) (my|min) (last )?(knowledge (cutoff|update)|vidensopdatering|træningsdata)\b/i, 'Teksten henviser til en AI-models "vidensgrænse"'],
+    [/^\s*(regenerate response|generér svar igen|copy code|kopiér kode)\s*$/im, 'Teksten indeholder knap-tekst fra en AI-chat'],
+  ];
+  /* Svagere spor: vises for læreren som en oplysning. Giver aldrig afslag. */
+  const HINTS = [
+    [/\bsom (en )?(ai|kunstig intelligens|sprogmodel)\b[^.\n]{0,40}\b(kan jeg|har jeg|er jeg|jeg)\b/i, 'Teksten indeholder "som en AI/sprogmodel … jeg" (kan være et citat)'],
+    [/\b(chatgpt|openai|claude\.ai|gemini\.google|perplexity\.ai|copilot\.microsoft)\b.{0,30}\b(sagde|skrev|svarede|said|wrote)\b/i, 'Teksten nævner, hvad en AI-chat sagde'],
+    [/^\s*(#{1,4} |\*\*[^*\n]{2,60}\*\*\s*$)/m, 'Teksten indeholder Markdown-tegn (### / **fed**)'],
+  ];
+  function aiTraces(text) {
+    const t = String(text || '');
+    const out = [];
+    for (const [re, why] of TRACES) if (re.test(t)) out.push(why);
+    return out;
+  }
+  function aiHints(text) {
+    const t = String(text || '');
+    const out = [];
+    for (const [re, why] of HINTS) if (re.test(t)) out.push(why);
+    return out;
+  }
+
+  /*
+   * Mærket på et dokument med bevis. Det siger, hvad HolyMoly faktisk har set: at teksten er tastet
+   * i HolyMoly uden indsat tekst – og om det skete i timen eller hjemme uden opsyn.
+   * place: 'lektion' | 'hjemme' | 'lektion og hjemme' (fra beviset). Ukendt sted: intet sted i mærket.
+   */
+  const MARK = '\u2713 Tastet i HolyMoly \u2013 intet indsat';
+  const LIMIT_TEXT = 'D\u00e6kker skriveforl\u00f8bet p\u00e5 computeren \u2013 ikke afskrift fra telefon eller papir.';
+  function label(place) {
+    const p = String(place || '');
+    if (!p) return MARK;
+    return MARK + ' \u00b7 ' + (/hjemme/.test(p) ? 'hjemme uden opsyn' : 'i timen');
+  }
+
+  /* ---------------------------------------------------------------- .docx ---------------------------------------------------------------- */
+  const enc = (s) => new TextEncoder().encode(s);
+  const xmlEsc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  let CRC_TABLE = null;
+  function crc32(bytes) {
+    if (!CRC_TABLE) {
+      CRC_TABLE = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; CRC_TABLE[n] = c >>> 0; }
+    }
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  /** Minimal ZIP (uden komprimering) – nok til en .docx. */
+  function zip(files) {
+    const parts = [];
+    const central = [];
+    let offset = 0;
+    for (const [name, data] of files) {
+      const nameB = enc(name);
+      const crc = crc32(data);
+      const local = new Uint8Array(30 + nameB.length);
+      const dv = new DataView(local.buffer);
+      dv.setUint32(0, 0x04034b50, true); dv.setUint16(4, 20, true); dv.setUint16(6, 0x0800, true); dv.setUint16(8, 0, true);
+      dv.setUint16(10, 0, true); dv.setUint16(12, 0x21, true); dv.setUint32(14, crc, true);
+      dv.setUint32(18, data.length, true); dv.setUint32(22, data.length, true); dv.setUint16(26, nameB.length, true); dv.setUint16(28, 0, true);
+      local.set(nameB, 30);
+      parts.push(local, data);
+      const cen = new Uint8Array(46 + nameB.length);
+      const cv = new DataView(cen.buffer);
+      cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true); cv.setUint16(8, 0x0800, true); cv.setUint16(10, 0, true);
+      cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true); cv.setUint32(16, crc, true); cv.setUint32(20, data.length, true); cv.setUint32(24, data.length, true);
+      cv.setUint16(28, nameB.length, true); cv.setUint32(42, offset, true);
+      cen.set(nameB, 46);
+      central.push(cen);
+      offset += local.length + data.length;
+    }
+    const cenSize = central.reduce((n, c) => n + c.length, 0);
+    const end = new Uint8Array(22);
+    const ev = new DataView(end.buffer);
+    ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+    ev.setUint32(12, cenSize, true); ev.setUint32(16, offset, true);
+    const all = [...parts, ...central, end];
+    const out = new Uint8Array(all.reduce((n, p) => n + p.length, 0));
+    let pos = 0;
+    for (const p of all) { out.set(p, pos); pos += p.length; }
+    return out;
+  }
+
+  function runXml(r, extra) {
+    const props = (r.b ? '<w:b/>' : '') + (r.i ? '<w:i/>' : '') + (r.u ? '<w:u w:val="single"/>' : '') + (extra || '');
+    return `<w:r>${props ? `<w:rPr>${props}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(r.x)}</w:t></w:r>`;
+  }
+
+  /**
+   * Word-dokument (.docx).
+   * meta: { title, author, mark: { code, url, place } – mærket i sidefoden (se label()), readOnly: skrivebeskyttet }
+   * Skrivebeskyttelsen i Word kan slås fra af en, der vil; om teksten er ændret, afgøres altid på tjek-siden (url).
+   */
+  function toDocx(blocks, meta = {}) {
+    let n = 0;
+    const paras = [];
+    if (meta.title) paras.push(`<w:p><w:pPr><w:pStyle w:val="Title"/></w:pPr>${runXml({ x: meta.title })}</w:p>`);
+    for (const b of blocks) {
+      if (b.t !== 'ol') n = 0;
+      const style = b.t === 'h1' ? 'Heading1' : b.t === 'h2' ? 'Heading2' : '';
+      const prefix = b.t === 'ul' ? '\u2022 ' : b.t === 'ol' ? (++n) + '. ' : '';
+      const ind = b.t === 'ul' || b.t === 'ol' ? '<w:ind w:left="360" w:hanging="360"/>' : '';
+      const pPr = style || ind ? `<w:pPr>${style ? `<w:pStyle w:val="${style}"/>` : ''}${ind}</w:pPr>` : '';
+      paras.push(`<w:p>${pPr}${prefix ? runXml({ x: prefix }) : ''}${b.r.map(r => runXml(r)).join('')}</w:p>`);
+    }
+    const mark = meta.mark && meta.mark.code ? meta.mark : null;
+    const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const footerRef = mark ? '<w:footerReference w:type="default" r:id="rId3"/>' : '';
+    const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${paras.join('')}<w:sectPr>${footerRef}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+    // Sidefod på hver side: mærket · HolyMoly HM-XXXX · Tjek: <link>, og på næste linje forbeholdet og antal ord
+    const words = wordCount(normalizeText(textOf(blocks)));
+    const footer = mark ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr ${W}><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="D1D5DB"/></w:pBdr><w:spacing w:after="0"/></w:pPr>`
+      + runXml({ x: label(mark.place), b: 1 }, '<w:color w:val="15803D"/><w:sz w:val="18"/>')
+      + runXml({ x: `  \u00b7  HolyMoly ${mark.code}${mark.url ? '  \u00b7  Tjek: ' + mark.url : ''}` }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
+      + '</w:p><w:p>'
+      + runXml({ x: `${LIMIT_TEXT} ${words} ord.` }, '<w:color w:val="6B7280"/><w:sz w:val="16"/>')
+      + '</w:p></w:ftr>' : '';
+    const settings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings ${W}>${meta.readOnly ? '<w:documentProtection w:edit="readOnly" w:enforcement="1"/>' : ''}<w:defaultTabStop w:val="708"/></w:settings>`;
+    const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}>
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="24"/><w:lang w:val="da-DK"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="160" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:rPr><w:b/><w:sz w:val="44"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="240"/><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:keepNext/><w:spacing w:before="200"/><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="28"/></w:rPr></w:style>
+</w:styles>`;
+    const core = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>${xmlEsc(meta.title || '')}</dc:title><dc:creator>${xmlEsc(meta.author || '')}</dc:creator>${mark ? `<dc:description>${xmlEsc(label(mark.place) + ' - HolyMoly ' + mark.code + (mark.url ? ' - ' + mark.url : '') + ' - ' + LIMIT_TEXT)}</dc:description>` : ''}</cp:coreProperties>`;
+    const WM = 'application/vnd.openxmlformats-officedocument.wordprocessingml';
+    return zip([
+      ['[Content_Types].xml', enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="${WM}.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="${WM}.styles+xml"/><Override PartName="/word/settings.xml" ContentType="${WM}.settings+xml"/>${mark ? `<Override PartName="/word/footer1.xml" ContentType="${WM}.footer+xml"/>` : ''}<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`)],
+      ['_rels/.rels', enc('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>')],
+      ['word/_rels/document.xml.rels', enc(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>${mark ? '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>' : ''}</Relationships>`)],
+      ['word/document.xml', enc(document)],
+      ['word/styles.xml', enc(styles)],
+      ['word/settings.xml', enc(settings)],
+      ...(mark ? [['word/footer1.xml', enc(footer)]] : []),
+      ['docProps/core.xml', enc(core)],
+    ]);
+  }
+
+  /* ------------------------------------------------------ læs en .docx (tjek-siden) ------------------------------------------------------ */
+  /**
+   * Hent én fil fra en zip (fx word/document.xml fra en .docx). Læser zip'ens centrale katalog selv.
+   * inflateRaw(bytes) -> Promise<Uint8Array> pakker "deflate"-data ud (browser: DecompressionStream('deflate-raw')).
+   * Returnerer null, hvis filen ikke findes. Kaster ved en ødelagt eller for stor zip.
+   */
+  async function readZipEntry(bytes, name, inflateRaw, maxSize = 20 * 1024 * 1024) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 22 - 65535); i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('Filen er ikke en Word-fil (.docx)');
+    const count = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    const dec = new TextDecoder();
+    for (let n = 0; n < count; n++) {
+      if (p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) throw new Error('Word-filen er ødelagt');
+      const method = dv.getUint16(p + 10, true);
+      const csize = dv.getUint32(p + 20, true);
+      const usize = dv.getUint32(p + 24, true);
+      const nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+      const local = dv.getUint32(p + 42, true);
+      const entry = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+      p += 46 + nlen + elen + clen;
+      if (entry !== name) continue;
+      if (usize > maxSize || csize > maxSize) throw new Error('Filen er for stor');
+      if (local + 30 > u8.length || dv.getUint32(local, true) !== 0x04034b50) throw new Error('Word-filen er ødelagt');
+      const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      const data = u8.subarray(start, start + csize);
+      if (data.length !== csize) throw new Error('Word-filen er ødelagt');
+      if (method === 0) return data;
+      if (method === 8) {
+        const out = await inflateRaw(data);
+        if (out.length > maxSize) throw new Error('Filen er for stor');
+        return out;
+      }
+      throw new Error('Word-filen bruger en ukendt komprimering');
+    }
+    return null;
+  }
+
+  const xmlUnesc = (s) => s.replace(/&(#x[0-9a-f]+|#[0-9]+|amp|lt|gt|quot|apos);/gi, (m, e) => {
+    const k = e.toLowerCase();
+    if (k[0] === '#') { const c = k[1] === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10); try { return String.fromCodePoint(c); } catch (x) { return ''; } }
+    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[k];
+  });
+
+  /** Afsnittene i word/document.xml: [{ style, list, text }]. */
+  function docxParagraphs(xml) {
+    const out = [];
+    const re = /<w:p(?=[\s>\/])[^>]*?(?:\/>|>([\s\S]*?)<\/w:p>)/g;
+    let m;
+    while ((m = re.exec(String(xml)))) {
+      const inner = m[1] || '';
+      const pPr = (inner.match(/<w:pPr\b[\s\S]*?<\/w:pPr>/) || [''])[0];
+      const style = (pPr.match(/<w:pStyle\b[^>]*\bw:val="([^"]*)"/) || [])[1] || '';
+      const list = /<w:numPr\b|<w:ind\b[^>]*\bw:hanging="/.test(pPr);
+      const body = inner.replace(/<w:pPr\b[\s\S]*?<\/w:pPr>/, '');
+      let text = '';
+      const tre = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:(tab|br|cr)\b[^>]*\/>/g;
+      let t;
+      while ((t = tre.exec(body))) text += t[1] != null ? xmlUnesc(t[1]) : t[2] === 'tab' ? '\t' : ' ';
+      out.push({ style, list, text });
+    }
+    return out;
+  }
+
+  /**
+   * Teksten i en .docx, normaliseret præcis som da beviset blev udstedt (normalizeText).
+   * HolyMolys Word-fil har titlen øverst (typografien "Title") og "•" / "1." foran listepunkter –
+   * de er ikke en del af den tekst, beviset dækker. variants: de mulige udgaver af teksten (den første er den mest sandsynlige).
+   */
+  function docxText(xml) {
+    const ps = docxParagraphs(xml).map(p => Object.assign(p, { line: normalizeText(p.text) })).filter(p => p.line);
+    const titleP = ps.find(p => /^(title|titel)$/i.test(p.style));
+    const body = ps.filter(p => p !== titleP);
+    const strip = (p) => (p.list ? p.line.replace(/^(\u2022|\d+\.)(\s+|$)/, '') : p.line);
+    const variants = [];
+    const add = (lines) => { const t = normalizeText(lines.join('\n')); if (!variants.includes(t)) variants.push(t); };
+    add(body.map(strip)); add(body.map(p => p.line)); add(ps.map(strip)); add(ps.map(p => p.line));
+    return { title: titleP ? titleP.line : '', text: variants[0], variants };
+  }
+
+  return { validateBlocks, textOf, normalizeText, wordCount, aiTraces, aiHints, label, MARK, LIMIT_TEXT, toDocx, readZipEntry, docxParagraphs, docxText, LIMITS };
+});

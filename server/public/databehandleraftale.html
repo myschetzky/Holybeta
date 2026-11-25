@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Databehandleraftale – HolyMoly</title>
+  <meta name="description" content="Databehandleraftale mellem skolen og HolyMoly.">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <a class="skip" href="#indhold">Gå til indhold</a>
+  <header class="site-head" id="site-head"></header>
+  <main class="doc" id="indhold">
+    <div class="wrap">
+      <div class="draft-note"><b>Udkast.</b> Aftalen er en skabelon og skal gennemgås af en advokat, før den bruges. Overvej at bruge Datatilsynets standardkontraktbestemmelser som grundlag – mange kommuner og skoler forventer dem.</div>
+      <h1>Databehandleraftale</h1>
+      <p class="intro">Aftalen gælder mellem skolen (den dataansvarlige) og <span data-company="name">[virksomhedens navn]</span> (databehandleren) om behandling af personoplysninger i HolyMoly, jf. databeskyttelsesforordningens artikel 28.</p>
+
+      <h2>1. Formål og instruks</h2>
+      <p>Databehandleren behandler kun personoplysninger efter dokumenteret instruks fra den dataansvarlige for at levere HolyMoly som beskrevet i vilkårene og i bilag A. Mener databehandleren, at en instruks er i strid med databeskyttelsesreglerne, giver databehandleren straks besked.</p>
+
+      <h2>2. Fortrolighed</h2>
+      <p>Kun medarbejdere, der har brug for det, har adgang til personoplysningerne, og de har tavshedspligt.</p>
+
+      <h2>3. Sikkerhed</h2>
+      <p>Databehandleren gennemfører passende tekniske og organisatoriske foranstaltninger, jf. artikel 32 og bilag C, herunder kryptering af trafik, adgangsstyring, to-faktor-login, logning af lærerhandlinger, sikkerhedskopiering og automatisk sletning.</p>
+
+      <h2>4. Underdatabehandlere</h2>
+      <p>Databehandleren må bruge de underdatabehandlere, der står i bilag B. Nye underdatabehandlere varsles mindst 30 dage i forvejen, så den dataansvarlige kan gøre indsigelse. Databehandleren pålægger underdatabehandlere de samme forpligtelser som i denne aftale.</p>
+
+      <h2>5. Overførsel til tredjelande</h2>
+      <p>Personoplysninger behandles og opbevares kun i EU/EØS.</p>
+
+      <h2>6. Bistand</h2>
+      <p>Databehandleren hjælper den dataansvarlige med at besvare anmodninger fra de registrerede (fx indsigt via eksport af elevens log), med konsekvensanalyser og med dialog med Datatilsynet.</p>
+
+      <h2>7. Brud på persondatasikkerheden</h2>
+      <p>Databehandleren underretter den dataansvarlige uden unødig forsinkelse og senest 48 timer efter at være blevet opmærksom på et brud, med de oplysninger, der er nødvendige for at anmelde bruddet.</p>
+
+      <h2>8. Sletning og tilbagelevering</h2>
+      <p>Når aftalen ophører, kan den dataansvarlige eksportere sine data i 90 dage. Derefter slettes alle personoplysninger; sikkerhedskopier slettes senest 30 dage efter (den natlige kopi gemmes i 7 dage), medmindre lovgivning kræver opbevaring.</p>
+
+      <h2>9. Revision og tilsyn</h2>
+      <p>Databehandleren stiller de oplysninger til rådighed, der er nødvendige for at påvise overholdelse af aftalen, og giver mulighed for revision foretaget af den dataansvarlige eller en uafhængig revisor.</p>
+
+      <h2>10. Ikrafttræden og ophør</h2>
+      <p>Aftalen træder i kraft, når skolen opretter sig i HolyMoly, og gælder, så længe databehandleren behandler personoplysninger for skolen.</p>
+
+      <h2>Bilag A – Behandlingen</h2>
+      <table>
+        <tbody>
+          <tr><th>Formål</th><td>Sikre at elever arbejder uden AI og forbudte hjælpemidler i undervisning og prøver; skrive-beviser; lærerens værktøjer i timen.</td></tr>
+          <tr><th>Registrerede</th><td>Elever og lærere på skolen.</td></tr>
+          <tr><th>Oplysninger</th><td>Navn, klasse, e-mail (lærere), Unilogin-id, aktivt program og hjemmeside, åbne faner og programmer i lektionen, skærmbilleder taget af læreren eller – hvis skolen har slået det til – ved forbudt brug, tekster skrevet i HolyMoly og skriveforløbet, tidspunkter. Ingen følsomme oplysninger efter artikel 9 er tilsigtet.</td></tr>
+          <tr><th>Varighed</th><td>Log og skærmbilleder slettes efter opbevaringsfristen (standard 30 dage). Konti, klasser og dokumenter, til de slettes af skolen eller aftalen ophører.</td></tr>
+          <tr><th>Sted</th><td>Servere i EU.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Bilag B – Underdatabehandlere</h2>
+      <table>
+        <thead><tr><th>Navn</th><th>Opgave</th><th>Placering</th></tr></thead>
+        <tbody>
+          <tr><td><span data-company="hosting">[hostingudbyder]</span></td><td>Drift af servere</td><td>EU</td></tr>
+          <tr><td>[mailudbyder]</td><td>Afsendelse af e-mails til lærere (login-links, invitationer)</td><td>EU</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Bilag C – Sikkerhedsforanstaltninger</h2>
+      <ul>
+        <li>HTTPS (TLS) på al trafik; sikkerheds-headers og streng Content-Security-Policy.</li>
+        <li>Adgangskoder gemmes med scrypt; to-faktor-nøgler gemmes krypteret (AES-256-GCM).</li>
+        <li>Lærere ser kun egne klasser; skolens administrator styrer adgang; lærer-logbog over handlinger.</li>
+        <li>Overvågning kun i lektionen; eleven får besked, når læreren ser skærmen.</li>
+        <li>Automatisk sletning efter opbevaringsfristen; sletning af elev eller klasse sletter al tilhørende data.</li>
+        <li>Begrænsning af loginforsøg; signerede skrive-beviser; signerede beskeder fra vagt-tjenesten.</li>
+      </ul>
+      <p class="muted small">Kontakt: <span data-company="email">[e-mail]</span></p>
+    </div>
+  </main>
+  <footer class="site-foot" id="site-foot"></footer>
+  <script src="/site.js"></script>
+</body>
+</html>

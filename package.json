@@ -1,0 +1,17 @@
+{
+  "name": "holymoly",
+  "private": true,
+  "description": "HolyMoly – klasse-overvågning der kun kører i lektionen",
+  "scripts": {
+    "sync": "node -e \"const fs=require('fs');for(const d of ['agent/src/rules.js','extension/rules.js'])fs.copyFileSync('shared/rules.js',d);fs.copyFileSync('shared/netwatch.js','agent/src/netwatch.js');fs.copyFileSync('shared/doc.js','agent/src/doc.js')\" && node scripts/build-guard-lists.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "e2e": "xvfb-run -a -s '-screen 0 1440x900x24' node test/e2e/run.js",
+    "server": "npm --prefix server start",
+    "agent": "npm --prefix agent start",
+    "demo": "node --disable-warning=ExperimentalWarning scripts/demo.js",
+    "pages": "node scripts/build-pages.js",
+    "simulate": "node --disable-warning=ExperimentalWarning test/sim/lesson.js",
+    "a11y": "node --disable-warning=ExperimentalWarning scripts/a11y.js",
+    "enkel": "node --disable-warning=ExperimentalWarning scripts/enkel.js"
+  }
+}

@@ -1,0 +1,17 @@
+#!/bin/bash
+# Køres af macOS-installationsprogrammet (som root) efter HolyMoly er lagt i /Programmer.
+APP="/Applications/HolyMoly.app"
+RES="$APP/Contents/Resources/guard/mac"
+DATA="/Library/Application Support/HolyMoly"
+mkdir -p "$DATA/requests"
+chown root:wheel "$DATA"; chmod 755 "$DATA"; chmod 1777 "$DATA/requests"
+install -m 644 -o root -g wheel "$RES/dk.holymoly.guard.plist" /Library/LaunchDaemons/dk.holymoly.guard.plist
+install -m 644 -o root -g wheel "$RES/dk.holymoly.agent.plist" /Library/LaunchAgents/dk.holymoly.agent.plist
+launchctl bootout system/dk.holymoly.guard 2>/dev/null
+launchctl bootstrap system /Library/LaunchDaemons/dk.holymoly.guard.plist
+uid=$(stat -f %u /dev/console 2>/dev/null)
+if [ -n "$uid" ] && [ "$uid" -gt 0 ] 2>/dev/null; then
+  launchctl bootout "gui/$uid/dk.holymoly.agent" 2>/dev/null
+  launchctl bootstrap "gui/$uid" /Library/LaunchAgents/dk.holymoly.agent.plist
+fi
+exit 0

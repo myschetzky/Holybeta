@@ -1,0 +1,17 @@
+# HolyMoly bag en Cloudflare-tunnel – til en server derhjemme (fx Proxmox) uden åbne porte i routeren.
+# Bruges sammen med docker-compose.yml, men uden Caddy (tunnelen leverer https):
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.cloudflare.yml up -d --build holymoly cloudflared
+#
+# deploy/.env skal have CLOUDFLARE_TUNNEL_TOKEN og PUBLIC_URL. Se docs/PROXMOX.md.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest  # fastlås gerne til en bestemt version
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?Sæt CLOUDFLARE_TUNNEL_TOKEN i deploy/.env}
+    depends_on: [holymoly]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

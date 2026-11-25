@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+  <title>Skriv i HolyMoly</title>
+  <link rel="stylesheet" href="write.css">
+</head>
+<body>
+  <header class="bar">
+    <img src="../assets/icon.svg" alt="" width="22" height="22">
+    <input id="title" maxlength="120" placeholder="Titel på opgaven" aria-label="Titel" autocomplete="off" spellcheck="true" lang="da">
+    <select id="docs" aria-label="Mine dokumenter"></select>
+    <button class="btn" id="new">Nyt dokument</button>
+    <button class="btn" id="asg-btn">Afleveringer <span class="count" id="asg-count" hidden></span></button>
+  </header>
+
+  <div class="tools" role="toolbar" aria-label="Formatering">
+    <button data-cmd="bold" title="Fed (Ctrl+B)"><b>F</b></button>
+    <button data-cmd="italic" title="Kursiv (Ctrl+I)"><i>K</i></button>
+    <button data-cmd="underline" title="Understreget (Ctrl+U)"><u>U</u></button>
+    <span class="sep"></span>
+    <button data-block="h1" title="Overskrift">Overskrift</button>
+    <button data-block="h2" title="Underoverskrift">Underoverskrift</button>
+    <button data-block="p" title="Brødtekst">Tekst</button>
+    <span class="sep"></span>
+    <button data-cmd="insertUnorderedList" title="Punktopstilling">• Liste</button>
+    <button data-cmd="insertOrderedList" title="Nummereret liste">1. Liste</button>
+    <span class="spacer"></span>
+    <span class="shield" title="Indsæt er slået fra. Alt du skriver her, er tastet af dig.">Indsæt er slået fra</span>
+  </div>
+
+  <main class="page-wrap">
+    <div class="notice" id="notice" hidden></div>
+    <article class="page">
+      <div id="editor" contenteditable="true" spellcheck="true" lang="da" aria-label="Dokument" data-placeholder="Begynd at skrive…"></div>
+    </article>
+  </main>
+
+  <footer class="status">
+    <span id="words">0 ord</span>
+    <span id="saved"></span>
+    <span id="preview" class="preview" hidden></span>
+    <span class="spacer"></span>
+    <button class="btn" id="docx">Gem som Word</button>
+    <button class="btn primary" id="submit">Afslut dokument</button>
+  </footer>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <dialog id="confirm">
+    <form method="dialog">
+      <h2 id="confirm-title">Afslut dokumentet?</h2>
+      <p id="confirm-text">Når du afslutter, kan teksten ikke længere ændres. HolyMoly tjekker skriveforløbet og sætter mærket <b id="confirm-mark"></b> på dokumentet, hvis alt er i orden.</p>
+      <div id="confirm-why" hidden>
+        <p>Beviset vil mangle, fordi:</p>
+        <ul class="why-list" id="confirm-list"></ul>
+        <p class="muted">Skriver du videre, kan du stadig nå at få beviset. Afleverer du alligevel, kan teksten ikke længere ændres, og den får ikke mærket.</p>
+      </div>
+      <p id="confirm-asg" hidden></p>
+      <div class="actions"><button class="btn" value="no" id="confirm-no">Annuller</button><button class="btn primary" value="yes" id="confirm-yes">Afslut</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="result">
+    <form method="dialog">
+      <h2 id="r-title"></h2>
+      <div id="r-body"></div>
+      <div class="actions"><button class="btn" id="r-docx" type="button">Gem som Word</button><button class="btn primary" value="ok">Luk</button></div>
+    </form>
+  </dialog>
+  <dialog id="asg" class="wide">
+    <form method="dialog">
+      <h2>Afleveringer</h2>
+      <p class="muted">Vælg en aflevering, og vedhæft et dokument, du har skrevet og afsluttet i HolyMoly.</p>
+      <ul class="asg-list" id="asg-list"></ul>
+      <div class="actions"><button class="btn primary" value="ok">Luk</button></div>
+    </form>
+  </dialog>
+
+  <script src="write.js"></script>
+</body>
+</html>

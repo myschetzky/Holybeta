@@ -1,0 +1,86 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --prefix server
+      # Elev-appens pakker (uden Electron-programmet) – bruges af test/bridge.test.js
+      - run: npm ci --prefix agent --ignore-scripts
+      - run: npm test
+      - name: Regelfilerne er i sync
+        run: npm run sync && git diff --exit-code
+      # Kendte sårbarheder i det, der kører hos skolerne (server og elev-app) – ikke byggeværktøjer
+      - name: npm audit (server + elev-app)
+        run: |
+          npm audit --omit=dev --audit-level=high --prefix server
+          npm audit --omit=dev --audit-level=high --prefix agent
+
+  # Docker-billedet startes som i deploy/docker-compose.yml (bruger 1000, navngivet volumen, skrivebeskyttet, ingen rettigheder)
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Byg billedet
+        run: docker build -f server/Dockerfile -t holymoly-test .
+      - name: Start som i docker-compose.yml
+        run: |
+          docker volume create hm-data
+          docker run -d --name hm -p 8080:8080 --user 1000:1000 -v hm-data:/data \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+            -e TEACHER_SIGNUP_CODE=ci holymoly-test
+          for i in $(seq 1 30); do curl -fsS http://localhost:8080/healthz && break; sleep 1; done
+      - name: Serveren kan gemme i /data (opret en lærer)
+        run: |
+          code=$(curl -s -o /tmp/r.json -w '%{http_code}' -H 'Content-Type: application/json' \
+            -d '{"email":"ci@skole.dk","name":"CI","password":"tavle-kridt-1234","signupCode":"ci"}' http://localhost:8080/api/register)
+          cat /tmp/r.json; echo; echo "HTTP $code"
+          test "$code" = 200
+          docker exec hm ls -la /data
+          curl -fsS http://localhost:8080/.well-known/security.txt -o /dev/null -w 'security.txt: %{http_code}\n' || true
+          curl -sI http://localhost:8080/ | grep -i -E 'content-security-policy|cross-origin-resource-policy'
+      - name: Serverens log
+        if: ${{ always() }}
+        run: docker logs hm || true
+
+  # Ende-til-ende: server + den rigtige Electron-elev-app + Chromium med udvidelsen + lærer-dashboardet (Linux/Xvfb)
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Skærm, vinduesstyring og xprop
+        run: sudo apt-get update -q && sudo apt-get install -yq xvfb openbox x11-utils
+      - run: npm ci --prefix server
+      - run: npm ci --prefix agent
+      # Selve Electron-programmet (agent/node_modules/electron/dist) – hentes ikke altid af npm ci
+      - run: node agent/node_modules/electron/install.js && test -x agent/node_modules/electron/dist/electron
+      - name: Playwright + Chromium (+ axe-core til tilgængelighedstjekket)
+        run: |
+          npm install --no-save --no-package-lock playwright@1.49.1 axe-core@4.10.2
+          npx playwright install --with-deps chromium
+      - run: npm run e2e
+      # Webtilgængelighed (WCAG 2.1 A/AA) – kommuner kræver det ved IT-indkøb (EN 301 549)
+      - name: Tilgængelighed (axe-core)
+        if: ${{ !cancelled() }}
+        run: npm run a11y
+      - name: Skærmbilleder
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-skaermbilleder
+          path: test-results/
+          if-no-files-found: ignore

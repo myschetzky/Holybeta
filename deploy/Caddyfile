@@ -1,0 +1,5 @@
+# Caddy henter og fornyer automatisk et HTTPS-certifikat for domænet.
+{$HM_DOMAIN} {
+	encode gzip
+	reverse_proxy holymoly:8080
+}

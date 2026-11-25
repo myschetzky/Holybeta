@@ -1,0 +1,129 @@
+{
+  "name": "holymoly-agent",
+  "productName": "HolyMoly",
+  "version": "1.2.4",
+  "private": true,
+  "description": "HolyMoly elev-app: viser læreren at computeren kun bruges til undervisning, mens appen er åben.",
+  "main": "src/main.js",
+  "author": {
+    "name": "HolyMoly",
+    "email": "kontakt@holymoly.dk"
+  },
+  "license": "UNLICENSED",
+  "scripts": {
+    "sync-shared": "node -e \"const fs=require('fs');fs.copyFileSync('../shared/rules.js','src/rules.js');fs.copyFileSync('../shared/netwatch.js','src/netwatch.js')\" && node ../scripts/build-guard-lists.js",
+    "start": "npm run sync-shared && electron .",
+    "dist": "npm run sync-shared && electron-builder",
+    "dist:win": "npm run sync-shared && electron-builder --win",
+    "dist:mac": "npm run sync-shared && electron-builder --mac",
+    "dist:linux": "npm run sync-shared && electron-builder --linux"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "dk.holymoly.agent",
+    "productName": "HolyMoly",
+    "files": [
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "config.json",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": true,
+      "include": "build/installer.nsh",
+      "createDesktopShortcut": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "HolyMoly-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "pkg"
+      ],
+      "category": "public.app-category.education",
+      "icon": "assets/icon.png",
+      "hardenedRuntime": true,
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "HolyMoly læser adressen på den aktive fane i Safari/Chrome, mens lektionen er i gang.",
+        "NSScreenCaptureUsageDescription": "Læreren kan se din skærm, mens lektionen er i gang og HolyMoly er åben."
+      },
+      "extraResources": [
+        {
+          "from": "../macos/dist",
+          "to": ".",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
+      "signIgnore": [
+        "HolyMoly Filter\\.app"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Education",
+      "icon": "assets/icon.png"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
+    "extraResources": [
+      {
+        "from": "guard",
+        "to": "guard",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "pkg": {
+      "scripts": "build/pkg-scripts",
+      "installLocation": "/Applications",
+      "isRelocatable": false,
+      "allowAnywhere": false,
+      "allowCurrentUserHome": false,
+      "mustClose": [
+        "dk.holymoly.agent"
+      ],
+      "artifactName": "HolyMoly-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "myschetzky",
+        "repo": "HolyMoly"
+      }
+    ]
+  },
+  "homepage": "https://github.com/myschetzky/HolyMoly",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/myschetzky/HolyMoly.git"
+  }
+}

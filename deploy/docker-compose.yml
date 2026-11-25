@@ -1,0 +1,64 @@
+# Kør fra repo-roden:  docker compose -f deploy/docker-compose.yml up -d
+# Udfyld deploy/.env først (se deploy/.env.example og docs/SALG.md).
+services:
+  holymoly:
+    build: { context: .., dockerfile: server/Dockerfile }
+    restart: unless-stopped
+    environment:
+      TEACHER_SIGNUP_CODE: ${TEACHER_SIGNUP_CODE:-}
+      # Kontoer, skoler og licenser
+      LICENSING: ${LICENSING:-1}
+      TRIAL_DAYS: ${TRIAL_DAYS:-30}
+      PRICE_PER_STUDENT: ${PRICE_PER_STUDENT:-129}
+      PRICE_MINIMUM: ${PRICE_MINIMUM:-2500}
+      REQUIRE_2FA: ${REQUIRE_2FA:-1}
+      SIGNUP: ${SIGNUP:-open}
+      PLATFORM_ADMINS: ${PLATFORM_ADMINS:-}
+      SALES_EMAIL: ${SALES_EMAIL:-}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      COMPANY_NAME: ${COMPANY_NAME:-HolyMoly}
+      COMPANY_CVR: ${COMPANY_CVR:-}
+      COMPANY_ADDRESS: ${COMPANY_ADDRESS:-}
+      COMPANY_EMAIL: ${COMPANY_EMAIL:-}
+      HOSTING_PROVIDER: ${HOSTING_PROVIDER:-}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
+      BACKUP_DAYS: ${BACKUP_DAYS:-7}
+      PURGE_AFTER_DAYS: ${PURGE_AFTER_DAYS:-90}
+      SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-12}
+      SECURITY_CONTACT: ${SECURITY_CONTACT:-}
+      AGENT_DOWNLOAD_URL: ${AGENT_DOWNLOAD_URL:-}
+      TRUST_PROXY: "1"
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # UNI-Login (tomme = slået fra)
+      UNILOGIN_ISSUER: ${UNILOGIN_ISSUER:-}
+      UNILOGIN_CLIENT_ID: ${UNILOGIN_CLIENT_ID:-}
+      UNILOGIN_CLIENT_SECRET: ${UNILOGIN_CLIENT_SECRET:-}
+      UNILOGIN_REDIRECT_URI: ${UNILOGIN_REDIRECT_URI:-}
+      UNILOGIN_SCOPE: ${UNILOGIN_SCOPE:-openid}
+      UNILOGIN_ROLE_CLAIM: ${UNILOGIN_ROLE_CLAIM:-aktoer_gruppe}
+      UNILOGIN_TEACHER_ROLES: ${UNILOGIN_TEACHER_ROLES:-}
+      UNILOGIN_ID_CLAIM: ${UNILOGIN_ID_CLAIM:-uniid}
+      UNILOGIN_ACR: ${UNILOGIN_ACR:-}
+      UNILOGIN_OPTIONAL: ${UNILOGIN_OPTIONAL:-0}
+    volumes:
+      - holymoly-data:/data
+    user: "1000:1000"
+    # Hærdning: skrivebeskyttet filsystem (kun /data og /tmp kan skrives), ingen Linux-rettigheder, ingen ny root
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      HM_DOMAIN: ${HM_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on: [holymoly]
+volumes:
+  holymoly-data:
+  caddy-data:

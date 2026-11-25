@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self';">
+  <title>Skærmen er låst</title>
+  <link rel="stylesheet" href="freeze.css">
+</head>
+<body>
+  <!-- Frys: læreren har låst skærmen -->
+  <div class="box" id="frozen">
+    <div class="ico">❄</div>
+    <h1>Din skærm er låst af læreren</h1>
+    <p class="msg" id="msg"></p>
+  </div>
+
+  <!-- Gennemgang: standby med ur, dato og tid tilbage af lektionen -->
+  <div class="review" id="review" hidden>
+    <p class="label">Gennemgang – kig op</p>
+    <div class="clock" id="clock">--.--</div>
+    <div class="date" id="date"></div>
+    <div class="left" id="left-wrap">
+      <div class="bar"><div class="fill" id="bar"></div></div>
+      <div class="left-text" id="left"></div>
+    </div>
+    <p class="msg" id="review-msg"></p>
+  </div>
+  <script src="freeze.js"></script>
+</body>
+</html>

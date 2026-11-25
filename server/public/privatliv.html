@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privatlivspolitik – HolyMoly</title>
+  <meta name="description" content="Sådan behandler HolyMoly personoplysninger om lærere og elever.">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <a class="skip" href="#indhold">Gå til indhold</a>
+  <header class="site-head" id="site-head"></header>
+  <main class="doc" id="indhold">
+    <div class="wrap">
+      <div class="draft-note"><b>Udkast.</b> Privatlivspolitikken er en skabelon og skal gennemgås af en advokat eller DPO, før den bruges.</div>
+      <h1>Privatlivspolitik</h1>
+      <p class="intro">Her kan du læse, hvilke oplysninger HolyMoly behandler, hvorfor, og hvor længe. Kort sagt: kun det nødvendige, kun i lektionen, og intet sælges eller bruges til andet.</p>
+
+      <h2>Hvem er ansvarlig?</h2>
+      <p id="approval" class="notice" hidden></p>
+      <p><b>Elevernes og lærernes data i undervisningen:</b> Skolen er dataansvarlig. HolyMoly (<span data-company="name">[virksomhedens navn]</span>) er databehandler og behandler kun oplysningerne efter skolens instruks, jf. <a href="/databehandleraftale">databehandleraftalen</a>. Har du spørgsmål om dine rettigheder som elev, så kontakt din skole.</p>
+      <p><b>Kunderelationen</b> (skolens kontaktpersoner, bestillinger og fakturaer): Her er HolyMoly dataansvarlig.</p>
+
+      <h2>Oplysninger om lærere</h2>
+      <table>
+        <thead><tr><th>Hvad</th><th>Hvorfor</th><th>Hvor længe</th></tr></thead>
+        <tbody>
+          <tr><td>Navn, e-mail, skole, rolle</td><td>Konto og login</td><td>Til kontoen slettes</td></tr>
+          <tr><td>Adgangskode (kun som krypteret hash) og to-faktor-nøgle (krypteret)</td><td>Sikkert login</td><td>Til kontoen slettes</td></tr>
+          <tr><td>Unilogin-id (hvis tilknyttet)</td><td>Login med Unilogin</td><td>Til kontoen slettes</td></tr>
+          <tr><td>Lærer-logbog (fx "så skærmen", "frøs")</td><td>Gennemsigtighed over for eleverne</td><td>Opbevaringsfristen (standard 30 dage)</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Oplysninger om elever</h2>
+      <p>Kun når læreren har startet en lektion, og HolyMoly-appen er åben:</p>
+      <table>
+        <thead><tr><th>Hvad</th><th>Hvorfor</th><th>Hvor længe</th></tr></thead>
+        <tbody>
+          <tr><td>Navn og klasse</td><td>Vise eleven i klasseværelset</td><td>Til læreren sletter eleven eller klassen</td></tr>
+          <tr><td>Aktivt program og hjemmeside, åbne faner, kørende programmer</td><td>Lamperne og blokering af det forbudte</td><td>Opbevaringsfristen (standard 30 dage)</td></tr>
+          <tr><td>Skærmbilleder (når læreren tager dem – og ved forbudt brug, hvis læreren har slået det til; eleven får besked hver gang)</td><td>Dokumentation</td><td>Opbevaringsfristen</td></tr>
+          <tr><td>Tekster skrevet i HolyMoly, skriveforløbet og beviser</td><td>Mærket på afleveringen</td><td>Til eleven eller læreren sletter dokumentet (en fast frist er på vej)</td></tr>
+        </tbody>
+      </table>
+      <p><b>Afspilning:</b> Læreren kan afspille, hvordan teksten blev til, i trin på ca. 20 sekunder. Vurderingen af skrivestatistikken til mærket er en form for profilering; den bruges kun til mærket og kun af elevens egne lærere.</p>
+      <p><b>Vagten:</b> HolyMoly-vagten kører som systemtjeneste, og appen starter med computeren. Den overvåger først, når læreren har startet en lektion, eller når du selv har åbnet skrivevinduet. Browser-udvidelsen og browserens indstillinger er installeret hele tiden.</p>
+      <p><b>Ingen keylogger:</b> HolyMoly ser aldrig, hvad eleven taster i andre programmer. I HolyMolys eget skrivevindue tælles kun skrivestatistik til fluebenet "Tastet i HolyMoly – intet indsat" (antal anslag, tastede og slettede tegn, tempo og rytme, forsøg på at indsætte) – ikke hvilke taster.</p>
+      <p><b>Vi registrerer ikke</b> filer, kamera, mikrofon eller noget uden for lektionen og skriveøkten.</p>
+
+      <p><b>Sikkerhedskopier:</b> Serveren laver hver nat en kopi af databasen og gemmer den i 7 dage. En oplysning, der er slettet, kan derfor højst ligge i en sikkerhedskopi 7 dage mere.</p>
+
+      <h2>Hvor opbevares data?</h2>
+      <p>På servere i EU hos <span data-company="hosting">[hostingudbyder]</span>. Data overføres ikke til lande uden for EU/EØS og bruges ikke til at træne AI, til reklamer eller til profilering.</p>
+
+      <h2>Sikkerhed</h2>
+      <ul>
+        <li>Al trafik er krypteret (HTTPS).</li>
+        <li>Lærere logger ind med deres egen konto.</li>
+        <li>Lærere ser kun deres egne klasser.</li>
+        <li>Skrive-beviser er digitalt signerede, så de ikke kan forfalskes.</li>
+      </ul>
+
+      <h2>Dine rettigheder</h2>
+      <p>Du har ret til indsigt, berigtigelse, sletning og begrænsning og til at gøre indsigelse. Elever retter henvendelse til deres skole. Du kan klage til Datatilsynet (datatilsynet.dk).</p>
+
+      <h2>Cookies</h2>
+      <p>HolyMoly bruger kun nødvendige cookies til login. Der er ingen statistik- eller reklamecookies, og derfor ingen cookie-banner.</p>
+
+      <p class="muted small">Kontakt: <span data-company="email">[e-mail]</span></p>
+    </div>
+  </main>
+  <footer class="site-foot" id="site-foot"></footer>
+  <script src="/site.js"></script>
+</body>
+</html>

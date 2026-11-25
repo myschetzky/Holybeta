@@ -1,0 +1,21 @@
+{
+  "serverUrl": "http://localhost:8080",
+  "extensionIds": [],
+  "extensionLinks": {
+    "chrome": "https://chromewebstore.google.com/",
+    "edge": "https://microsoftedge.microsoft.com/addons/",
+    "brave": "https://chromewebstore.google.com/",
+    "opera": "https://addons.opera.com/",
+    "vivaldi": "https://chromewebstore.google.com/",
+    "firefox": "https://addons.mozilla.org/"
+  },
+  "requireMacFilter": false,
+  "forceInstall": {
+    "chrome": "",
+    "edge": "",
+    "firefox": "",
+    "_forklaring": "Udfyld når browser-delen er udgivet: chrome/edge = '<id>;<opdaterings-URL>', firefox = URL til .xpi. Vagten tvangsinstallerer den så eleven ikke kan fjerne den."
+  },
+  "publisher": "",
+  "teamId": ""
+}

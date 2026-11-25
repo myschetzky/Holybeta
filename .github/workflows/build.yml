@@ -1,0 +1,135 @@
+name: Byg HolyMoly
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Mindst mulige rettigheder: kun udgivelses-jobbet må skrive (OWASP Top 10:2025 A03, forsyningskæde)
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --prefix server
+      # Elev-appens pakker (uden Electron-programmet) – bruges af test/bridge.test.js
+      - run: npm ci --prefix agent --ignore-scripts
+      - run: npm test
+
+  agent:
+    needs: test
+    env:
+      HAS_MAC_CERT: ${{ secrets.CSC_LINK != '' && secrets.MAC_FILTER_EXT_PROFILE != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - name: Sæt serveradresse
+        shell: bash
+        run: |
+          if [ -n "${{ vars.HM_SERVER_URL }}" ]; then
+            node -e "const f='agent/config.json';const c=require('./'+f);c.serverUrl='${{ vars.HM_SERVER_URL }}';require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+          fi
+      # --- Mac: netværksfilteret (systemudvidelse) bygges og signeres med skolens Apple-konto ---
+      - name: "Mac: importer signeringscertifikat"
+        if: runner.os == 'macOS' && env.HAS_MAC_CERT == 'true'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          KC_PW="$(uuidgen)"
+          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PW" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KC_PW" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          security import "$RUNNER_TEMP/cert.p12" -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PW" build.keychain
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: "Mac: byg netværksfilter"
+        if: runner.os == 'macOS' && env.HAS_MAC_CERT == 'true'
+        env:
+          TEAM_ID: ${{ secrets.MAC_TEAM_ID }}
+          SIGN_ID: ${{ secrets.MAC_SIGN_ID }}
+          APP_PROFILE_B64: ${{ secrets.MAC_FILTER_APP_PROFILE }}
+          EXT_PROFILE_B64: ${{ secrets.MAC_FILTER_EXT_PROFILE }}
+        run: |
+          echo "$APP_PROFILE_B64" | base64 --decode > "$RUNNER_TEMP/app.provisionprofile"
+          echo "$EXT_PROFILE_B64" | base64 --decode > "$RUNNER_TEMP/ext.provisionprofile"
+          APP_PROFILE="$RUNNER_TEMP/app.provisionprofile" EXT_PROFILE="$RUNNER_TEMP/ext.provisionprofile" bash macos/build.sh
+          # Med filteret med i pakken kræver elev-appen at det er slået til
+          node -e "const f='agent/config.json';const c=require('./'+f);c.requireMacFilter=true;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+      - run: npm ci --prefix agent
+      # Uden certifikat bygges usigneret (et tomt CSC_LINK får electron-builder til at lede efter en fil)
+      - run: |
+          if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
+          npm run dist --prefix agent -- --publish never
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Notarisering hos Apple (krævet for at Mac'en vil åbne appen og filteret)
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.MAC_TEAM_ID }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: holymoly-${{ matrix.os }}
+          path: |
+            agent/dist/*.exe
+            agent/dist/*.pkg
+            agent/dist/*.dmg
+            agent/dist/*.AppImage
+            agent/dist/*.deb
+
+  extension:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: node scripts/build-extensions.js
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with: { name: holymoly-extension, path: 'extension/dist/*.zip' }
+
+  # Serveren som "pak ud og kør" til Windows (node.exe medfølger)
+  server-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22 }
+      - run: npm ci --omit=dev --prefix server
+      - run: node scripts/build-server-win.js
+      - run: Compress-Archive -Path dist/HolyMoly-Server-Windows -DestinationPath dist/HolyMoly-Server-Windows.zip
+        shell: pwsh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with: { name: holymoly-server-windows, path: dist/HolyMoly-Server-Windows.zip }
+
+  release:
+    # Udgiv det, der blev bygget – også hvis fx Mac-bygget fejler (mangler Apple-certifikat)
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [agent, extension, server-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with: { path: out, merge-multiple: true }
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: out/**/*

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skrive-bevis – HolyMoly</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand small"><img src="/icon.svg" alt="" width="24" height="24"><span>HolyMoly – skrive-bevis</span></div>
+  </header>
+  <main class="page proof-page">
+    <p class="muted" id="loading">Henter beviset…</p>
+    <section class="proof" id="proof" hidden>
+      <div class="proof-head bad" id="testserver" hidden>Testserver – må ikke bruges til bedømmelse</div>
+      <div class="proof-head" id="verdict" aria-live="polite"></div>
+      <p class="proof-mark" id="mark"></p>
+      <dl class="proof-facts" id="facts"></dl>
+      <div id="owner" hidden>
+        <h2>Kun for dig som lærer</h2>
+        <dl class="proof-facts" id="owner-facts"></dl>
+      </div>
+
+      <div id="check-wrap">
+        <h2>Passer teksten til beviset?</h2>
+        <p class="muted small">Beviset gælder én bestemt tekst. Vælg elevens Word-fil, eller træk den herind. Filen læses kun i din browser – den sendes ingen steder hen.</p>
+        <label class="proof-drop" id="drop">
+          <input type="file" id="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+          <span id="drop-text">Træk Word-filen (.docx) herind, eller klik for at vælge den</span>
+        </label>
+        <p id="match" class="match" hidden></p>
+        <dl class="proof-facts" id="file-facts" hidden></dl>
+        <details class="small">
+          <summary>Eller sæt teksten ind</summary>
+          <p class="muted small">Kopiér teksten fra dokumentet og sæt den ind her.</p>
+          <textarea id="text" rows="8" placeholder="Sæt teksten ind her"></textarea>
+        </details>
+      </div>
+
+      <h2>Det er tjekket</h2>
+      <ul class="proof-checks" id="checks"></ul>
+      <p class="muted small" id="limits"></p>
+
+      <details class="muted small" id="tech">
+        <summary>Teknisk: signatur</summary>
+        <p>Beviset er signeret af HolyMoly-serveren med Ed25519 (nøgle-id <code id="keyid"></code>). Navnet står ikke i beviset – kun en saltet hash, som kun serveren kan regne ud. Den signerede tekst og den offentlige nøgle:</p>
+        <pre id="signed"></pre>
+        <pre id="pubkey"></pre>
+      </details>
+    </section>
+    <section class="proof" id="missing" hidden>
+      <div class="proof-head bad">✗ Beviset findes ikke</div>
+      <p>Tjek at adressen er skrevet rigtigt. Et HolyMoly-bevis har en adresse som <code>/bevis/</code> efterfulgt af 16 tegn.</p>
+    </section>
+  </main>
+  <script src="/shared/doc.js"></script>
+  <script src="/bevis.js"></script>
+</body>
+</html>

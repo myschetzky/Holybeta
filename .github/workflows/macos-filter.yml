@@ -1,0 +1,27 @@
+name: Mac-netværksfilter
+
+on:
+  push:
+    paths: ['macos/**', '.github/workflows/macos-filter.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Swift-version
+        run: swiftc --version
+      - name: Byg (ad hoc-signeret – tjekker at koden kompilerer)
+        run: bash macos/build.sh
+      - name: Vis indhold og entitlements
+        run: |
+          find "macos/dist" -maxdepth 6 | sed 's/^/  /'
+          codesign -d --entitlements - "macos/dist/HolyMoly Filter.app/Contents/Library/SystemExtensions/dk.holymoly.filterapp.extension.systemextension"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: holymoly-filter-adhoc
+          path: macos/dist

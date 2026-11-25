@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HolyMoly – Lærer</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <template id="tpl-auth">
+    <main class="auth">
+      <div class="auth-card">
+        <a class="brand" href="/forside"><img src="/icon.svg" alt="" width="40" height="40"><span>HolyMoly</span></a>
+        <p class="muted tagline">Elevernes bevis på, at deres tekst ikke er skrevet med AI.</p>
+        <div class="seg role-seg" role="tablist" aria-label="Hvem er du?">
+          <button type="button" role="tab" data-role="teacher" class="on">Lærer</button>
+          <button type="button" role="tab" data-role="student">Elev</button>
+        </div>
+        <p class="error" id="auth-error" hidden></p>
+
+        <!-- Lærer -->
+        <section class="stack" data-only-role="teacher">
+          <div class="stack" id="login-step">
+            <a class="btn uni-btn" id="uni-teacher" href="/api/auth/unilogin/start?role=teacher" hidden>Log ind med <b>Uni</b>login</a>
+            <p class="muted small center" id="uni-teacher-help" hidden>Unilogin, MitID eller skolens eget login</p>
+            <div class="divider" id="uni-or" hidden><span>eller med e-mail</span></div>
+            <form class="stack" id="auth-form">
+              <label><span id="login-id-label">E-mail</span><input name="email" type="email" autocomplete="username" required maxlength="200"></label>
+              <label><span class="label-row">Adgangskode <a class="small" href="/glemt" data-nav id="forgot-link">Glemt adgangskode?</a></span><input name="password" type="password" autocomplete="current-password" required minlength="1"></label>
+              <button class="btn primary" type="submit" id="auth-submit">Log ind</button>
+            </form>
+          </div>
+          <form class="stack" id="mfa-step" hidden>
+            <div>
+              <h2>To-faktor</h2>
+              <p class="muted small" id="mfa-help">Skriv den 6-cifrede kode fra din godkendelses-app.</p>
+            </div>
+            <input name="code" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="14" required aria-label="Kode">
+            <button class="btn primary" type="submit" id="mfa-submit">Log ind</button>
+            <div class="row-actions">
+              <button type="button" class="link small" id="mfa-backup">Brug en reservekode</button>
+              <button type="button" class="link small" id="mfa-back">Tilbage</button>
+            </div>
+          </form>
+          <p class="auth-foot" id="signup-foot">Er skolen ikke med endnu? <a href="/opret" data-nav>Opret en konto</a></p>
+        </section>
+
+        <!-- Elev -->
+        <section class="stack" data-only-role="student" hidden>
+          <p>Du bruger <b>HolyMoly-appen</b> på din computer. Første gang skriver du klassekoden fra din lærer.</p>
+          <a class="btn primary" id="student-dl" href="/hent">Hent HolyMoly-appen</a>
+          <a class="btn uni-btn" id="uni-student" href="/api/auth/unilogin/start?role=student" hidden>Log ind med <b>Uni</b>login</a>
+          <p class="muted small" id="uni-student-help" hidden>Log ind for at se, hvilke klasser du er tilmeldt.</p>
+        </section>
+      </div>
+      <p class="auth-legal"><a href="/forside">Om HolyMoly</a> · <a href="/vilkaar">Vilkår</a> · <a href="/privatliv">Privatliv</a></p>
+    </main>
+  </template>
+
+  <template id="tpl-student">
+    <header class="topbar">
+      <div class="brand small"><img src="/icon.svg" alt="" width="24" height="24"><span>HolyMoly</span></div>
+      <div class="spacer"></div>
+      <span class="muted" id="st-name"></span>
+      <button class="btn ghost" id="st-logout">Log ud</button>
+    </header>
+    <main class="page">
+      <h1>Dine klasser</h1>
+      <ul class="list" id="st-classes"></ul>
+      <section class="st-asg" id="st-asg-wrap" hidden>
+        <h2>Dine afleveringer</h2>
+        <p class="muted small">Du skriver og afleverer i HolyMoly-appen. Her kan du se, hvad der mangler, og hvad du har afleveret.</p>
+        <ul class="list" id="st-asg"></ul>
+      </section>
+      <section class="help">
+        <h2>Sådan kommer du i gang</h2>
+        <ol>
+          <li><a id="st-dl" href="#" target="_blank" rel="noopener">Hent HolyMoly-appen</a> og installer den.</li>
+          <li>Skriv klassekoden fra din lærer, og log ind med UNI-Login i appen.</li>
+          <li>Appen viser, om der mangler noget, og lægger sig så ved uret. Den overvåger kun, når din lærer har startet en lektion.</li>
+        </ol>
+      </section>
+    </main>
+  </template>
+
+  <template id="tpl-classes">
+    <main class="page">
+      <div class="page-head">
+        <h1>Dine klasser</h1>
+        <form id="new-class" class="inline">
+          <input name="name" placeholder="Fx 2.g Dansk" maxlength="80" required>
+          <button class="btn primary">Opret klasse</button>
+        </form>
+      </div>
+      <div id="class-list" class="class-grid"></div>
+    </main>
+  </template>
+
+  <template id="tpl-room">
+    <header class="topbar">
+      <button class="btn ghost" id="back" aria-label="Tilbage">←</button>
+      <h1 class="class-title" id="class-name"></h1>
+      <button class="btn join-chip" id="join-btn" title="Eleverne skriver klassekoden i HolyMoly-appen første gang">Klassekode <b id="join-code"></b></button>
+      <span class="pill" id="lesson-pill"></span>
+      <div class="counts" id="counts"></div>
+      <div class="spacer"></div>
+      <div class="toolbar" id="toolbar-live">
+        <button class="btn" id="review-btn" title="Alle skærme på standby med ur, dato og tid tilbage – så eleverne kigger op">Gennemgang</button>
+        <button class="btn" id="freeze-all">Frys alle</button>
+        <button class="btn" id="unfreeze-all" hidden>Optø alle</button>
+      </div>
+      <button class="btn" id="asg-btn" title="Afleveringer i klassen">Afleveringer</button>
+      <button class="btn primary" id="lesson-btn">Start lektion</button>
+      <div class="info-wrap">
+        <button class="btn info-btn" id="info-btn" aria-expanded="false" aria-controls="info-pop" title="Sådan virker HolyMoly">i</button>
+        <div class="info-pop" id="info-pop" role="dialog" aria-label="Sådan virker HolyMoly" hidden></div>
+      </div>
+      <div class="menu-wrap">
+        <button class="btn ghost" id="menu-btn" aria-haspopup="true">⋯</button>
+        <div class="menu" id="menu" hidden>
+          <button data-act="edit">Rediger klasseværelse</button>
+          <button data-act="auto">Auto-placér bordene</button>
+          <button data-act="joincode">Klassekode</button>
+          <button data-act="report">Lektionsrapport</button>
+          <button data-act="links">Lektionens links</button>
+          <button data-act="settings">Blokering og regler</button>
+          <button data-act="help">Hjælp</button>
+          <button data-act="prefs">Indstillinger</button>
+          <button data-act="rename">Omdøb klasse</button>
+          <button data-act="delete" class="danger">Slet klasse</button>
+        </div>
+      </div>
+    </header>
+    <div class="editbar" id="editbar" hidden>
+      <span>Træk bordene på plads. Klik på en elev for at omdøbe, give ny kode (ny computer) eller slette.</span>
+      <button class="btn primary" id="edit-done">Færdig</button>
+    </div>
+    <main class="room-wrap">
+      <div class="room" id="room">
+        <div class="board">Tavle</div>
+        <div class="teacher-desk">Lærer</div>
+        <div class="desks" id="desks"></div>
+        <div class="empty" id="room-empty" hidden>
+          <div class="empty-card">
+            <p class="muted">Ingen elever endnu. Eleverne skriver klassekoden i HolyMoly-appen første gang:</p>
+            <div class="big-code" id="empty-code"></div>
+            <p class="muted small">Så dukker de op her med det samme.</p>
+          </div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><i class="lamp green"></i>Bekræftet OK</span>
+        <span><i class="lamp red"></i>Bekræftet forbudt aktivitet</span>
+        <span><i class="lamp grey"></i>Ikke bekræftet (fx appen er lukket)</span>
+        <span><i class="lamp idle"></i>Forbundet, ingen lektion</span>
+        <span>❄ Frosset</span>
+      </div>
+    </main>
+    <aside class="drawer" id="drawer" hidden>
+      <div class="drawer-head">
+        <i class="lamp" id="d-lamp"></i>
+        <div>
+          <h2 id="d-name"></h2>
+          <div class="muted small" id="d-sub"></div>
+        </div>
+        <div class="spacer"></div>
+        <a class="btn ghost" id="d-export" title="Hent elevens log som regneark (CSV)">Eksportér log</a>
+        <button class="btn" id="d-shot">Tag skærmbillede</button>
+        <button class="btn hand-btn" id="d-hand" hidden title="Eleven har rakt hånden op">✋ Tag hånden ned</button>
+        <button class="btn" id="d-freeze">Frys</button>
+        <button class="btn ghost" id="d-close" aria-label="Luk">✕</button>
+      </div>
+      <div class="screen">
+        <img id="d-screen" alt="Elevens skærm">
+        <div class="screen-msg" id="d-screen-msg">Venter på billede…</div>
+        <div class="screen-tools">
+          <select id="d-screen-sel" hidden></select>
+          <button class="btn small" id="d-fullscreen">Fuld skærm</button>
+        </div>
+      </div>
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="now" class="on" aria-selected="true">Nu</button>
+        <button role="tab" data-tab="web" aria-selected="false">Web-log</button>
+        <button role="tab" data-tab="apps" aria-selected="false">Apps</button>
+        <button role="tab" data-tab="alerts" aria-selected="false">Hændelser</button>
+        <button role="tab" data-tab="docs" aria-selected="false">Dokumenter</button>
+      </div>
+      <div class="tab-body" id="d-body"></div>
+    </aside>
+    <div class="toast" id="toast" hidden></div>
+  </template>
+
+  <template id="tpl-guide">
+    <div class="guide">
+      <h3>Sådan kommer eleverne i gang</h3>
+      <ol>
+        <li>Opret klassen – den får en <b>klassekode</b>, som du giver eleverne (skriv den fx på tavlen).</li>
+        <li>Eleven henter HolyMoly-appen (<a class="dl-link" href="#" target="_blank" rel="noopener">link</a> fra IT-ansvarlig), installerer den og skriver klassekoden og sit navn første gang. Så dukker eleven op i klasseværelset.</li>
+        <li>Appen viser, hvad der mangler – fx browser-udvidelsen eller en tilladelse på Mac – og lægger sig så ved uret. Browsere uden udvidelsen lukkes under lektionen.</li>
+        <li>Tryk <b>Start lektion</b>. Overvågningen kører kun i lektionen. Uden for lektionen ser du kun, om eleven er forbundet.</li>
+      </ol>
+      <h3>Farverne</h3>
+      <ul class="guide-lamps">
+        <li><i class="lamp green"></i><span><b>Grøn</b> – bekræftet OK. HolyMoly kan se, hvad eleven laver, og det er tilladt.</span></li>
+        <li><i class="lamp red"></i><span><b>Rød</b> – bekræftet forbudt, fx AI, sociale medier, spil eller forsøg på at snyde HolyMoly. Hvad det er, står under navnet.</span></li>
+        <li><i class="lamp grey"></i><span><b>Grå</b> – ikke bekræftet. HolyMoly har ikke kontakt til elevens computer lige nu, fx fordi appen er lukket, computeren er offline, eller eleven mangler at give en tilladelse. Årsagen står under navnet. Grå tæller aldrig som godkendt.</span></li>
+        <li><i class="lamp idle"></i><span><b>Grøn ring</b> – forbundet, men ingen lektion. Intet overvåges.</span></li>
+        <li><i class="guide-freeze">❄</i><span><b>Frosset</b> – du har låst elevens skærm med en besked.</span></li>
+      </ul>
+    </div>
+  </template>
+
+  <dialog id="dlg">
+    <form method="dialog" class="dlg-form" id="dlg-form">
+      <h2 id="dlg-title"></h2>
+      <div id="dlg-body"></div>
+      <p class="error" id="dlg-error" hidden></p>
+      <div class="dlg-actions" id="dlg-actions"></div>
+    </form>
+  </dialog>
+
+  <script src="/shared/doc.js"></script>
+  <script src="/app.js"></script>
+  <script src="/account.js"></script>
+</body>
+</html>

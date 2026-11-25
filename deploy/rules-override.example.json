@@ -1,0 +1,13 @@
+{
+  "_kommentar": "Kopiér til DATA_DIR/rules-override.json. Serveren læser filen igen inden for 30 sek. og sender de nye lister til alle elev-apps og udvidelser – uden at nogen skal opdatere noget.",
+  "domains": {
+    "ai": ["ny-ai-tjeneste.com"],
+    "games": ["nyt-spil.io"]
+  },
+  "apps": {
+    "games": ["nytspil"]
+  },
+  "titles": {
+    "ai": ["- Ny AI$"]
+  }
+}

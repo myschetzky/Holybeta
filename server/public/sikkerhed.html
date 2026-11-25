@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sikkerhed og databeskyttelse – HolyMoly</title>
+  <meta name="description" content="Til skolens ledelse, IT og databeskyttelsesrådgiver: hvilke data HolyMoly behandler, hvor de ligger, hvor længe, og hvordan de er beskyttet.">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/site.css">
+  <script src="/theme.js"></script>
+</head>
+<body>
+  <a class="skip" href="#indhold">Gå til indhold</a>
+  <header class="site-head" id="site-head"></header>
+  <main class="doc" id="indhold">
+    <div class="wrap">
+      <h1>Sikkerhed og databeskyttelse</h1>
+      <p class="intro">Til skolens ledelse, IT og databeskyttelsesrådgiver (DPO). Siden samler det, I skal bruge til jeres vurdering og konsekvensanalyse (DPIA).</p>
+
+      <nav class="toc" aria-label="Indhold"><b>Indhold</b><ol>
+        <li><a href="#roller">Roller og aftaler</a></li><li><a href="#data">Hvilke data – og hvornår</a></li><li><a href="#opbevaring">Hvor og hvor længe</a></li>
+        <li><a href="#beskyttelse">Sådan er data beskyttet</a></li><li><a href="#brud">Brud på sikkerheden</a></li><li><a href="#dpia">Til skolens konsekvensanalyse</a></li>
+        <li><a href="#tilgaengelighed">Webtilgængelighed</a></li><li><a href="#mangler">Det arbejder vi stadig på</a></li>
+      </ol></nav>
+
+      <h2 id="roller">Roller og aftaler</h2>
+      <ul>
+        <li><b>Skolen er dataansvarlig.</b> HolyMoly er databehandler og behandler kun oplysninger efter skolens instruks.</li>
+        <li><a href="/databehandleraftale">Databehandleraftalen</a> (GDPR art. 28) accepteres, når skolen opretter sig, og ligger offentligt, så den kan læses før.</li>
+        <li>Bruger skolen Unilogin, godkender skolen desuden en dataaftale i sit Unilogin-administrationsværktøj. Skolen skal ikke have en særskilt aftale med STIL.</li>
+      </ul>
+
+      <h2 id="data">Hvilke data – og hvornår</h2>
+      <p>HolyMoly registrerer kun noget, mens læreren har startet en lektion, eller mens eleven selv har startet en skriveøkt til en aflevering.</p>
+      <div class="t-scroll"><table>
+        <thead><tr><th>Data</th><th>Formål</th></tr></thead>
+        <tbody>
+          <tr><td>Elevens navn, klasse og UNI-ID</td><td>Vise eleven i klasseværelset og knytte afleveringer til den rigtige elev</td></tr>
+          <tr><td>Aktivt program og hjemmeside, åbne faner og programmer</td><td>Lamperne (grøn, rød, grå) og blokering af det, læreren har forbudt</td></tr>
+          <tr><td>Skærmbilleder – kun når læreren tager dem, eller ved et bekræftet fund</td><td>Dokumentation</td></tr>
+          <tr><td>Tekster skrevet i HolyMoly og skriveforløbet</td><td>Mærket "✓ Tastet i HolyMoly – intet indsat" og afleveringer</td></tr>
+          <tr><td>Skrivestatistik i HolyMolys skrivevindue: antal anslag, tastede og slettede tegn, tempo og rytme (tid mellem anslag), forsøg på at indsætte og tid uden for vinduet – ikke hvilke taster</td><td>Vurdere, om teksten er skrevet i hånden (fluebenet "Tastet i HolyMoly – intet indsat"). Rytme og tempo minder om "tastedynamik" og bør nævnes i skolens konsekvensanalyse</td></tr>
+          <tr><td>Lærerens navn, e-mail, skole og login-oplysninger</td><td>Konto og sikkert login</td></tr>
+        </tbody>
+      </table></div>
+      <p><b>Ingen keylogger: HolyMoly ser aldrig, hvad eleven taster i andre programmer. I HolyMolys eget skrivevindue tælles kun skrivestatistik til fluebenet (antal anslag, tastede og slettede tegn, tempo og rytme, forsøg på at indsætte og tid uden for vinduet) – ikke hvilke taster.</b></p>
+      <p><b>Ikke registreret:</b> filer, kamera, mikrofon, placering eller noget uden for lektionen og skriveøkten. Eleven får besked, når læreren ser skærmen.</p>
+
+      <h2 id="opbevaring">Hvor og hvor længe</h2>
+      <ul>
+        <li><b>Data i EU.</b> Servere hos <span data-company="hosting">[hostingudbyder]</span>. Ingen overførsel til lande uden for EU/EØS, ingen AI-tjenester og ingen analyse hos tredjeparter.</li>
+        <li><b>Overvågningsdata</b> (hændelser, skærmbilleder og lampernes tidslinje) slettes automatisk efter 30 dage. Skolen kan vælge en anden frist. Den natlige sikkerhedskopi gemmes i 7 dage, så en slettet oplysning højst ligger 7 dage mere i en kopi.</li>
+        <li><b>Konti, klasser og tekster</b> bliver, til skolen sletter dem. Sletter læreren en elev eller en klasse, slettes alt om den med det samme.</li>
+        <li><b>Ved ophør</b> kan skolen eksportere sine data. HolyMoly sletter dem automatisk 90 dage efter, at prøveperioden eller licensen er udløbet (jf. databehandleraftalen). Skolens administrator får besked 30 og 7 dage før.</li>
+      </ul>
+
+      <h2 id="beskyttelse">Sådan er data beskyttet</h2>
+      <ul>
+        <li><b>Login:</b> Unilogin (med MitID eller skolens eget login) eller e-mail med to-faktor (godkendelses-app). Adgangskoder kontrolleres mod en blokliste over almindelige og lækkede adgangskoder (NIST SP 800-63B-4).</li>
+        <li><b>Sessioner</b> udløber senest 12 timer efter login. Læreren får en mail, når adgangskode eller to-faktor ændres.</li>
+        <li><b>Adgang:</b> Lærere ser kun deres egne klasser. Skolens administrator styrer, hvem der er med.</li>
+        <li><b>Kryptering:</b> Al trafik er krypteret (HTTPS). Adgangskoder gemmes kun som langsomme hash (scrypt i OWASP-anbefalet styrke), og to-faktor-nøgler gemmes krypteret.</li>
+        <li><b>Webapplikationen</b> følger OWASP Top 10:2025 med en streng Content-Security-Policy og sikkerheds-headers. Serveren henter aldrig adresser, som brugerne har skrevet (ingen SSRF).</li>
+        <li><b>Mærket "✓ Tastet i HolyMoly – intet indsat"</b> er digitalt signeret (Ed25519) og kan ikke forfalskes af udenforstående. Den, der driver serveren, har nøglen – derfor skal skolen drive den. HolyMoly beskytter mod almindelige elever, ikke mod en elev med administratorrettigheder på computeren.</li>
+        <li><b>Gennemsigtighed:</b> Lærerens handlinger over for en elev (frys, se skærmen, skærmbillede, eksport) står i elevens logbog.</li>
+        <li><b>Sikkerhedslog:</b> Skolens administrator kan under Skole se, hvem der har logget ind og hvordan, forkerte adgangskoder og to-faktor-koder, ændringer af adgangskode og to-faktor, invitationer og roller. Loggen gemmes i 90 dage.</li>
+        <li><b>Forsyningskæden:</b> Afhængigheder tjekkes for kendte sårbarheder ved hver ændring, og byggeprocessen er låst til faste versioner.</li>
+      </ul>
+
+      <h2 id="brud">Brud på sikkerheden</h2>
+      <p>Sker der et brud, giver HolyMoly skolen besked uden unødig forsinkelse og senest 48 timer efter, at vi er blevet opmærksomme på det. Skolen har dermed tid til at anmelde bruddet til Datatilsynet inden for 72 timer.</p>
+
+      <h2 id="dpia">Til skolens konsekvensanalyse (DPIA)</h2>
+      <p>Overvågning af elever kræver normalt en konsekvensanalyse. Det kan I bruge:</p>
+      <ul>
+        <li><b>Formål:</b> at eleverne arbejder uden AI og forbudte hjælpemidler i undervisningen og til prøver, og at afleveringer kan dokumenteres.</li>
+        <li><b>Behandlingsgrundlag:</b> typisk GDPR art. 6, stk. 1, litra e (opgave i samfundets interesse). Samtykke er normalt ikke egnet i forholdet mellem skole og elev.</li>
+        <li><b>Dataminimering:</b> kun i lektionen eller skriveøkten, ingen keylogger og intet kamera, skærmbilleder kun ved klik (automatisk ved forbudt brug kun hvis læreren slår det til, og eleven får besked), og automatisk sletning af overvågningsdata. Skrivestatistikken i skrivevinduet (tempo og rytme, ikke hvilke taster) bruges kun til fluebenet.</li>
+        <li><b>Gennemsigtighed:</b> Eleven kan altid se, om HolyMoly er aktiv, og får besked, når læreren ser skærmen. Vi har en tekst til information til elever og forældre.</li>
+        <li><b>Ingen gæt:</b> En elev bliver kun rød, når noget forbudt er set. Grå betyder "ikke bekræftet" og er aldrig en anklage.</li>
+      </ul>
+      <p>Skriv til <span class="mail" data-company="email">kontakt@holymoly.dk</span>, så sender vi tjeklisten og teksten til elever og forældre.</p>
+
+      <h2 id="tilgaengelighed">Webtilgængelighed</h2>
+      <p>Lærer-dashboardet og hjemmesiden testes automatisk mod WCAG 2.1 niveau A og AA (kernen i EN 301 549) med axe-core. Ved seneste test (24. november 2026) var der ingen fund. Automatisk test fanger ikke alt. Oplever I problemer med skærmlæser eller tastatur, så skriv til os.</p>
+
+      <h2 id="mangler">Det arbejder vi stadig på</h2>
+      <ul>
+        <li>Kodesignering af elev-appen til Windows og Mac.</li>
+        <li>En uafhængig penetrationstest før de første skoler går i drift.</li>
+      </ul>
+    </div>
+  </main>
+  <footer class="site-foot" id="site-foot"></footer>
+  <script src="/site.js"></script>
+</body>
+</html>
