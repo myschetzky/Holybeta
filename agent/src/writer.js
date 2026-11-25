@@ -349,6 +349,65 @@ class Writer {
 
   _proofUrl(certId) { return certId ? new URL('/bevis/' + certId, this.o.serverUrl).toString() : ''; }
 
+  /* ---------- skriveøkt, aflevering og Word-fil (bruges af skrivevinduet og hovedvinduets afleveringsside) ---------- */
+
+  /** Skriveøkt: skriv en aflevering hjemme med HolyMoly aktiv (kun når læreren har tilladt det). */
+  async session(aid, on) {
+    aid = Number(aid) || 0;
+    on = !!on;
+    const a = this.assignments.find(x => x.id === aid);
+    if (on && (!a || !a.home)) return { ok: false, error: 'Afleveringen må ikke skrives uden for timen' };
+    const key = 's:' + aid;
+    const r = await new Promise((resolve) => {
+      this.pending.set(key, resolve);
+      if (!this.o.send({ type: 'write-session', assignmentId: aid, on })) { this.pending.delete(key); resolve({ ok: false, error: 'Ingen forbindelse til HolyMoly-serveren' }); }
+      setTimeout(() => { if (this.pending.delete(key)) resolve({ ok: false, error: 'Serveren svarede ikke – prøv igen' }); }, 15_000);
+    });
+    if (r.ok) this.soloAssignment = on ? aid : 0;
+    return r;
+  }
+
+  /** Vedhæft et afsluttet dokument til en aflevering (assignment-attach → assignment-result fra serveren). */
+  attach(aid, docId) {
+    aid = Number(aid) || 0;
+    const d = this._get(String(docId || ''));
+    if (!this.assignments.some(a => a.id === aid)) return Promise.resolve({ ok: false, error: 'Afleveringen findes ikke' });
+    if (!d) return Promise.resolve({ ok: false, error: 'Dokumentet findes ikke' });
+    if (!d.submitted) return Promise.resolve({ ok: false, error: 'Afslut dokumentet først' });
+    const key = 'a:' + aid;
+    return new Promise((resolve) => {
+      this.pending.set(key, resolve);
+      if (!this.o.send({ type: 'assignment-attach', assignmentId: aid, docId: d.id })) { this.pending.delete(key); resolve({ ok: false, error: 'Ingen forbindelse til HolyMoly-serveren' }); }
+      setTimeout(() => { if (this.pending.delete(key)) resolve({ ok: false, error: 'Serveren svarede ikke – prøv igen' }); }, 15_000);
+    });
+  }
+
+  /** Åbner et dokument i skrivevinduet (vinduet åbnes, hvis det er lukket). */
+  openDoc(id) {
+    const d = this._get(String(id || ''));
+    if (!d) return { ok: false, error: 'Dokumentet findes ikke' };
+    if (this._winOpen()) { this.win.show(); this.win.focus(); this.win.webContents.send('write:open-doc', d.id); }
+    else { this.pendingOpen = d.id; this.open(); }
+    return { ok: true, id: d.id };
+  }
+
+  /** "Gem som Word": skrivebeskyttet .docx med mærket i sidefoden, når teksten har et bevis. parent: vinduet, dialogen hører til. */
+  async exportDocx(id, parent) {
+    const d = this._get(id);
+    if (!d) return { ok: false, error: 'Dokumentet findes ikke' };
+    const certId = d.result && d.result.certId;
+    // Mærket i sidefoden (D.label: "Tastet i HolyMoly – intet indsat · i timen/hjemme", evt. "· kun skrivevinduet" og "· TESTSERVER")
+    // når teksten har et bevis. Uden vagt eller fra en testserver er mærket gråt. Filen er altid skrivebeskyttet i Word.
+    const mark = certId ? Object.assign({ code: 'HM-' + certId.slice(0, 8).toUpperCase(), url: this._proofUrl(certId), place: d.result.place || '' }, Writer.markInfo(d.result)) : null;
+    const safe = (d.title || 'Dokument').replace(/[\\/:*?"<>|\u0000-\u001F]/g, '').slice(0, 80) || 'Dokument';
+    const r = await dialog.showSaveDialog(parent || undefined, { title: 'Gem som Word', defaultPath: path.join(app.getPath('documents'), safe + '.docx'), filters: [{ name: 'Word-dokument', extensions: ['docx'] }] });
+    if (r.canceled || !r.filePath) return { ok: false };
+    try {
+      fs.writeFileSync(r.filePath, D.toDocx(d.blocks, { title: d.title, author: this.o.studentName(), mark, readOnly: true }));
+      return { ok: true, name: path.basename(r.filePath) };
+    } catch (e) { return { ok: false, error: 'Kunne ikke gemme filen' }; }
+  }
+
   _ipc() {
     // Mærket (samme tekst som i Word-filen og på tjek-siden – D.label)
     const labels = { base: D.label(), lektion: D.label('lektion'), hjemme: D.label('hjemme') };
@@ -374,34 +433,9 @@ class Writer {
       return this.setPrefs(out);
     });
     // Skriveøkt: skriv en aflevering hjemme med HolyMoly aktiv (kun når læreren har tilladt det)
-    ipcMain.handle('write:session', async (_e, input) => {
-      const aid = Number(input && input.assignmentId) || 0;
-      const on = !!(input && input.on);
-      const a = this.assignments.find(x => x.id === aid);
-      if (on && (!a || !a.home)) return { ok: false, error: 'Afleveringen må ikke skrives uden for timen' };
-      const key = 's:' + aid;
-      const r = await new Promise((resolve) => {
-        this.pending.set(key, resolve);
-        if (!this.o.send({ type: 'write-session', assignmentId: aid, on })) { this.pending.delete(key); resolve({ ok: false, error: 'Ingen forbindelse til HolyMoly-serveren' }); }
-        setTimeout(() => { if (this.pending.delete(key)) resolve({ ok: false, error: 'Serveren svarede ikke – prøv igen' }); }, 15_000);
-      });
-      if (r.ok) this.soloAssignment = on ? aid : 0;
-      return r;
-    });
+    ipcMain.handle('write:session', (_e, input) => this.session(Number(input && input.assignmentId) || 0, !!(input && input.on)));
     // Vedhæft et afsluttet HolyMoly-dokument til en aflevering
-    ipcMain.handle('write:attach', async (_e, input) => {
-      const aid = Number(input && input.assignmentId) || 0;
-      const d = this._get(String(input && input.docId || ''));
-      if (!this.assignments.some(a => a.id === aid)) return { ok: false, error: 'Afleveringen findes ikke' };
-      if (!d) return { ok: false, error: 'Dokumentet findes ikke' };
-      if (!d.submitted) return { ok: false, error: 'Afslut dokumentet først' };
-      const key = 'a:' + aid;
-      return new Promise((resolve) => {
-        this.pending.set(key, resolve);
-        if (!this.o.send({ type: 'assignment-attach', assignmentId: aid, docId: d.id })) { this.pending.delete(key); resolve({ ok: false, error: 'Ingen forbindelse til HolyMoly-serveren' }); }
-        setTimeout(() => { if (this.pending.delete(key)) resolve({ ok: false, error: 'Serveren svarede ikke – prøv igen' }); }, 15_000);
-      });
-    });
+    ipcMain.handle('write:attach', (_e, input) => this.attach(Number(input && input.assignmentId) || 0, String(input && input.docId || '')));
     ipcMain.handle('write:create', (_e, opts) => {
       // Kun lærerens egne afleveringer kan vælges herfra (ukendt id = et almindeligt dokument)
       const asg = opts && this.assignments.find(a => a.id === Number(opts.assignmentId));
@@ -473,21 +507,7 @@ class Writer {
       const place = String((res.facts && res.facts.place) || '');
       return { ok: !!res.ok, error: String(res.error || ''), confirm: !!res.confirm, certId: res.certId || null, already: !!res.already, categories, place, label: D.label(place, Writer.markInfo(res)), url: this._proofUrl(res.certId) };
     });
-    ipcMain.handle('write:docx', async (_e, id) => {
-      const d = this._get(id);
-      if (!d) return { ok: false, error: 'Dokumentet findes ikke' };
-      const certId = d.result && d.result.certId;
-      // Mærket i sidefoden (D.label: "Tastet i HolyMoly – intet indsat · i timen/hjemme", evt. "· kun skrivevinduet" og "· TESTSERVER")
-      // når teksten har et bevis. Uden vagt eller fra en testserver er mærket gråt. Filen er altid skrivebeskyttet i Word.
-      const mark = certId ? Object.assign({ code: 'HM-' + certId.slice(0, 8).toUpperCase(), url: this._proofUrl(certId), place: d.result.place || '' }, Writer.markInfo(d.result)) : null;
-      const safe = (d.title || 'Dokument').replace(/[\\/:*?"<>|\u0000-\u001F]/g, '').slice(0, 80) || 'Dokument';
-      const r = await dialog.showSaveDialog(this.win || undefined, { title: 'Gem som Word', defaultPath: path.join(app.getPath('documents'), safe + '.docx'), filters: [{ name: 'Word-dokument', extensions: ['docx'] }] });
-      if (r.canceled || !r.filePath) return { ok: false };
-      try {
-        fs.writeFileSync(r.filePath, D.toDocx(d.blocks, { title: d.title, author: this.o.studentName(), mark, readOnly: true }));
-        return { ok: true, name: path.basename(r.filePath) };
-      } catch (e) { return { ok: false, error: 'Kunne ikke gemme filen' }; }
-    });
+    ipcMain.handle('write:docx', (_e, id) => this.exportDocx(id, this.win));
   }
 }
 

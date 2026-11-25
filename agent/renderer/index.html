@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
   <title>HolyMoly</title>
   <link rel="stylesheet" href="ui.css">
+  <link rel="stylesheet" href="afleveringer.css">
 </head>
 <body>
   <header><img src="../assets/icon.svg" alt="" width="22" height="22"><b>HolyMoly</b></header>
@@ -67,12 +68,102 @@
         <button class="btn primary" id="write" type="button">Skriv dokument</button>
         <button class="btn" id="hand" type="button" aria-pressed="false">✋ Ræk hånden op</button>
       </div>
+      <button class="btn" id="afl-btn" type="button">Afleveringer</button>
       <p class="muted small" id="hint"></p>
+    </section>
+
+    <!-- Afleveringer (afleveringer.js): som lærerens side 'Afleveringer' -->
+    <section id="afl" hidden aria-labelledby="afl-title">
+      <div class="afl-top">
+        <button class="btn small" id="afl-back" type="button">Tilbage</button>
+        <h1 id="afl-title" tabindex="-1">Afleveringer</h1>
+      </div>
+      <section class="afl-card" aria-labelledby="afl-open-h">
+        <div class="afl-head">
+          <h2 id="afl-open-h">Åbne</h2>
+          <div class="afl-actions">
+            <button class="btn primary" id="afl-write" type="button">Skriv verificeret aflevering</button>
+            <button class="btn" id="afl-verified" type="button">Verificerede afleveringer</button>
+          </div>
+        </div>
+        <div class="afl-scroll">
+          <table class="afl-table" id="afl-open-table">
+            <caption class="sr-only">Åbne afleveringer</caption>
+            <thead><tr><th scope="col">Aflevering</th><th scope="col">Frist</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Handling</span></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="afl-card" id="afl-past" aria-labelledby="afl-past-h" hidden>
+        <div class="afl-head"><h2 id="afl-past-h">Fristen er overskredet</h2></div>
+        <div class="afl-scroll">
+          <table class="afl-table" id="afl-past-table">
+            <caption class="sr-only" id="afl-past-cap">Afleveringer, hvor fristen er passeret</caption>
+            <thead><tr><th scope="col">Aflevering</th><th scope="col">Frist</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Handling</span></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <p class="afl-live" id="afl-live" role="status" aria-live="polite"></p>
     </section>
     <p class="error" id="global-error" hidden></p>
   </main>
+
+  <!-- "Skriv verificeret aflevering": hvilken aflevering? -->
+  <dialog id="afl-pick" aria-labelledby="afl-pick-h">
+    <form method="dialog" id="afl-pick-form">
+      <h2 id="afl-pick-h">Hvilken aflevering?</h2>
+      <fieldset class="afl-choices" id="afl-pick-list">
+        <legend class="sr-only">Vælg en aflevering</legend>
+      </fieldset>
+      <p class="afl-result" id="afl-pick-result" role="status" aria-live="polite"></p>
+      <div class="afl-dlg-actions">
+        <button class="btn" type="button" id="afl-pick-cancel">Annuller</button>
+        <button class="btn primary" type="submit" id="afl-pick-go">Skriv</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- "Verificerede afleveringer": elevens dokumenter med mærke -->
+  <dialog id="afl-docs" class="afl-wide" aria-labelledby="afl-docs-h">
+    <form method="dialog">
+      <h2 id="afl-docs-h">Verificerede afleveringer</h2>
+      <p class="muted small">Dokumenter med mærke fra HolyMoly. Mærket viser, at teksten er tastet, mens HolyMoly var aktiv.</p>
+      <div class="afl-scroll" id="afl-docs-body"></div>
+      <p class="afl-result" id="afl-docs-result" role="status" aria-live="polite"></p>
+      <div class="afl-dlg-actions"><button class="btn primary" value="ok">Luk</button></div>
+    </form>
+  </dialog>
+
+  <!-- "Aflever": vælg en verificeret aflevering -->
+  <dialog id="afl-attach" class="afl-wide" aria-labelledby="afl-attach-h">
+    <form method="dialog" id="afl-attach-form">
+      <h2 id="afl-attach-h">Aflever</h2>
+      <p class="muted small" id="afl-attach-meta"></p>
+      <p class="afl-note" id="afl-attach-late" hidden>Afleveres efter fristen.</p>
+      <p class="small" id="afl-attach-now" hidden></p>
+      <fieldset class="afl-choices" id="afl-attach-marked">
+        <legend>Vælg en verificeret aflevering</legend>
+      </fieldset>
+      <details id="afl-attach-more">
+        <summary>Vis også dokumenter uden mærke</summary>
+        <p class="muted small">Afleveringer uden mærke er ikke bevis for snyd.</p>
+        <fieldset class="afl-choices" id="afl-attach-unmarked">
+          <legend class="sr-only">Dokumenter uden mærke</legend>
+        </fieldset>
+      </details>
+      <p class="afl-result" id="afl-attach-result" role="status" aria-live="polite"></p>
+      <div class="afl-dlg-actions">
+        <button class="btn" type="button" id="afl-attach-cancel">Luk</button>
+        <button class="btn primary" type="submit" id="afl-attach-go" disabled>Aflever</button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- Fælles regler (shared/rules.js via npm run sync): weakPin, så eleven får besked, før koden sendes -->
   <script src="../src/rules.js"></script>
   <script src="ui.js"></script>
+  <script src="../src/assignments-view.js"></script>
+  <script src="afleveringer.js"></script>
 </body>
 </html>

@@ -21,6 +21,7 @@ const guard = require('./guard');
 const { Streamer, screenPermission, screenCount, captureWorks } = require('./capture');
 const { Freezer } = require('./freeze');
 const { Writer } = require('./writer');
+const verified = require('./verified');
 const { homeEvent, homeStatus } = require('./homepolicy');
 let writer = null; // "Skriv i HolyMoly"
 
@@ -241,12 +242,13 @@ function maybeAutoHide() {
   if (!win || win.isDestroyed() || !win.isVisible()) return;
   const s = uiState();
   const ready = s.enrollments.length && s.conn === 'online' && !s.needs.length;
-  if (!ready || Date.now() - userOpenedAt < 15_000) return;
+  // Afleveringssiden er åben: eleven er i gang, så vinduet bliver
+  if (!ready || Date.now() - userOpenedAt < 15_000 || state.assignmentsPage) return;
   if (autoHidden) return;
   autoHidden = true;
   setTimeout(() => {
     const s2 = uiState();
-    if (s2.conn === 'online' && !s2.needs.length && win && !win.isDestroyed() && Date.now() - userOpenedAt >= 15_000) win.hide();
+    if (s2.conn === 'online' && !s2.needs.length && win && !win.isDestroyed() && Date.now() - userOpenedAt >= 15_000 && !state.assignmentsPage) win.hide();
   }, 2500);
 }
 function pushUi() {
@@ -311,7 +313,7 @@ function updateTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Vis HolyMoly', click: showWindow },
     { label: 'Skriv dokument…', click: () => writer && writer.open() },
-    { label: 'Afleveringer…', click: () => writer && writer.openAssignments() },
+    { label: 'Afleveringer…', click: showAssignmentsPage },
     { label: state.hand ? 'Tag hånden ned' : '✋ Ræk hånden op', enabled: lessonActive(), click: () => setHand(!state.hand) },
     { label: 'Tilføj klasse…', click: () => { showWindow(); win.webContents.send('add-class'); } },
     ...(GUARD_MANAGED ? [] : [{ type: 'separator' }, { label: 'Afslut HolyMoly', click: () => confirmQuit() }]),
@@ -324,6 +326,56 @@ function showWindow() {
   win.show();
   win.focus();
 }
+
+/* ---------------- afleveringssiden i hovedvinduet (agent/renderer/afleveringer.js, agent/src/verified.js) ---------------- */
+function showAssignmentsPage() {
+  const fresh = !win || win.isDestroyed();
+  showWindow();
+  if (fresh || win.webContents.isLoading()) win.webContents.once('did-finish-load', () => win.webContents.send('show-assignments'));
+  else win.webContents.send('show-assignments');
+}
+/** Siden åbnet/lukket: vinduet gøres bredt nok til tabellen og bagefter lille igen. */
+function setAssignmentsPage(open) {
+  state.assignmentsPage = !!open;
+  if (!win || win.isDestroyed()) return;
+  if (open) {
+    userOpenedAt = Date.now();
+    win.setMinimumSize(560, 480);
+    const [w, h] = win.getSize();
+    if (w < 780 || h < 600) win.setSize(Math.max(w, 780), Math.max(h, 600));
+  } else {
+    win.setMinimumSize(340, 360);
+    win.setSize(380, 420);
+  }
+}
+/**
+ * "Skriv verificeret aflevering" (aid = 0: uden aflevering).
+ * Word kobles på her: har writer en metode startVerified(aid) → { ok, error }, bruges den.
+ * Ellers HolyMolys eget skrivevindue: i timen åbnes afleveringen (kladden eller et nyt dokument);
+ * uden for timen startes først en skriveøkt – kun når læreren har tilladt, at afleveringen skrives hjemme.
+ */
+async function startVerifiedWriting(aid) {
+  if (!writer) return { ok: false, error: 'HolyMoly er ikke klar endnu. Prøv igen om lidt.' };
+  if (typeof writer.startVerified === 'function') return (await writer.startVerified(aid)) || { ok: true };
+  aid = Number(aid) || 0;
+  if (!aid) { writer.open(); return { ok: true }; }
+  const a = writer.assignments.find(x => x.id === aid);
+  if (!a) return { ok: false, error: 'Afleveringen findes ikke' };
+  if (!lessonActive()) {
+    if (!a.home) return { ok: false, error: 'Denne aflevering skrives i timen, når din lærer har startet en lektion.' };
+    const r = await writer.session(aid, true);
+    if (!r.ok) return r;
+  }
+  writer.openForAssignment(aid, { title: a.title });
+  return { ok: true };
+}
+verified.register({
+  ipcMain, shell, lessonActive,
+  getWriter: () => writer,
+  getWin: () => (win && !win.isDestroyed() ? win : undefined),
+  startWriting: startVerifiedWriting,
+  onPage: setAssignmentsPage,
+});
 
 /* ---------------- lektion ---------------- */
 function lessonActive() {
@@ -818,7 +870,7 @@ async function enrollWith(code, extra) {
 }
 ipcMain.handle('action', (_e, id) => {
   if (id === 'write') { if (writer) writer.open(); return; }
-  if (id === 'assignments') { if (writer) writer.openAssignments(); return; }
+  if (id === 'assignments') { showAssignmentsPage(); return; }
   if (id === 'hand') { setHand(!state.hand); return; }
   // Lektionens links: kun de links læreren har lagt ind for den igangværende lektion
   const lm = /^link:(\d+)$/.exec(String(id));

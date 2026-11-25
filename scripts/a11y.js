@@ -112,6 +112,34 @@ const { createServer } = require('../server/src/index.js');
     console.log('✗ skrivevinduet kunne ikke tjekkes: ' + e.message);
   }
 
+  // Elev-appens hovedvindue med afleveringssiden (agent/renderer/index.html + afleveringer.js) og en attrap af broen window.hm
+  try {
+    const pm = await ctx.newPage();
+    const errors = [];
+    pm.on('pageerror', (e) => errors.push(e.message));
+    await pm.addInitScript(require('../test/sim/afleveringer-stub.js'));
+    await pm.goto('file://' + path.join(__dirname, '..', 'agent', 'renderer', 'index.html'));
+    await pm.waitForSelector('#status:not([hidden])');
+    await run('hovedvinduet (elev-appen)', pm);
+    await pm.click('#afl-btn'); await pm.waitForSelector('#afl-open-table tbody tr');
+    await run('hovedvinduet (afleveringer)', pm);
+    await pm.click('#afl-write'); await pm.waitForSelector('#afl-pick[open]');
+    await run('hovedvinduet (hvilken aflevering?)', pm);
+    await pm.keyboard.press('Escape');
+    await pm.click('#afl-verified'); await pm.waitForSelector('#afl-docs[open]');
+    await run('hovedvinduet (verificerede afleveringer)', pm);
+    await pm.keyboard.press('Escape');
+    await pm.click('#afl-open-table tbody button'); await pm.waitForSelector('#afl-attach[open]');
+    await pm.click('#afl-attach-more summary');
+    await run('hovedvinduet (aflever)', pm);
+    await pm.keyboard.press('Escape');
+    if (errors.length) { total += errors.length; console.log('✗ hovedvinduet – fejl i siden:\n    ' + errors.join('\n    ')); }
+    await pm.close();
+  } catch (e) {
+    total++;
+    console.log('✗ hovedvinduet kunne ikke tjekkes: ' + e.message);
+  }
+
   // Skolesiden findes kun med licens-styring: licens, lærere og sikkerhedsloggen (den åbnes også – virker i en rigtig browser)
   const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hm-a11y-skole-'));
   const srv2 = createServer({ port: 0, host: '127.0.0.1', dataDir: dir2, quiet: true, requireGuard: false, licensing: true, verifyEmail: false });

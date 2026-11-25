@@ -175,7 +175,7 @@
   }
 
   $('write').addEventListener('click', () => window.hm.action('write'));
-  $('assign-btn').addEventListener('click', () => window.hm.action('assignments'));
+  // 'Se afleveringer' og 'Afleveringer' åbner afleveringssiden (afleveringer.js)
   $('hand').addEventListener('click', () => window.hm.action('hand'));
   window.hm.onState(render);
   window.hm.getState().then(render);
